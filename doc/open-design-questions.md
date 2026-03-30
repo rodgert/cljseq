@@ -56,47 +56,31 @@ iteration state.
 
 ---
 
-## Q3 — `sync!` time inheritance: late cue edge case
+## Q3 — `sync!` time inheritance: late cue edge case — **RESOLVED**
 
 **R&R reference**: §3.2
 
-**The issue**
+**Resolution** (Sprint 2)
 
-The spec says `(sync! :name)` "blocks until a cue at or after the current virtual time."
-But what if the cue fires *before* the thread calling `sync!` is ready to receive it?
+Time-windowed `EventHistory`. When `(sync! :name)` is called, the system
+searches `EventHistory` for the most recent cue matching `:name` within the
+window `[current-virtual-time - sync-window, ∞)`:
 
-Scenario:
-1. Thread A calls `(cue! :bar)` at virtual-time 4.0.
-2. Thread B (busy in a long computation) arrives at `(sync! :bar)` when its own
-   virtual-time is 2.0 — but the cue already happened at wall time T+4.
+- **If found**: inherit the cue's virtual time and return immediately — the
+  thread is phase-aligned with the original cue fire, not with "now"
+- **If not found**: block on a condition variable until the next `:name` cue
+  fires, then inherit that time
 
-Should thread B:
-- Receive the "stale" cue immediately (with time 4.0 inherited)?
-- Block until the *next* `:bar` cue?
+`sync-window` is a **system-wide constant** set at startup (default:
+`sched-ahead-time` + one beat at the current tempo). It is not overridable
+per call — a fixed window keeps the behaviour predictable and prevents
+accidental long-range time travel from a caller that sets too large a window.
+If a loop is known to arrive consistently late, the right fix is to adjust
+the loop's scheduling, not to widen the sync window.
 
-The answer determines whether `sync!` is an "at-least-once" or "exactly-timed"
-primitive. Sonic Pi's `sync` uses a time-windowed event history: a thread arriving
-late within a small window still gets the cue; arriving too late misses it and waits
-for the next one. The window size is related to `sched-ahead-time`.
-
-**Stakes**
-
-- Wrong answer leads to phase drift: a loop that occasionally misses a cue will drift
-  by one cue period, which in a live performance context means one bar of being out of
-  time.
-- Overly permissive history (always replay old cues) breaks real-time coordination
-  semantics.
-
-**Exploration path**
-
-1. Define a `sync-window` (e.g., `sched-ahead-time` + one-beat grace period).
-2. When `sync!` is called, search `EventHistory` for the most recent `:name` cue
-   within `[virtual-time - sync-window, ∞)`.
-3. If found: inherit its time and return immediately.
-4. If not found: block on a condition variable until the next `:name` cue fires.
-5. Test this against a scenario where two threads are launched with a small delay
-   and both `sync!` on the same cue — they should both receive the cue and remain
-   phase-aligned.
+This gives `sync!` "at-most-one-beat-late" semantics: threads that arrive
+within one beat of a cue remain phase-aligned; threads that are genuinely
+more than one beat late wait for the next cue and accept a one-period gap.
 
 ---
 
