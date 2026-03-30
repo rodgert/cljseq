@@ -8,6 +8,35 @@ The system is intended for live performance and composition. The Clojure REPL is
 
 **Ensemble synchronization** via Ableton Link is a first-class requirement. `cljseq` must be able to join a Link session and maintain beat/phase alignment with Ableton Live, Bitwig, Sonic Pi, and any other Link-enabled peer on the same LAN — enabling live performance with multiple musicians or hybrid hardware/software setups. See §15 for the full analysis and design.
 
+### 1.1 Broader scope: a toolkit for novel musical instruments
+
+`cljseq` is not only a live coding environment. It is a **platform for building novel,
+theory-aware musical instruments, effects processors, sequencers, loopers, and
+performance appliances**.
+
+The unified control tree (§16) presents cljseq as a single logical device to any
+external control surface — MIDI controller, TouchOSC layout, MCP client, or another
+cljseq peer. Below that surface, the system fans out to multiple physical synthesis
+targets. This architecture means the same codebase that powers a live coder's REPL
+session can equally serve as the firmware of a standalone hardware appliance:
+
+- An embedded system (e.g. Raspberry Pi + touchscreen) running cljseq as headless
+  firmware, presenting a novel sequencer with its own UI, participating in Ableton
+  Link sessions, and supporting MIDI and OSC control from external surfaces
+- A drum machine, MPC-style sampler, or Elektron-alike device, using a CLAP sampler
+  plugin alongside cljseq's step sequencing and generative primitives
+- An effects processor built from PureData's DSP capabilities combined with cljseq's
+  modulation vocabulary
+- A direct Eurorack interface via a CLAP plugin driving USB-to-CV hardware (e.g.
+  Expert Sleepers ES-series), bypassing VCV Rack for lower-latency modular integration
+- A headless DAW controller, managing Ardour or Bitwig via their OSC interfaces
+  while cljseq handles all sequencing and parameter modulation
+
+This broader scope should be kept in mind throughout the design: every abstraction
+— the control tree, the ensemble model, the timing modulation framework, the
+`ITemporalValue` protocol — is a building block for instruments that have not yet
+been imagined, not only a convenience for the live coder at the REPL.
+
 ---
 
 ## 2. Prior Art and Inspiration

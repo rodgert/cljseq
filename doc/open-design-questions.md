@@ -1613,6 +1613,249 @@ Phase alignment across Link peers is preserved.
 
 ---
 
+## Q47 — Control tree as persistent atom: undo stack, panic, and tree serial number
+
+**R&R reference**: §16 (control tree), §3.1 (virtual time); raised in Sprint 3 planning
+
+**The issue**
+
+The control tree implementation choice has architectural consequences beyond thread
+safety. Using a Clojure persistent map held in an atom (rather than a
+`ConcurrentHashMap`) gives us structural sharing, cheap snapshots, and a natural
+undo model — all properties that matter for live performance.
+
+**Proposed model**
+
+```clojure
+;; The tree root is an atom over a persistent map
+(def ^:private tree-state
+  (atom {:root     {}          ; the parameter/structure tree
+         :serial   0           ; monotonically increasing change counter
+         :checkpoints []}))    ; named snapshots for undo / panic
+```
+
+Every structural change (adding/removing nodes, changing loop structure, loading a
+patch) is a CAS over the atom. Real-time parameter updates (`ctrl/set!`) also go
+through the atom but are not undo targets by default.
+
+**Serial number**
+
+The `:serial` field increments on every atom swap. It is exposed at
+`/cljseq/tree/serial` via OSC and the web interface. External tools (control
+surfaces, peer cljseq instances) can compare serial numbers to detect stale
+snapshots without diffing the full tree. A serial number mismatch signals that the
+tree structure has changed and a re-query is needed.
+
+**Undo semantics**
+
+Not all changes are undo targets. The distinction:
+
+| Change type | Undo target? | Rationale |
+|---|---|---|
+| Add/remove loop, ensemble, voice | Yes | Structural; user intent |
+| Load patch | Yes | Deliberate state transition |
+| `live-loop` body redefinition | Yes | Code change |
+| Real-time parameter modulation | No by default | Continuous; overwhelming to track |
+| Parameter change annotated `:undoable true` | Yes | Opt-in for deliberate changes |
+
+The undo stack holds snapshots of the full tree state (cheap due to structural
+sharing). `(undo!)` pops the stack and swaps the prior state into the atom, taking
+effect on the next loop boundary.
+
+**Panic**
+
+`(panic!)` reverts to the most recent named checkpoint and resumes on the next
+loop boundary without missing a beat. A checkpoint is a named snapshot:
+
+```clojure
+(checkpoint! :known-good)   ; tag current tree state
+;; ... live editing ...
+(panic!)                    ; revert to :known-good at next loop boundary
+```
+
+Panic is distinct from undo: it jumps to a tagged known-good state rather than
+stepping back through history one change at a time.
+
+**Design questions**
+
+1. Should the undo stack be bounded (e.g. last 50 structural changes), or
+   unbounded for the duration of a session?
+2. Should `(undo!)` be beat-aware (apply on next bar) or immediate?
+3. Should checkpoints be part of the tree itself (visible via OSC at
+   `/cljseq/checkpoints/`) or metadata held outside the tree?
+4. Is the serial number incremented on parameter-only changes, or only on
+   structural changes? (Recommendation: structural only, to avoid high-frequency
+   churn visible to external tools.)
+
+**Connection to existing questions**
+
+- Q8 (control tree node types) — the atom model affects how node type metadata is
+  stored and whether it participates in structural diffs
+- Q9 (conflict resolution) — concurrent writes to the atom from multiple threads
+  need a well-defined CAS retry policy
+- Q10 (write directionality) — `ctrl/set!` (logical write) always goes through the
+  atom; `ctrl/send!` (physical send) does not necessarily
+
+---
+
+## Q48 — Patch system: named tree states with beat-aware application
+
+**R&R reference**: §16 (control tree); informed by Elektron sequencer patch model,
+hardware synth patch/settings separation
+
+**The issue**
+
+A **patch** is a named, saveable tree state (or partial tree state) that can be
+swapped into the atom atomically and applied at a beat boundary. Patches are the
+cljseq equivalent of a hardware synth's program/patch: a jumping-off point for live
+exploration, a way to organize a live set, and a mechanism for deliberate state
+transitions during performance.
+
+**Key properties**
+
+1. **Partial or full**: a patch may replace the entire tree or only a named subtree
+   (e.g., `/cljseq/ensembles/main/`). This mirrors hardware synths where "settings"
+   (global config) are separate from "patch" (voice/sequence state).
+
+2. **Beat-aware application**: patch changes apply at a configurable boundary —
+   next `sleep!`, next bar, next phrase, or immediately. Default: next bar, consistent
+   with Elektron's behavior.
+
+3. **Sequencer state**: a patch may optionally include sequencer state (loop positions,
+   step indices) in addition to parameter values, as Elektron devices do. The NDLR
+   does not store sequencer state in its presets; both models are supported.
+
+4. **EDN serialization**: patches are EDN maps (consistent with the data format
+   policy). They are loadable from `~/.cljseq/patches/` or from project resources.
+
+5. **Live set**: an ordered sequence of patches with beat-aware transitions is a live
+   set. `(next-patch!)` and `(prev-patch!)` navigate the set; cue points can trigger
+   transitions automatically.
+
+```clojure
+(defpatch :verse
+  {:ensembles/main {:chord :I  :mode :dorian}
+   :loops/bass     {:octave 2  :velocity 90}})
+
+(patch! :verse)                      ; apply at next bar (default)
+(patch! :verse :on :next-phrase)     ; apply at next 8-bar phrase
+(patch! :verse :on :now)             ; immediate
+```
+
+**Design questions**
+
+1. Should patch application be a structural change (undo target) or a separate
+   "patch history" that is tracked independently?
+2. Should patches be able to include `live-loop` body code (as Clojure source), or
+   only parameter values and tree structure? (Code-carrying patches are powerful but
+   introduce security and serialization complexity.)
+3. How does patch application interact with `*in-loop-context*`? A loop mid-body
+   when a patch fires should see the new parameter values on its next iteration, not
+   mid-body.
+
+**Connection to existing questions**
+
+- Q47 — patches are tree state snapshots; patch application is a CAS on the atom
+  with an undo entry
+- Q2 — patch application timing ("next bar") uses the same full-iteration boundary
+  semantics as `live-loop` redefinition
+
+---
+
+## Q49 — Synth-style macros: named input→parameter-set mappings
+
+**R&R reference**: §16 (control tree); inspired by Hydrasynth macro model
+
+**The issue**
+
+Hardware synthesizers (e.g. Hydrasynth, Waldorf Iridium) expose **macros**: named
+mappings from one or more input values to a set of simultaneous parameter changes
+across the instrument. A single knob or XY pad gesture drives multiple parameters
+through a defined transfer function. This is distinct from a Clojure macro; the
+term is used in its synthesizer sense throughout this question.
+
+In cljseq, the control tree already has the machinery: `ctrl/bind!` can route an
+`ITemporalValue` to a parameter, and `ctrl/set!` can update multiple nodes. A
+synthesizer-style macro is a named, reusable, potentially multi-input version of
+this pattern — surfaced as a first-class concept in the DSL.
+
+**Candidate design**
+
+```clojure
+;; Define a macro: one input drives multiple parameters
+(defmacro* :filter-brightness
+  {:input  [:float 0.0 1.0]
+   :targets [{:path [:filter/cutoff]   :fn #(* % 8000)}
+             {:path [:filter/resonance] :fn #(* % 0.7)}
+             {:path [:amp/brightness]   :fn identity}]})
+
+;; Bind the macro to a TouchOSC fader
+(ctrl/bind! [:macros/filter-brightness] (ctrl/get [:osc/fader-1]))
+
+;; Or drive it algorithmically
+(ctrl/bind! [:macros/filter-brightness] (lfo :rate 0.1 :min 0.0 :max 1.0))
+```
+
+Macros are nodes in the control tree at `/cljseq/macros/<name>/`. They can be driven
+by hardware input, algorithmic `ITemporalValue` sources, or arbitrary Clojure code.
+
+**Design questions**
+
+1. Should `defmacro*` (or whatever the final name is — `defmapping`? `defmod-macro`?)
+   be a macro or a function? A function is simpler; a macro can provide better error
+   messages and DSL sugar.
+2. Should the transfer functions be restricted to pure functions (for
+   serializability in patches), or arbitrary Clojure code?
+3. How are multi-input macros (XY pad → two independent axes → N parameters) expressed?
+4. **Naming**: `macro` is taken by Clojure. Candidates: `mapping`, `performer`,
+   `gesture`, `mod-macro`, `morph` (used by some hardware). Recommendation: `morph`
+   — it has clear musical connotation (parameter morphing) and no Clojure collision.
+
+**Connection to existing questions**
+
+- Q44 (`ITemporalValue`) — morph inputs can be any `ITemporalValue`; the morph
+  fans out one value to multiple binding targets
+- Q48 (patches) — morphs can be included in patches; their current input value
+  is part of the patch state
+
+---
+
+## Q50 — P2P control plane: peer discovery and remote tree composition
+
+**R&R reference**: §15 (Ableton Link), §16 (control tree), §17 (OSC server);
+raised as a future capability in Sprint 3 planning
+
+**The issue**
+
+Ableton Link provides peer-to-peer *timing* synchronization. A complementary
+capability would be peer-to-peer *control plane* synchronization: discovering other
+cljseq instances on the LAN, querying their control trees via OSC, and composing
+discovered peers as device nodes within the local tree.
+
+This would enable:
+- One cljseq instance acting as a conductor, sending patch changes and parameter
+  updates to other instances
+- A "device map" that treats all discovered peers as subtrees at
+  `/cljseq/peers/<peer-id>/`
+- Distributed live coding performances where musicians share control trees
+- A standalone appliance that discovers and controls other cljseq appliances
+
+**This is a future capability — not blocking any current phase.** It is captured
+here to ensure the control tree design (§16) does not accidentally close off this
+possibility. Specifically:
+
+- OSC addresses should be stable and navigable (already the design)
+- The tree serial number (Q47) enables peers to detect stale snapshots
+- The tree should be fully serializable to EDN (already the policy) so peer
+  state can be transmitted and merged
+- Discovery could use mDNS/Bonjour (the same mechanism as AirPlay and
+  many embedded devices) rather than inventing a new protocol
+
+**No design decisions are required now.** Flag for a future design sprint once the
+core control tree implementation is stable.
+
+---
+
 ## Exploration Priorities
 
 | # | Question | Blocking? | Effort |
@@ -1663,3 +1906,7 @@ Phase alignment across Link peers is preserved.
 | Q44 | Unified temporal-value abstraction: `ITemporalValue` protocol | **Yes** — needed before Phase 1 impl | High — design spike recommended |
 | Q45 | Parts vs. tracks: unifying voice-organization abstraction (`ensemble`?) | **Yes** — needed before multi-voice DSL impl | Medium — conceptual synthesis + naming decision |
 | Q46 | Timing modulation: swing, humanize, groove, quantize as time-dimension `ITemporalValue` | **Yes** — needed before humanization/quantization impl | Medium — connects Q35, Q44, `cljseq.clock` vocabulary |
+| Q47 | Control tree as persistent atom: undo stack, panic, serial number | **Yes** — needed before control tree impl | Medium — impacts Q8, Q9, Q10 |
+| Q48 | Patch system: named tree states with beat-aware application | **Yes** — needed before control tree impl | Medium — builds on Q47 atom model |
+| Q49 | Synth-style morphs: named input→parameter-set mappings | No — needed before §16 morph impl | Medium — surface explicit concept in DSL |
+| Q50 | P2P control plane: peer discovery and remote tree composition | No — future capability | Low — ensure design doesn't close it off |

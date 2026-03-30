@@ -208,13 +208,24 @@ All 13 blocking questions are resolved (12 from Sprint 1 handoff + Q46 new):
 
 ### Primary objective
 
-Resolve the architecture-tier questions (Q5, Q8, Q9, Q10, Q12, Q16) and sweep the
-low-effort question batch, then execute the `ITemporalValue` design spike and begin
-the project scaffold.
+Resolve the new blocking questions (Q47, Q48) and architecture-tier questions
+(Q5, Q8, Q9, Q10, Q12, Q16), sweep the low-effort question batch, execute the
+`ITemporalValue` design spike, and begin the project scaffold.
+
+### New blocking questions (added post-Sprint 2)
+
+These were identified during Sprint 2 close and must be resolved before control
+tree implementation:
+
+| Q | Topic | Dependency |
+|---|---|---|
+| Q47 | Control tree as persistent atom: undo, panic, serial number | Precedes Q8, Q9, Q10 |
+| Q48 | Patch system: named tree states, beat-aware application | Builds on Q47 |
 
 ### Blocking architecture questions (decision pass)
 
-These have clear recommended resolutions in the ODQ and need only a confirm/amend:
+These have clear recommended resolutions in the ODQ and need only a confirm/amend.
+Note: Q8, Q9, Q10 should be revisited in light of Q47's atom model.
 
 | Q | Topic | Recommended resolution |
 |---|---|---|
@@ -224,6 +235,13 @@ These have clear recommended resolutions in the ODQ and need only a confirm/amen
 | Q10 | `mod-route` write directionality | `ctrl/set!` = logical; `ctrl/send!` = physical |
 | Q12 | OSC control/data plane | Bundle timestamp semantics; two-port fallback |
 | Q16 | Process topology | Option A: direct JVM connections to each process |
+
+### Additional Sprint 3 questions
+
+| Q | Topic | Priority |
+|---|---|---|
+| Q49 | Synth-style morphs: named input→parameter-set mappings | Medium — surface concept in DSL |
+| Q50 | P2P control plane | Low — ensure design stays open; no decisions needed yet |
 
 ### Low-effort question sweep
 
@@ -258,6 +276,12 @@ Establish the directory layout and build system stubs to make Phase 0 actionable
 - `doc/documentation-strategy.md` — Codox (Clojure API), Doxygen (C++),
   mdBook (user guide) toolchain plan
 - Establish conventions for extracting design document content into user-facing docs
+
+### DSL usability corpus
+
+Build a systematic comparison of equivalent musical concepts expressed in cljseq vs.
+Sonic Pi, Overtone, and TidalCycles. Identifies areas where syntactic sugar would
+improve the live coding experience. Grows alongside DSL design decisions.
 
 ### MIDI device research
 
