@@ -30,45 +30,29 @@ time, causing silent phase corruption in a live performance context.
 
 ---
 
-## Q2 — `live-loop` redefinition semantics: what constitutes an "iteration"?
+## Q2 — `live-loop` redefinition semantics: what constitutes an "iteration"? — **RESOLVED**
 
 **R&R reference**: §3.2, §5.3
 
-**The issue**
+**Resolution** (Sprint 2)
 
-The document says a `live-loop` body is held in an atom and that re-evaluating the form
-"updates the loop body on the next iteration." But "next iteration" is ambiguous:
+Full-iteration semantics by default: a redefined `live-loop` body takes effect
+after the current invocation of the body function returns — i.e., after all
+`sleep!` calls within the current iteration complete. This matches Sonic Pi's
+`live_loop` and avoids any question of what to do with partially-completed
+iteration state.
 
-- Does the current execution of the body complete fully (including all inner `sleep!`
-  calls)?
-- Or does a redefinition take effect at the next top-level `sleep!` boundary within
-  the body?
-- What if the loop body is deeply nested, e.g., a 4-bar phrase that calls `sleep!`
-  16 times?
-
-Sonic Pi always waits for the full top-level body to complete (i.e., after the final
-`sleep` in the iteration), then picks up the new body. This is the safest semantic
-because it avoids the question of what to do with partially-completed iteration state.
-
-**Stakes**
-
-- If changes take effect at any `sleep!` boundary, the system is more responsive but
-  the programmer must reason carefully about mid-body state.
-- If changes take effect only at the top-level iteration boundary, the system is
-  simpler to reason about but a 4-bar phrase means up to 4 bars of lag before a change
-  is heard.
-- A "hot swap at next `sleep!`" variant could be offered as an explicit opt-in
-  (`live-loop :foo :hot-swap true`).
-
-**Exploration path**
-
-1. Study how Sonic Pi's `live_loop` defines "iteration boundary" in its source.
-2. Decide: default to full-iteration semantics (predictable), with optional
-   `:hot-swap` flag for sub-iteration updates.
-3. Consider whether a `(checkpoint!)` marker inside the body could serve as the
-   explicit hot-swap point.
-4. Document the chosen semantic precisely — "the new body takes effect after the
-   current value of `(the-loop-body-fn)` returns" is unambiguous.
+- The body function is held in an atom; the loop's tail-call reads the atom
+  *after* each full iteration, picking up any redefinition at that point
+- The precise invariant: "the new body takes effect after the current value of
+  `(the-loop-body-fn)` returns"
+- For situations where sub-iteration responsiveness is needed (e.g., a 4-bar
+  phrase where you want a change to land within the bar), opt in with
+  `:hot-swap true` on the `live-loop` form — the scheduler then checks for a
+  new body at each `sleep!` boundary
+- `(checkpoint!)` is a named explicit hot-swap point within a body, usable as
+  an alternative to `:hot-swap true` when only specific boundaries should be
+  checked
 
 ---
 
