@@ -1560,6 +1560,123 @@ be a design decision record, not production code.
 
 ---
 
+## Q45 — Parts vs. tracks: what is the unifying voice-organization abstraction?
+
+**R&R reference**: §2.3 (NDLR), §2.4 (T-1), §5 (sequencing DSL), §16 (control tree /
+`deflive-loop`); informed by Sprint 2 analysis of Elektron Digitakt/Digitone track model
+
+**The issue**
+
+Two well-established hardware paradigms organize multi-voice sequencing differently:
+
+**Semantic parts model (NDLR)**: Four named, typed roles — Drone, Pad, Motif 1,
+Motif 2. Each role has a defined musical function: Drone sustains the root, Pad
+voices the current chord, Motifs run melodic patterns against the chord. All parts
+share a global harmonic context (Key + Mode + Chord). The role type determines how
+the part responds to chord changes — a Drone always plays the root; a Motif
+transposes its scale-relative indices to the new chord. The fixed role count is a
+hardware limitation, not a design intention.
+
+**Generic track model (Elektron)**: Eight (or sixteen) interchangeable tracks.
+No semantic role differentiation — all tracks have identical capability; content
+and MIDI channel assignment differentiate them. Tracks share pattern length and
+song-mode arrangement but no shared harmonic context unless the user constructs one
+through MIDI channel routing and an external harmony source.
+
+These are not opposites — they are points on a spectrum. The design question for
+cljseq is: **what is the right abstraction for organizing N voices that may or may
+not share harmonic context, without inheriting the hardware limitations of either
+model?**
+
+**Stakes**
+
+This affects how users think about and structure multi-voice compositions at the
+REPL. Getting it wrong means either: forcing semantic role thinking on users who
+want generic tracks, or failing to provide the coordination primitives (shared
+harmony, group start/stop, voice-leading across parts) that make the NDLR model
+powerful. It also directly impacts the control tree layout (§16) — how voices
+register themselves and how the harmonic context propagates.
+
+**Key observations**
+
+1. **cljseq has no hardware voice limit.** A `live-loop` is a Clojure thread; the
+   system can support as many concurrent voices as the JVM and synthesis target
+   allow. The question is organizational, not computational.
+
+2. **Harmony-relative sequencing is the NDLR's real differentiator.** The part
+   roles (Drone, Pad, Motif) are most valuable because they define how each voice
+   *responds to chord changes* — not because there are exactly four of them. A
+   Drone is "always play root"; a Motif is "play harmony-relative indices against
+   current chord." These are behaviors, not slots.
+
+3. **Elektron tracks gain harmonic awareness through external routing.** The
+   Digitone adds per-track MIDI channels and an FM engine, but harmonic coordination
+   across tracks still requires the user to set it up manually. cljseq can do
+   better: harmonic context can be an explicit shared value in the control tree.
+
+4. **`live-loop` is already the generic track.** A named `live-loop` is the
+   cljseq equivalent of an Elektron track — it runs independently, has its own
+   clock division, and can target any synthesis destination. The question is what
+   sits *above* a single loop.
+
+**Candidate abstraction: `ensemble`**
+
+An `ensemble` (or `section`, or `arrangement` — naming TBD) is a named grouping
+of voices that:
+
+- Declares a shared harmonic context: key, mode, and a chord progression (or a
+  live-mutable chord atom)
+- Holds N named voices, each a `live-loop` (or `deflive-loop`) with an optional
+  semantic role
+- Provides group-level operations: `(start! ens)`, `(stop! ens)`, `(arm! ens)`,
+  `(chord! ens :IV)` — updating the shared harmonic context for all voices
+- Maps cleanly to a subtree in the control tree: `/cljseq/ensembles/<name>/`
+
+Semantic roles would be optional annotations on voices, not mandatory slots:
+
+```clojure
+(defensemble :morning-raga
+  {:key :D :mode :bhairav}
+  (voice :drone  {:role :drone}  (drone-pattern ...))
+  (voice :chords {:role :pad}    (pad-pattern ...))
+  (voice :melody {:role :motif}  (motif-pattern ...))
+  (voice :bass   {}              (bass-pattern ...))   ; generic — no role
+  (voice :tabla  {}              (tabla-pattern ...))) ; fifth voice, no NDLR equivalent
+```
+
+The `:role` annotation tells the harmonic engine how to interpret the pattern
+(root-relative for `:drone`; chord-tone indices for `:pad`; scale-degree indices
+for `:motif`). Voices without a role receive the raw chord root as context and
+interpret it themselves.
+
+**Exploration paths**
+
+1. Survey how other live-coding systems address multi-voice organization:
+   - **Sonic Pi** — no explicit grouping; users coordinate via `cue!`/`sync!`
+   - **Overtone** — no grouping primitive; SC buses and groups handle this
+   - **TidalCycles** — `stack` and `cat` compose patterns; no named groups
+   - **Sardine** — `Bowl` concept groups players with shared clock and scale
+2. Map the NDLR's four roles to cljseq behaviors precisely: what does "respond to
+   chord changes" mean in terms of the harmony-relative index system (§5)?
+3. Determine whether `ensemble` belongs in the control tree (§16) as a container
+   node, or is purely a scheduling/coordination primitive at the `live-loop` level
+4. Evaluate naming: `ensemble`, `section`, `part-group`, `scene`, `arrangement`
+   — each carries connotations; choose one that doesn't collide with Music21 or
+   DAW terminology already in the system
+5. Consider how `ensemble` interacts with Ableton Link (§15) — all voices in an
+   ensemble share the Link beat; ensemble start/stop is phase-quantized
+
+**Connection to existing questions**
+
+- Q11 (`deflive-loop` / `live-loop` unification) — `ensemble` voices are likely
+  `deflive-loop` forms; Q11's Option A resolution (alias with auto-path) fits cleanly
+- Q9 (multi-source conflict resolution) — if two ensembles declare different global
+  keys, the conflict policy applies
+- Q29 (`param-loop` vs. `live-loop`) — `param-loop` voices inside an ensemble are
+  the continuous-modulation equivalent of Elektron's LFO tracks
+
+---
+
 ## Exploration Priorities
 
 | # | Question | Blocking? | Effort |
@@ -1608,3 +1725,4 @@ be a design decision record, not production code.
 | Q24 | Music21 corpus licensing | No — distribution policy | Low — resolved: no bundling |
 | Q7 | Link integration | No — post-core feature | High — see §15 |
 | Q44 | Unified temporal-value abstraction: `ITemporalValue` protocol | **Yes** — needed before Phase 1 impl | High — design spike recommended |
+| Q45 | Parts vs. tracks: unifying voice-organization abstraction (`ensemble`?) | **Yes** — needed before multi-voice DSL impl | Medium — conceptual synthesis + naming decision |

@@ -139,6 +139,7 @@ phase and by topic area.
 | **Q20** | Music21 async: safe usage from `live-loop` | Breaks virtual-time if deref'd inside loop | Document constraint + `m21/eventually!` helper |
 | **Q25** | Microtonal pitch representation for maqamat | Correctness for §21 implementation | Cents-offset on MIDI note; MPE for polyphonic; CLAP tuning table for plugins |
 | **Q44** | Unified temporal-value abstraction: do clocks and modulators share a protocol? | Highest-leverage Phase 1 decision — wrong answer means API friction across clock, mod, scheduler, and control-tree binding | Design spike: implement minimal `ITemporalValue` protocol; express 5–6 clock and modulator primitives; verify composition holds without coercion |
+| **Q45** | Parts vs. tracks: what is the unifying voice-organization abstraction? | Needed before any multi-voice DSL implementation — determines how `live-loop`, `deflive-loop`, and harmonic context compose into a coherent multi-voice model | Survey NDLR semantic roles vs. Elektron generic tracks; define an `ensemble` (or equivalent) abstraction that unifies both without inheriting hardware voice limits |
 
 ### Architecture: Needed Before §16–§19 Implementation
 
@@ -200,7 +201,8 @@ Maps each R&R section to the open design questions and Sprint 2 tasks that depen
 |---|---|---|---|---|
 | §3 | Virtual time model | Q1, Q2, Q3, Q35, **Q44** | Q5, Q30 | Design spike: `ITemporalValue` protocol |
 | §4 | Musical abstractions (pitch, scale, chord) | Q25 | Q36 | Maqam cents-offset; handpan scale catalog |
-| §5 | Sequencing DSL | Q4, Q11, Q29 | Q10 | Naming decisions; `param-loop` unification |
+| §2 | Prior art (NDLR, T-1, Elektron, Misha) | **Q45** | — | Voice-organization abstraction; `ensemble` concept; NDLR parts vs. Elektron tracks |
+| §5 | Sequencing DSL | Q4, Q11, Q29, **Q45** | Q10 | Naming decisions; `param-loop` unification; harmony-relative voice roles |
 | §6 | MIDI control binding | — | Q5 | MIDI device map survey; `defdevice` schema |
 | §7 | Scala / EDO tuning | Q25 | Q36 | `.scl` corpus; EDN scale index |
 | §8 | VCV Rack integration | — | — | Out of scope Phase 0–1 |
@@ -210,7 +212,7 @@ Maps each R&R section to the open design questions and Sprint 2 tasks that depen
 | §12 | DSL design principles | Q4, Q11 | — | Naming conventions; `doc/conventions.md` |
 | §13 | Open questions (original) | Q1–Q43 | — | ODQ full resolution pass |
 | §15 | Ableton Link | — | — | Q7 resolved (post-Phase-1 implementation); opt-in build analysis |
-| §16 | Unified control tree | Q29 | Q8, Q9, Q10, Q12, Q16 | `defdevice` schema; control-tree device layer spec |
+| §16 | Unified control tree | Q29, **Q45** | Q8, Q9, Q10, Q12, Q16 | `defdevice` schema; control-tree device layer spec; `ensemble` subtree layout |
 | §17 | Ring/Netty OSC server | — | Q12, Q14 | Two-port vs. timestamp semantics decision |
 | §18 | MCP integration | Q13 | — | MCP resource server prototype with `doc/*.md` corpus |
 | §19 | CLAP plugin hosting | Q15, Q20 | Q17, Q18, Q19 | `libcljseq-rt` boundary spec; `cljseq-audio` stub |
@@ -228,8 +230,24 @@ Maps each R&R section to the open design questions and Sprint 2 tasks that depen
 
 ## Additional Design Research for Sprint 2
 
-Two hardware sequencer paradigms were not covered in Sprint 1 and should be
-analyzed before Sprint 2 closes out the design phase:
+The following topics require analysis before the design phase closes. Some were identified in Sprint 1; the voice-organization topic (Q45) was added at Sprint 2 kickoff.
+
+### Voice Organization: NDLR Parts vs. Elektron Tracks (Q45)
+
+The NDLR organizes four voices into typed *parts* — Drone, Pad, Motif 1, Motif 2 — each with a defined musical role that determines how it responds to chord changes. Elektron instruments (Digitakt, Digitone) organize voices into generic, interchangeable *tracks* with no semantic role differentiation. Both impose hardware voice-count limits that cljseq, as a software system, need not share.
+
+The research task is to synthesize these two models into a single cljseq abstraction — tentatively called `ensemble` — that:
+
+- Groups N named voices (no fixed limit) with an optional semantic role per voice
+- Carries a shared harmonic context (key, mode, live-mutable chord) that harmony-relative voices respond to automatically
+- Provides group-level operations: `start!`, `stop!`, `arm!`, `chord!`
+- Maps to a named subtree in the control tree: `/cljseq/ensembles/<name>/`
+- Leaves the door open for voice roles beyond the NDLR's four (e.g., `:bass`, `:percussion`, arbitrary user-defined roles)
+
+Part of this analysis is surveying how other live-coding environments handle multi-voice grouping: Sonic Pi (none — `cue!`/`sync!` only), TidalCycles (`stack`/`cat` pattern composition), Sardine (`Bowl`), Overtone (SuperCollider groups and buses). See **Q45** in `doc/open-design-questions.md` for the full exploration path.
+
+**Key design principle**: the NDLR's four-part limit and Elektron's eight-track limit are hardware constraints, not musical ones. cljseq should capture the *concepts* (harmony-relative voice roles, shared harmonic context, group coordination) while imposing no artificial ceiling on the number of voices.
+
 
 ### Tracker-Style Sequencing (Polyend Tracker)
 Tracker sequencers originated in the Amiga/demo-scene era (ProTracker, FastTracker)
