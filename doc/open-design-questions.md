@@ -9,41 +9,24 @@ kept here for traceability.
 
 ---
 
-## Q1 — `*virtual-time*` as `(atom 0N)` vs a plain rational
+## Q1 — `*virtual-time*` as `(atom 0N)` vs a plain rational — **RESOLVED**
 
 **R&R reference**: §3.2
 
-**The issue**
+**Resolution** (Sprint 2)
 
-The current sketch declares:
+`*virtual-time*` is a plain `^:dynamic` rational var, not an atom. `binding`
+already provides per-thread isolation; the atom wrapper is redundant and
+dangerous — a child thread inheriting the binding could `swap!` the parent's
+time, causing silent phase corruption in a live performance context.
 
-```clojure
-(def ^:dynamic *virtual-time* (atom 0N))
-```
-
-But `binding` replaces the var's value per thread. The atom wrapper is therefore
-redundant: you already have per-thread isolation via the dynamic var. Worse, the atom
-introduces a mutable container that could be dereferenced from the wrong thread,
-breaking the isolation guarantee. In Sonic Pi's model, virtual time is a plain value
-that is never shared — it is advanced locally by `sleep!` and is not observable
-from other threads except through `cue!`.
-
-**Stakes**
-
-If left as an atom, any code that calls `(swap! *virtual-time* ...)` from a child
-thread that inherited the same binding will silently corrupt the parent thread's time.
-This is a class of bug that is very hard to diagnose in a live performance context.
-
-**Exploration path**
-
-1. Confirm: does any design scenario require reading one thread's virtual time from
-   another? (`cue!` transfers a *copy* of the time value, so the answer should be no.)
-2. If no inter-thread read is needed, remove the atom and use a plain rational. Advance
-   it in `sleep!` via `set!` (the Clojure `set!` for thread-local dynamic vars, distinct
-   from the musical `set!` — see Q4).
-3. If some observability is needed (e.g., a debug dashboard), expose it through a
-   side-channel (an `EventHistory` entry or a dedicated atom that `sleep!` updates as
-   a side effect), not by sharing the var itself.
+- `sleep!` advances virtual time via `clojure.core/set!` (the special form for
+  mutating thread-local dynamic bindings)
+- No design scenario requires one thread to observe another's virtual time
+  directly; `cue!` transfers a *copy* of the value at cue-fire time
+- If a debug dashboard needs to display running virtual time, it reads from an
+  `EventHistory` side-channel that `sleep!` updates as a secondary effect — the
+  var itself is never shared across threads
 
 ---
 
