@@ -124,44 +124,29 @@ all musical state through the control tree rather than inventing a new top-level
 
 ---
 
-## Q5 — `sched-ahead-time` should be per-integration-target, not per-protocol-class
+## Q5 — `sched-ahead-time` should be per-integration-target, not per-protocol-class — **RESOLVED**
 
 **R&R reference**: §3.1, §3.4
 
-**The issue**
+**Resolution** (Sprint 3)
 
-The document specifies 100ms for MIDI and 500ms for audio. But the relevant dimension
-is the synthesis engine's buffering model, not the protocol:
+Replace the single `*sched-ahead-ns*` binding with a per-target config map. Each
+integration target's `play!` implementation reads its own value. `:bitwig-midi` is
+generalised to `:daw-midi` — the relevant characteristic is DAW MIDI input latency,
+not any specific DAW.
 
-| Target | Appropriate sched-ahead | Why |
-|---|---|---|
-| `javax.sound.midi` hardware | 50–100ms | Low-latency MIDI hardware DMA |
-| SuperCollider via OSC | 10–50ms | scsynth bundles; engine handles its own scheduling |
-| VCV Rack via OSC | 50ms | Rack's audio buffer (typically 256–512 samples) |
-| Bitwig via virtual MIDI | 30–100ms | DAW MIDI input latency varies |
-| SuperCollider audio synth | 500ms+ | Audio synthesis needs larger buffer |
-| Ableton Link timeline | 0ms | Link's timeline is absolute; no sched-ahead needed for beat alignment |
+```clojure
+{:midi-hardware 100   ; javax.sound.midi hardware DMA
+ :sc-osc         30   ; scsynth bundles; engine handles its own scheduling
+ :vcv-rack        50  ; Rack audio buffer (~256–512 samples)
+ :daw-midi        50  ; DAW MIDI input latency (configurable per DAW)
+ :link             0} ; Link timeline is absolute; no sched-ahead needed
+```
 
-A single 500ms value applied to OSC-to-SuperCollider would cause notes to be
-unnecessarily early relative to scsynth's own scheduling, and could exceed scsynth's
-bundle time window.
-
-**Stakes**
-
-Too large: notes arrive early relative to the target's own scheduling, causing
-collisions with pre-queued events. Too small: GC pauses cause late delivery and
-audible glitches.
-
-**Exploration path**
-
-1. Replace the single `*sched-ahead-ns*` binding with a per-target config map:
-   ```clojure
-   {:midi-hardware 100 :sc-osc 30 :vcv-rack 50 :link 0}  ; milliseconds
-   ```
-2. Each integration target's `play!` implementation reads its own sched-ahead value.
-3. Provide a `(with-target-config target opts ...)` override for per-session tuning.
-4. Measure empirically: connect to each target and measure actual note-to-sound latency
-   at different sched-ahead values.
+All values in milliseconds; all configurable at startup (see R&R §25). Values should
+be measured empirically per target — connect and measure actual note-to-sound latency
+at different sched-ahead values. `(with-target-config target opts ...)` provides
+per-session override for tuning.
 
 ---
 
@@ -255,119 +240,88 @@ client and beat-timeline integration, ending with start/stop sync.
 
 ---
 
-## Q8 — Control tree node type system: richness vs. simplicity
+## Q8 — Control tree node type system: richness vs. simplicity — **RESOLVED**
 
 **R&R reference**: §16.2
 
-**The issue**
+**Resolution** (Sprint 3)
 
-The control tree needs a type system for value nodes. At minimum: `:int`, `:float`,
-`:bool`, `:keyword`, `:data` (opaque Clojure value). But musical parameters motivate
-richer types:
+Minimal initial type set, stored as metadata in the persistent map node alongside
+the value (consistent with Q47's atom model):
 
-- `:pitch` — a Pitch value; what does a MIDI CC → Pitch transform look like? (CC has
-  128 steps; pitch space is much larger)
-- `:harmony` — a compound value `{:key :C :mode :major :degree :I}`; can an OSC
-  message set the whole thing atomically?
-- `:pattern` — a Pattern value; can this be set via MIDI at all? Via OSC with a
-  JSON-encoded value?
-- `:fn` — a callable; can it be replaced at runtime via an OSC message carrying
-  Clojure source?
+| Type | Description |
+|---|---|
+| `:int` | Integer; range-constrained optional |
+| `:float` | Floating-point; range-constrained optional |
+| `:bool` | Boolean |
+| `:keyword` | Arbitrary keyword value |
+| `:enum` | Keyword from a declared finite set (scales, modes, chord types) |
+| `:data` | Opaque Clojure value; no coercion or serialization guarantee |
 
-The tension is between a rich type system that enables powerful coercions and
-validation, and a simple one that is easy to implement and reason about.
+**Deferred**: `:pitch`, `:harmony`, `:pattern` — high-value but complex; deferred
+to a second pass when the type system has proven itself in practice.
 
-**Stakes**
+**Security boundary**: `:fn` nodes are *callable* but never *settable* via MIDI or
+OSC. Method nodes are declared in Clojure only. This is a hard boundary: remote code
+execution via an OSC message is not a supported operation.
 
-An overly rich type system becomes a language-within-a-language. An overly simple
-one forces every transform to be a raw function — which can't be serialized for
-`ctrl/snapshot` or transmitted as a tree description to an OSC autodiscovery client.
-
-**Exploration path**
-
-1. Define the minimal set of types needed for all parameters in §16.2's examples:
-   `{:int :float :bool :keyword :enum :data}`. `:enum` is a keyword with a declared
-   finite set of valid values (scales, modes, chord types).
-2. Defer `:pitch`, `:harmony`, `:pattern` to a second pass — these are high-value but
-   complex.
-3. `:fn` is never settable via MIDI or OSC (security boundary: remote code execution).
-   Method nodes are declared in Clojure only; they are *callable* but not *replaceable*
-   via external protocols.
-4. The `:data` type is the escape hatch for complex values — no coercion, no
-   serialization guarantee. OSC can set a `:data` node only if a transform function
-   is provided.
+**`:data` escape hatch**: OSC or MIDI can set a `:data` node only if an explicit
+transform function is declared at binding time. Without a transform, `:data` nodes
+are read-only from external protocols.
 
 ---
 
-## Q9 — Conflict resolution when multiple sources control the same node
+## Q9 — Conflict resolution when multiple sources control the same node — **RESOLVED**
 
 **R&R reference**: §16.3
 
-**The issue**
+**Resolution** (Sprint 3)
 
-When Link is active, it writes `/cljseq/global/bpm`. If the user also binds MIDI CC
-72 to `/cljseq/global/bpm`, two asynchronous sources compete to write the same atom.
-Last-write-wins is the simplest semantics but leads to a BPM "fight" where Link and
-the MIDI controller continuously overwrite each other.
+Fail-fast at `bind!` time: `ctrl/bind!` raises an error if a node already has a
+conflicting binding. Conflicts are resolved explicitly via `:priority`:
 
-The same problem applies whenever OSC and MIDI are both bound to the same node.
+```clojure
+(ctrl/bind! [:global/bpm] link-source)               ; succeeds; Link owns :bpm
+(ctrl/bind! [:global/bpm] midi-cc-72)                ; error — already bound
+(ctrl/bind! [:global/bpm] midi-cc-72 :priority 10)   ; succeeds — higher priority wins
+```
 
-**Stakes**
+Default priority ordering (lower number = higher priority):
 
-In a live performance, an unexpected BPM fight would be catastrophic. The system must
-have a defined, configurable resolution policy.
+| Source | Default priority |
+|---|---|
+| Clojure code (`ctrl/set!`) | 0 (always wins) |
+| Ableton Link | 10 |
+| MIDI | 20 |
+| OSC | 30 |
 
-**Exploration path**
-
-Options:
-1. **Priority ordering**: each binding has a priority; higher priority wins. Link is
-   highest by default; MIDI next; OSC last; Clojure code overrides all.
-2. **Source locking**: the first source to write a node "owns" it; other sources are
-   silently ignored until the lock is released.
-3. **Last-write-wins** (simple, no policy): the user is responsible for not binding
-   competing sources. Document the risk.
-4. **Explicit conflict declaration**: `ctrl/bind!` raises an error if the node is
-   already bound to a conflicting source, unless `:allow-conflict true` is passed.
-
-Recommendation: option 4 (fail-fast at binding time) with option 1 (priority) as
-the explicit override mechanism. The error at binding time catches accidental
-conflicts before the performance.
+Catching conflicts at binding time prevents BPM fights and similar live-performance
+hazards. Last-write-wins is not supported as a policy — it is the failure mode this
+design prevents.
 
 ---
 
-## Q10 — `mod-route` directionality: input node → output node → sidecar
+## Q10 — `mod-route` directionality: input node → output node → sidecar — **RESOLVED**
 
 **R&R reference**: §16.8
 
-**The issue**
+**Resolution** (Sprint 3)
 
-§16.8 sketches a `mod-route` from an input value node to a device output node. This
-requires the tree to know that writing `/cljseq/devices/prophet/filter-cutoff`
-triggers a MIDI CC send via the sidecar. The write path is:
+Two write operations with distinct semantics:
 
-```
-ctrl/set! → atom CAS → post-write hook → sidecar/schedule! MIDI CC
-```
+| Operation | Updates atom? | Fires sidecar? | Use when |
+|---|---|---|---|
+| `ctrl/set!` | Yes | No | Logical update: change displayed state, feed watches |
+| `ctrl/send!` | Yes | Yes | Physical update: send MIDI CC / OSC to hardware |
 
-But this means a plain `ctrl/set!` call from Clojure code also triggers a MIDI send.
-That may or may not be desired — sometimes you want to update the displayed state of
-a parameter without sending a MIDI message (e.g., when reading the current hardware
-state back via SysEx).
+`mod-route` uses `ctrl/send!` internally. Patch application (Q48) fires `ctrl/send!`
+for every changed node that has a physical binding, synchronizing connected hardware
+automatically.
 
-**Stakes**
-
-The post-write hook model conflates "the logical value changed" with "send a hardware
-event." These are distinct concerns and need to be separable.
-
-**Exploration path**
-
-1. Distinguish `:logical` writes (update the atom, fire watches, but no hardware
-   output) from `:physical` writes (update the atom AND fire the sidecar).
-2. `ctrl/set!` is logical by default; `ctrl/send!` is physical (also updates the atom
-   and fires a hardware event).
-3. `mod-route` uses `ctrl/send!` internally.
-4. A device node's atom represents the *last sent* value; it can diverge from actual
-   hardware state if the hardware was adjusted manually.
+A device node's value in the atom represents the *last sent* value. This can diverge
+from actual hardware state if the hardware was adjusted manually (e.g. turning a knob
+on a Prophet). Reconciliation (SysEx readback → `ctrl/set!` without send) is an
+explicit user action, not an automatic sync.
 
 ---
 
@@ -408,47 +362,31 @@ always registers in the tree.
 
 ---
 
-## Q12 — Control-plane vs. data-plane OSC: how to distinguish at the wire level?
+## Q12 — Control-plane vs. data-plane OSC: how to distinguish at the wire level? — **RESOLVED**
 
 **R&R reference**: §17.1
 
-**The issue**
+**Resolution** (Sprint 3)
 
-§17.1 asserts that `/cljseq/**` addresses are control-plane and everything else is
-data-plane (routed to the C++ sidecar for timestamped delivery to synthesis engines).
-But this address-prefix convention is a policy, not a protocol guarantee. Ambiguous
-cases:
+**Primary**: OSC bundle timestamp semantics. An immediate-timestamp bundle
+(`0x00000000 0x00000001`) is control-plane (no scheduling intent); a bundle with a
+future NTP timestamp is data-plane (scheduling intent). This is the semantically
+correct distinction — OSC bundles were designed for exactly this.
 
-1. A TouchOSC layout might send `/cljseq/loops/bass/velocity` to change a parameter
-   (control plane), but another layout might send the same address as a scheduled
-   note trigger (data plane).
-2. An OSC message to `/s_new` from the JVM side (via `cljseq.osc/send-osc!`) is
-   clearly data-plane — but what if a user defines a tree node at `/s_new`?
-3. Incoming OSC from VCV Rack might use addresses that overlap with cljseq tree paths.
+**Fallback**: two ports. Control-plane OSC on port 57121 (cljseq default);
+data-plane OSC on a user-configured port (default 57110, the SuperCollider default).
+Port separation is provided for hardware controllers that cannot send OSC bundles.
 
-**Stakes**
+**Address prefix** (`/cljseq/**` = control-plane) is documented convention for
+human readers, not an enforcement mechanism. Enforcement is by port or bundle
+timestamp; address prefix is unreliable in the face of user-defined tree paths
+outside `/cljseq/`.
 
-Misrouting a data-plane event through the control stack delays it by the JVM handler
-latency (~1ms), losing timing precision. Worse, if the control stack tries to match
-the address against the tree and finds no node, it returns a 404-equivalent error
-that the sender did not expect.
-
-**Exploration path**
-
-1. **Two ports**: control-plane OSC on port 57121 (cljseq default); data-plane OSC
-   on port 57110 (SuperCollider default) or a user-configured output port. Port is
-   the cleanest separation — no address-space ambiguity.
-2. **Address prefix**: `/cljseq/**` is control-plane; everything else passes through
-   to the sidecar for timestamped delivery. Simple, but fragile if a user defines
-   tree nodes at non-`/cljseq` paths.
-3. **Explicit opt-in**: OSC messages with a `#bundle` immediate timestamp
-   (`0x00000000 0x00000001`) are control-plane (no scheduling intent); bundles with
-   a future timestamp are data-plane (scheduling intent). This is actually the
-   semantically correct distinction — OSC bundles were designed for exactly this.
-
-Recommendation: option 3 (bundle timestamp semantics) as the primary distinction,
-with option 1 (two ports) as a user-visible fallback for hardware controllers that
-don't support bundles.
+| Mechanism | Primary? | Fallback? |
+|---|---|---|
+| Bundle immediate timestamp | Yes | — |
+| Two ports (57121 / user-configured) | — | Yes |
+| Address prefix `/cljseq/**` | No | Convention only |
 
 ---
 
@@ -559,17 +497,13 @@ refactoring when the actual dependency graph is visible in code.
 
 ---
 
-## Q16 — Process topology: JVM ↔ N processes, or sidecar-as-router?
+## Q16 — Process topology: JVM ↔ N processes, or sidecar-as-router? — **RESOLVED**
 
 **R&R reference**: §3.5
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Two topologies are plausible:
-
-**Option A (current design)**: JVM maintains separate IPC connections to each process.
-Event routing happens in the JVM: a note event for Surge XT goes directly to
-`cljseq-audio-0`; a note event for the Prophet goes to `cljseq-sidecar`.
+**Option A**: direct JVM-to-process IPC connections.
 
 ```
 JVM ──IPC──► cljseq-sidecar
@@ -577,27 +511,14 @@ JVM ──IPC──► cljseq-sidecar
     ──IPC──► cljseq-audio-1
 ```
 
-**Option B (sidecar-as-router)**: JVM always talks to `cljseq-sidecar`; the sidecar
-routes audio-destined events to `cljseq-audio` processes via an internal IPC.
+Event routing happens in the JVM. A note event for Surge XT goes directly to
+`cljseq-audio-0`; a note event for a Prophet goes to `cljseq-sidecar`. The routing
+key (control tree target prefix → process handle) lives in a Clojure map in
+`cljseq.sidecar`. Process lifecycle management (spawn, monitor, restart) is handled
+by `cljseq.sidecar` for all N processes.
 
-```
-JVM ──IPC──► cljseq-sidecar ──IPC──► cljseq-audio-0
-                            ──IPC──► cljseq-audio-1
-```
-
-**Stakes**
-
-Option A is simpler and avoids adding latency in the sidecar for routed events.
-But the JVM must discover and manage multiple process lifecycles. Option B hides
-complexity from the JVM but adds a hop for audio-destined events and makes the
-sidecar a more complex process.
-
-**Recommendation**
-
-Option A: direct JVM-to-process connections. The JVM's `cljseq.sidecar` namespace
-already manages one process connection; extending it to manage N is straightforward.
-The routing key (target ID prefix: `/cljseq/synths/surge` → `cljseq-audio-0`) lives
-in a Clojure map.
+Option B (sidecar-as-router) was rejected: it adds a routing hop for audio-destined
+events and makes `cljseq-sidecar` a more complex process with no architectural benefit.
 
 ---
 
@@ -1613,124 +1534,75 @@ Phase alignment across Link peers is preserved.
 
 ---
 
-## Q47 — Control tree as persistent atom: undo stack, panic, and tree serial number
+## Q47 — Control tree as persistent atom: undo stack, panic, and tree serial number — **RESOLVED**
 
 **R&R reference**: §16 (control tree), §3.1 (virtual time); raised in Sprint 3 planning
 
-**The issue**
+**Resolution** (Sprint 3)
 
-The control tree implementation choice has architectural consequences beyond thread
-safety. Using a Clojure persistent map held in an atom (rather than a
-`ConcurrentHashMap`) gives us structural sharing, cheap snapshots, and a natural
-undo model — all properties that matter for live performance.
-
-**Proposed model**
+The control tree is a Clojure persistent map held in an atom. All state is co-located
+in a single system-state atom:
 
 ```clojure
-;; The tree root is an atom over a persistent map
-(def ^:private tree-state
-  (atom {:root     {}          ; the parameter/structure tree
-         :serial   0           ; monotonically increasing change counter
-         :checkpoints []}))    ; named snapshots for undo / panic
+(def ^:private system-state
+  (atom {:tree        {}    ; the control tree (persistent map)
+         :serial      0     ; structural change counter
+         :undo-stack  []    ; bounded ring; depth configurable
+         :checkpoints {}})) ; named snapshots, keyed by name
 ```
 
-Every structural change (adding/removing nodes, changing loop structure, loading a
-patch) is a CAS over the atom. Real-time parameter updates (`ctrl/set!`) also go
-through the atom but are not undo targets by default.
+**Atom model**: every structural change is a CAS over the atom. Structural sharing
+makes snapshots cheap — holding 50 prior states costs little more than 50 root
+pointers plus the diff. Real-time parameter writes (`ctrl/set!`) also go through the
+atom but are lightweight and not undo targets.
 
-**Serial number**
+**Undo stack**:
+- Bounded ring buffer; default depth **50 structural changes**
+- Depth is configurable at startup via `:undo-stack-depth` in the system config map;
+  to be revisited as part of a broader configurability sprint
+- Holds entries only for undo-target changes (see table below)
 
-The `:serial` field increments on every atom swap. It is exposed at
-`/cljseq/tree/serial` via OSC and the web interface. External tools (control
-surfaces, peer cljseq instances) can compare serial numbers to detect stale
-snapshots without diffing the full tree. A serial number mismatch signals that the
-tree structure has changed and a re-query is needed.
+| Change type | Undo target? |
+|---|---|
+| Add/remove loop, ensemble, voice | Yes |
+| Load patch | Yes |
+| `live-loop` body redefinition | Yes |
+| Real-time parameter modulation | No (default) |
+| Parameter change annotated `:undoable true` | Yes (opt-in) |
 
-**Undo semantics**
+**`(undo!)` timing**: beat-aware by default — queues the revert for the next bar
+to avoid mid-iteration inconsistency. `(undo! :now)` is available for emergencies.
 
-Not all changes are undo targets. The distinction:
-
-| Change type | Undo target? | Rationale |
-|---|---|---|
-| Add/remove loop, ensemble, voice | Yes | Structural; user intent |
-| Load patch | Yes | Deliberate state transition |
-| `live-loop` body redefinition | Yes | Code change |
-| Real-time parameter modulation | No by default | Continuous; overwhelming to track |
-| Parameter change annotated `:undoable true` | Yes | Opt-in for deliberate changes |
-
-The undo stack holds snapshots of the full tree state (cheap due to structural
-sharing). `(undo!)` pops the stack and swaps the prior state into the atom, taking
-effect on the next loop boundary.
-
-**Panic**
-
-`(panic!)` reverts to the most recent named checkpoint and resumes on the next
-loop boundary without missing a beat. A checkpoint is a named snapshot:
+**Panic**: `(panic!)` reverts to the most recent named checkpoint at the next loop
+boundary without missing a beat. Distinct from undo: jumps to a tagged known-good
+state rather than stepping back one change at a time.
 
 ```clojure
-(checkpoint! :known-good)   ; tag current tree state
+(checkpoint! :known-good)   ; snapshot current tree state
 ;; ... live editing ...
 (panic!)                    ; revert to :known-good at next loop boundary
 ```
 
-Panic is distinct from undo: it jumps to a tagged known-good state rather than
-stepping back through history one change at a time.
+**Checkpoints** are held in `:checkpoints` alongside the tree, not inside it —
+avoiding self-referential snapshots. They are still queryable via OSC at
+`/cljseq/checkpoints/`; the handler reads from the system-state atom directly.
+Checkpoints are not themselves undo targets.
 
-**Design questions**
-
-1. Should the undo stack be bounded (e.g. last 50 structural changes), or
-   unbounded for the duration of a session?
-2. Should `(undo!)` be beat-aware (apply on next bar) or immediate?
-3. Should checkpoints be part of the tree itself (visible via OSC at
-   `/cljseq/checkpoints/`) or metadata held outside the tree?
-4. Is the serial number incremented on parameter-only changes, or only on
-   structural changes? (Recommendation: structural only, to avoid high-frequency
-   churn visible to external tools.)
-
-**Connection to existing questions**
-
-- Q8 (control tree node types) — the atom model affects how node type metadata is
-  stored and whether it participates in structural diffs
-- Q9 (conflict resolution) — concurrent writes to the atom from multiple threads
-  need a well-defined CAS retry policy
-- Q10 (write directionality) — `ctrl/set!` (logical write) always goes through the
-  atom; `ctrl/send!` (physical send) does not necessarily
+**Serial number**: increments on structural changes only — not on real-time
+parameter writes. Exposed at `/cljseq/tree/serial` via OSC and the web interface.
+Allows external tools and peers to detect stale snapshots without diffing the tree.
 
 ---
 
-## Q48 — Patch system: named tree states with beat-aware application
+## Q48 — Patch system: named tree states with beat-aware application — **RESOLVED**
 
 **R&R reference**: §16 (control tree); informed by Elektron sequencer patch model,
 hardware synth patch/settings separation
 
-**The issue**
+**Resolution** (Sprint 3)
 
-A **patch** is a named, saveable tree state (or partial tree state) that can be
-swapped into the atom atomically and applied at a beat boundary. Patches are the
-cljseq equivalent of a hardware synth's program/patch: a jumping-off point for live
-exploration, a way to organize a live set, and a mechanism for deliberate state
-transitions during performance.
-
-**Key properties**
-
-1. **Partial or full**: a patch may replace the entire tree or only a named subtree
-   (e.g., `/cljseq/ensembles/main/`). This mirrors hardware synths where "settings"
-   (global config) are separate from "patch" (voice/sequence state).
-
-2. **Beat-aware application**: patch changes apply at a configurable boundary —
-   next `sleep!`, next bar, next phrase, or immediately. Default: next bar, consistent
-   with Elektron's behavior.
-
-3. **Sequencer state**: a patch may optionally include sequencer state (loop positions,
-   step indices) in addition to parameter values, as Elektron devices do. The NDLR
-   does not store sequencer state in its presets; both models are supported.
-
-4. **EDN serialization**: patches are EDN maps (consistent with the data format
-   policy). They are loadable from `~/.cljseq/patches/` or from project resources.
-
-5. **Live set**: an ordered sequence of patches with beat-aware transitions is a live
-   set. `(next-patch!)` and `(prev-patch!)` navigate the set; cue points can trigger
-   transitions automatically.
+A **patch** is a named EDN map describing a partial or full tree state, applied
+atomically at a beat boundary.
 
 ```clojure
 (defpatch :verse
@@ -1742,23 +1614,48 @@ transitions during performance.
 (patch! :verse :on :now)             ; immediate
 ```
 
-**Design questions**
+**Key properties**
 
-1. Should patch application be a structural change (undo target) or a separate
-   "patch history" that is tracked independently?
-2. Should patches be able to include `live-loop` body code (as Clojure source), or
-   only parameter values and tree structure? (Code-carrying patches are powerful but
-   introduce security and serialization complexity.)
-3. How does patch application interact with `*in-loop-context*`? A loop mid-body
-   when a patch fires should see the new parameter values on its next iteration, not
-   mid-body.
+- **Partial or full**: patches describe only the nodes they change. Unmentioned nodes
+  retain their current values. Mirrors hardware synth settings/patch separation.
+- **Beat-aware**: default boundary is next bar (consistent with Elektron). `:on`
+  accepts `:next-bar`, `:next-phrase`, `:next-sleep`, `:now`.
+- **Sequencer state optional**: patches may include loop step positions as Elektron
+  devices do, or omit them as the NDLR does. Both are valid.
+- **EDN only**: patches are plain EDN maps. No `live-loop` body code in patches —
+  serializing Clojure functions is fragile, namespace-sensitive, and a security
+  surface. Loop bodies are changed via the REPL; patches change parameters.
+- **Undo target**: patch application goes on the undo stack. `(undo!)` after
+  `(patch! :verse)` restores the pre-patch state. The undo stack *is* the patch
+  history — no separate tracking needed.
 
-**Connection to existing questions**
+**Physical propagation**: patch application is not limited to the logical tree.
+For every node changed by the patch that has a physical binding (MIDI CC route,
+OSC send target, CLAP parameter), the patch engine fires `ctrl/send!` after the
+CAS completes, pushing the new value out to the bound hardware or software synth.
+This means a patch change automatically synchronizes connected instruments — a
+hardware synth's filter cutoff, a software synth's oscillator detune, a DAW
+channel fader — without the user issuing separate send commands. The `ctrl/set!`
+(logical) / `ctrl/send!` (physical) separation from Q10 means patch application
+always updates both layers in a single operation.
 
-- Q47 — patches are tree state snapshots; patch application is a CAS on the atom
-  with an undo entry
-- Q2 — patch application timing ("next bar") uses the same full-iteration boundary
-  semantics as `live-loop` redefinition
+**`*in-loop-context*` interaction**: patch application fires at a loop boundary,
+so loops mid-body at the moment of the CAS see new parameter values on their next
+iteration. Covered by the existing full-iteration boundary semantics (Q2); no
+special handling required.
+
+**Live set**: an ordered sequence of patches with beat-aware navigation, stored in
+the system-state atom:
+
+```clojure
+(deflive-set [:intro :verse :chorus :breakdown :outro])
+(next-patch!)                          ; advance to next patch at next bar
+(prev-patch!)                          ; step back
+(goto-patch! :chorus :on :next-phrase) ; jump to named patch
+```
+
+`:live-set` (the vector) and `:live-set-pos` (the current index) are held in the
+system-state atom alongside the tree, making them queryable via OSC and undoable.
 
 ---
 

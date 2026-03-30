@@ -5272,3 +5272,30 @@ operations on sequences are pure functions from `[step-map]` to `[step-map]`.
 ### 24.11 Design Questions Raised
 
 See `doc/open-design-questions.md` Q39–Q43.
+
+---
+
+## 25. Configuration Registry
+
+All tuneable system parameters with their defaults. Each entry records the default
+value, valid range or type, the subsystem that owns it, and the design question or
+sprint where the value was chosen. Parameters are configurable at startup via the
+system config map unless noted otherwise.
+
+A future configurability sprint will establish the EDN config file format, runtime
+override mechanisms (control tree, environment variables, JVM properties), and
+validation rules. Until then, these values are compile-time defaults.
+
+| Parameter | Default | Type / Range | Subsystem | Source |
+|---|---|---|---|---|
+| `sched-ahead-time` (`:midi-hardware`) | 100ms | `Long` ms, > 0 | Scheduler / IPC | Q5, §3.1 |
+| `sched-ahead-time` (`:sc-osc`) | 30ms | `Long` ms, > 0 | Scheduler / IPC | Q5, §3.1 |
+| `sched-ahead-time` (`:vcv-rack`) | 50ms | `Long` ms, > 0 | Scheduler / IPC | Q5, §3.1 |
+| `sched-ahead-time` (`:daw-midi`) | 50ms | `Long` ms, > 0 | Scheduler / IPC | Q5, §3.1 |
+| `sched-ahead-time` (`:link`) | 0ms | `Long` ms, ≥ 0 | Scheduler / Link | Q5, §15 |
+| `sync-window` | `sched-ahead-time` + 1 beat | Derived rational | `sync!` / EventHistory | Q3 |
+| `lfo-update-rate` | 100 Hz (10ms) | `Long` Hz, 1–1000 | `param-loop` continuous | Q30 |
+| `undo-stack-depth` | 50 | `Long`, 1–∞ | Control tree / undo | Q47 |
+| `link-quantum` | 4 beats | `Long` beats, > 0 | Ableton Link | §15.4 |
+| `osc-control-port` | 57121 | `Long`, 1024–65535 | OSC control-plane server | Q12, §17.1 |
+| `osc-data-port` | 57110 | `Long`, 1024–65535 | OSC data-plane / sidecar passthrough | Q12, §17.1 |
