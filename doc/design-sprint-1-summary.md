@@ -389,6 +389,40 @@ Key sequencing concepts to analyze:
   that allows the mutation function to operate N steps ahead of the current play
   position
 
+### Arturia KeyStep Pro and BeatStep Pro (future sprint)
+
+The KeyStep Pro and BeatStep Pro are popular polyphonic step/CV sequencers made by
+Arturia; both are owned by the project author. They are relevant exemplars because
+they bridge the MIDI, CV/gate, and Eurorack worlds in a compact hardware form and
+have a well-documented feature set.
+
+**KeyStep Pro** — 4-track polyphonic step sequencer + arpeggiator + chord mode.
+Manuals: [keystep-pro_Manual_1_1_0_EN.pdf](https://downloads.arturia.net/products/keystep-pro/manual/keystep-pro_Manual_1_1_0_EN.pdf)
+
+**BeatStep Pro** — 2 melodic sequencers + 1 drum sequencer, MIDI + CV/gate output.
+Manual: [BeatStepPro_Manual_1_0_0_EN.pdf](https://downloads.arturia.com/products/beatstep-pro/manual/BeatStepPro_Manual_1_0_0_EN.pdf)
+
+Topics to explore in a future sprint:
+
+- **Track types**: the BeatStep Pro distinguishes melodic vs. drum tracks at the
+  hardware level — compare with Q45's semantic parts vs. generic tracks question
+- **Step probability and randomization**: both devices have per-step probability and
+  randomization; relationship to `prob-gate` and `stochastic-sequence` (§23)
+- **Polyrhythm and independent track lengths**: each track can have an independent
+  step count and direction (forward, reverse, ping-pong, random) — compare with
+  `clock-div` and polyrhythmic phase coherence (Q32)
+- **Chord mode and scale lock** on the KeyStep Pro: harmony-relative step input maps
+  to cljseq's interval/scale model (§4, §10)
+- **CV/gate output model**: the sequencers output raw voltages, not MIDI note numbers
+  — relationship to the `ITemporalValue` / Q44 abstraction and Eurorack integration
+- **Swing and timing**: both devices have per-track swing; maps to Q46's timing
+  modulation design question
+- **Pattern chaining and song mode**: how linear arrangement is built from patterns;
+  relationship to the Stream/Score model (§9)
+- **What these devices do that cljseq should absorb**: first-hand user familiarity
+  makes them particularly valuable as a usability reference; test that cljseq can
+  replicate common KeyStep Pro / BeatStep Pro workflows from the REPL
+
 ### Hang Drum / Handpan Tuning Systems (future sprint)
 
 The Moog Labyrinth's "Hang Drum Tuning" quantization mode prompted this. Hang

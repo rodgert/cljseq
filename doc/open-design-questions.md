@@ -75,8 +75,15 @@ window `[current-virtual-time - sync-window, ∞)`:
 `sched-ahead-time` + one beat at the current tempo). It is not overridable
 per call — a fixed window keeps the behaviour predictable and prevents
 accidental long-range time travel from a caller that sets too large a window.
-If a loop is known to arrive consistently late, the right fix is to adjust
-the loop's scheduling, not to widen the sync window.
+
+**Why per-call override is intentionally absent**: inheriting virtual time from
+2+ beats ago means all subsequent `sleep!` and `play!` calls generate events
+scheduled in the past relative to the sched-ahead horizon. Those events are
+silently dropped by the scheduler — the loop executes but produces no sound,
+with no diagnostic. This failure mode is harder to debug than accepting a
+one-period gap. If a loop is known to arrive consistently late, the right fix
+is to restructure the loop's scheduling, not to widen the sync window at the
+call site.
 
 This gives `sync!` "at-most-one-beat-late" semantics: threads that arrive
 within one beat of a cue remain phase-aligned; threads that are genuinely
@@ -84,46 +91,36 @@ more than one beat late wait for the next cue and accept a one-period gap.
 
 ---
 
-## Q4 — `get!`/`set!` naming conflict with `clojure.core`
+## Q4 — `get!`/`set!` naming conflict with `clojure.core` — **RESOLVED**
 
 **R&R reference**: §3.2
 
-**The issue**
+**Resolution** (Sprint 2)
 
-`clojure.core/set!` is a special form for mutating Java fields and thread-local
-bindings. Using `set!` as a user-facing name in the cljseq DSL creates a namespace
-collision that cannot be resolved by `:refer-clojure :exclude` alone — `set!` is a
-special form, not a var, and special forms cannot be shadowed.
-
-Concretely, this code inside a cljseq namespace would be ambiguous:
+The musical time-indexed state API is the control tree itself. There is no separate
+primitive; `ctrl/set!` and `ctrl/get` (the control tree's own setter/getter) are the
+canonical way to write and read time-indexed musical state:
 
 ```clojure
-(set! *virtual-time* new-vt)   ; clojure.core/set! for dynamic var
-(set! :chord :C-major)         ; cljseq musical state setter — same name, different semantics
+(ctrl/set! [:chord] :C-major)   ; set state on the control tree at virtual now
+(ctrl/get  [:chord])            ; read from the control tree
 ```
 
-The second form is not a valid `clojure.core/set!` call (wrong argument types) and
-would compile to an error if the compiler sees the special form first.
+This eliminates the naming conflict entirely — `clojure.core/set!` (a special form
+taking a symbol as its first argument) is unambiguous from `ctrl/set!` (a function
+taking a path vector). The `clojure.core/set!` special form is used internally by
+`sleep!` to advance `*virtual-time*` and remains unambiguous in that context.
 
-**Stakes**
+If a short ergonomic alias proves useful at the REPL, `at!`/`at` or `tset!`/`tget`
+can be introduced later as thin wrappers over `ctrl/set!`/`ctrl/get`. Any such alias
+builds on the control tree's capabilities rather than introducing a parallel
+state-management mechanism.
 
-This is a compile-time breakage, not a runtime ambiguity. It must be resolved before
-any implementation.
+**Original issue**
 
-**Exploration path**
-
-Options:
-1. **Rename the musical state API**: `(tset! :key val)` / `(tget :key)` (t = temporal)
-2. **Namespace-qualify**: `(time/set! :key val)` / `(time/get :key)` — but `get` is
-   also a core function (var, not special form, so it *can* be shadowed)
-3. **Different naming scheme**: `(at! :key val)` / `(at :key)` — temporal state at now
-4. **Drop the feature or redesign**: is "time-indexed shared state" distinct enough
-   from atoms + cue/sync to justify its own primitive? Evaluate against concrete use
-   cases.
-
-Recommendation: option 3 (`at!`/`at`) or option 1 (`tset!`/`tget`). Evaluate against
-Sonic Pi's `set`/`get` user experience — they use these names in Ruby where the
-conflict does not exist.
+`clojure.core/set!` is a special form that cannot be shadowed, creating a compile-time
+ambiguity if `set!` were used as a cljseq musical state setter. Resolved by routing
+all musical state through the control tree rather than inventing a new top-level name.
 
 ---
 
@@ -374,36 +371,40 @@ event." These are distinct concerns and need to be separable.
 
 ---
 
-## Q11 — `deflive-loop` vs. existing `live-loop`: migration path
+## Q11 — `deflive-loop` vs. existing `live-loop`: migration path — **RESOLVED**
 
 **R&R reference**: §16.4
 
-**The issue**
+**Resolution** (Sprint 2)
 
-§16.4 introduces `deflive-loop` as the tree-aware version of `live-loop`. But §5.3
-and the implementation plan use plain `live-loop`. These two forms have different
-registration models:
+`live-loop` is syntactic sugar for `deflive-loop` with an auto-generated path and an
+empty parameter map:
 
-- `live-loop :bass` — registers a named loop in the loop registry atom, no tree node
-- `deflive-loop "/cljseq/loops/bass"` — registers loop AND creates tree subtree
+```clojure
+;; These two forms are equivalent:
+(live-loop :bass
+  (play! :C2 :quarter)
+  (sleep! :quarter))
 
-If `deflive-loop` is the primary form, `live-loop` becomes either:
-a. An alias for `deflive-loop` with a generated path (`/cljseq/loops/<name>`)
-b. A lower-level primitive that `deflive-loop` builds on
-c. A simpler form for quick sketching that doesn't expose tree control
+(deflive-loop "/cljseq/loops/bass" {}
+  (play! :C2 :quarter)
+  (sleep! :quarter))
+```
 
-**Stakes**
+The loop is always registered in the control tree under `/cljseq/loops/<name>`.
+Plain `live-loop` loops have no declared controllable parameters; to expose parameters
+for external control, use `deflive-loop` with an explicit parameter map.
 
-Two forms for the same concept creates confusion for users and duplication for
-implementers. But `live-loop` is simpler to type at a REPL for quick sketches.
+This gives one mental model with two ergonomic levels: `live-loop` for quick REPL
+sketches, `deflive-loop` for production loops that expose parameters to the control
+tree. There is no separate registration path — both forms share the same underlying
+loop registry and tree node lifecycle.
 
-**Exploration path**
+**Original issue**
 
-Option (a) is recommended: `(live-loop :bass ...)` is syntactic sugar for
-`(deflive-loop "/cljseq/loops/bass" {} ...)` with an empty parameter map. The loop
-is always in the tree; it just has no declared controllable parameters unless
-`deflive-loop` is used. This gives the best of both worlds: quick loops are one line,
-production loops expose their parameters.
+§16.4 introduced `deflive-loop` as tree-aware while §5.3 used plain `live-loop`,
+creating two registration models. Resolved by making `live-loop` a macro alias that
+always registers in the tree.
 
 ---
 
@@ -523,41 +524,38 @@ parameter exploration during a performance.
 
 ---
 
-## Q15 — `libcljseq-rt` boundary: what belongs in the shared library?
+## Q15 — `libcljseq-rt` boundary: what belongs in the shared library? — **RESOLVED**
 
 **R&R reference**: §3.5, §19
 
-**The issue**
+**Resolution** (Sprint 2)
 
-The shared library `libcljseq-rt` must contain everything both `cljseq-sidecar` and
-`cljseq-audio` need, but not so much that it becomes a second monolith. The wrong
-boundary creates tight coupling between the two processes despite their supposed
-independence.
+The dependency graph is `cljseq-sidecar → libcljseq-rt ← cljseq-audio`. The boundary
+is: shared = protocol + interfaces + infrastructure; binary-local = implementations +
+backends.
 
-Candidates for inclusion:
+| Component | Location | Rationale |
+|---|---|---|
+| IPC framing/transport | `libcljseq-rt` | Both processes talk to the JVM |
+| OSC codec | `libcljseq-rt` | Both send/receive OSC |
+| `SynthTarget` abstract interface | `libcljseq-rt` | Interface only; impls in binaries |
+| `LinkEngine` | `libcljseq-rt` | Both processes need beat-clock access |
+| Asio I/O context helpers | `libcljseq-rt` | Shared async infrastructure |
+| Lock-free queue primitives | `libcljseq-rt` | Shared IPC plumbing |
+| Common logging | `libcljseq-rt` | Both processes emit logs |
+| `MidiTarget`, `ClapTarget` impls | Binary-local | Single-process concerns |
+| RtMidi, RtAudio | Binary-local | MIDI in sidecar; audio in cljseq-audio only |
+| CLAP plugin loader | Binary-local | `cljseq-audio` only |
+| libpd | Binary-local | `cljseq-audio` only |
 
-- **Definitely shared**: IPC framing/transport, `SynthTarget` abstract interface,
-  `LinkEngine`, Asio I/O context helpers, OSC codec, lock-free queue primitives,
-  common logging
+**Key invariant**: nothing in `libcljseq-rt` pulls in RtMidi, RtAudio, CLAP, or libpd
+headers. The library compiles without any synthesis or I/O backend. Enforce at Phase 0
+by auditing the CMake target's transitive dependencies.
 
-- **Questionable**: RtMidi and RtAudio live in different processes; they should
-  not be in the shared library unless both processes need them. The shared library
-  should have interfaces (abstract base classes) only; the implementations
-  (`MidiTarget`, `ClapTarget`) are in the respective binaries.
-
-- **Definitely not shared**: CLAP plugin loading, libpd, RtMidi, RtAudio — these
-  are single-process concerns
-
-**Exploration path**
-
-1. Draw the dependency graph: `cljseq-sidecar → libcljseq-rt ← cljseq-audio`.
-   Nothing in `libcljseq-rt` should pull in RtMidi, RtAudio, CLAP, or libpd headers.
-2. The `SynthTarget` interface (event delivery methods, `params()`) belongs in the
-   library. The concrete implementations do not.
-3. The IPC protocol table (message types and framing) belongs in the library so
-   both processes speak the same protocol to the JVM.
-4. Review during Phase 0 of implementation — the library boundary is clearest
-   when you see what code both binaries actually need.
+**Future layering note**: as the system grows, further library extraction may be
+warranted — for example, separating the OSC codec, IPC framing, or `LinkEngine` into
+their own targets. This is deferred to a later design sprint or post-Phase-0
+refactoring when the actual dependency graph is visible in code.
 
 ---
 
@@ -699,41 +697,46 @@ adds IPC beat-forwarding to `libcljseq-rt`.
 
 ---
 
-## Q20 — Music21 sidecar: synchronous vs. async from Clojure?
+## Q20 — Music21 sidecar: synchronous vs. async from Clojure? — **RESOLVED**
 
 **R&R reference**: §20.3, §20.6
 
-**The issue**
+**Resolution** (Sprint 2)
 
-Music21 operations span a wide range of latencies:
+`cljseq.m21` returns Clojure promises. Two safe usage patterns exist without
+any API change:
 
-| Operation | Typical latency |
-|---|---|
-| `analyze.key` (16 notes) | 5–20ms |
-| `corpus.parse` ("bach/bwv66.6") | 100–500ms |
-| `tone-row.matrix` | 1–5ms |
-| `analyze.voice-leading` (4 parts, 16 chords) | 50–150ms |
+1. **Pre-fetch before the loop** — call `m21/` outside, deref, close over the value:
+   ```clojure
+   (let [score @(m21/parse-corpus "bach/bwv66.6")]
+     (live-loop :bach
+       (play! (next-note score))
+       (sleep! :quarter)))
+   ```
 
-The `cljseq.m21` namespace returns Clojure `promise`s, which the caller must `deref`.
-Inside a `live-loop`, blocking on a promise risks breaking virtual-time semantics:
-if a `@(m21/parse-corpus ...)` call takes 400ms, the loop misses its `sync!` window.
+2. **Fire-and-forget via `m21/eventually!`** — fires the RPC, swaps an atom when
+   resolved; the loop observes the atom:
+   ```clojure
+   (def current-key (atom :C-major))
+   (m21/eventually! current-key m21/analyze-key notes)
+   (live-loop :adaptive
+     (play! :C :key @current-key)
+     (sleep! :quarter))
+   ```
 
-Two patterns are safe:
-1. **Pre-fetch before the loop**: call `m21/` outside any loop, deref the result, close
-   over the value in the loop body.
-2. **Fire-and-forget with a swap**: use a `(future ...)` that atomically swaps an atom
-   when the result arrives; the loop reads the atom.
+`m21/eventually!` is part of the initial `cljseq.m21` API.
 
-Neither pattern requires changes to the `cljseq.m21` API, but the documentation must
-be explicit: **never deref an `m21/` promise inside a running `live-loop`**.
+**Documentation constraint**: never deref an `m21/` promise inside a running
+`live-loop`. Blocking on a slow call (up to 500ms for corpus parsing) will cause the
+loop to miss its `sync!` window, breaking virtual-time coherence.
 
-**Exploration path**
-
-1. Document the constraint clearly: `m21/` calls return promises; deref outside loops.
-2. Provide helper `(m21/eventually! atom method params)` — fires the RPC, swaps the
-   atom when resolved; the loop observes the atom.
-3. Consider a dedicated `(m21/cache ...)` macro that wraps a memoized pre-fetch.
-4. No protocol change needed — this is a usage convention.
+**Enforcement** (deferred): a `^:dynamic *in-loop-context*` var is reserved in
+`cljseq.loop`. It will be bound to `true` inside every `live-loop` body. The `m21/`
+deref path — and any other subsystem where blocking inside a loop is dangerous — can
+check this var and throw an informative error. The check is additive and non-breaking
+when wired in; deferral keeps the initial implementation simple while the constraint
+is validated in practice. Other subsystems (e.g., blocking I/O, slow control-tree
+queries) may use the same hint.
 
 ---
 
@@ -858,35 +861,32 @@ documentation note that the corpus is provided by Music21's installation, not cl
 
 ---
 
-## Q25 — Microtonal pitch representation for maqamat and other non-12-TET systems
+## Q25 — Microtonal pitch representation for maqamat and other non-12-TET systems — **RESOLVED**
 
 **R&R reference**: §21.2, §7
 
-**The issue**
+**Resolution** (Sprint 2)
 
-Arabic maqamat use quarter-tone intervals (50-cent steps). A pitch like "E♭+50¢" (the
-mujannab/neutral second in Bayati on D) has no standard MIDI representation. Three
-encoding strategies:
+Three strategies are used, selected by target type:
 
-1. **Cents offset on MIDI note**: `{:pitch/midi 63 :pitch/cents 50}` — maps to MIDI
-   63 (E♭4) + 50 cents pitch bend. Works with §7's pitch-bend retuning; maximum of
-   one microtonal note per MIDI channel.
-2. **MPE (MIDI Polyphonic Expression)**: each note on its own channel with per-channel
-   pitch bend. Supports polyphonic microtonality at the cost of channel overhead.
-   Standard MPE allocates 15 expressive channels (1 zone) or 30 (two zones).
-3. **CLAP `CLAP_EXT_TUNING`**: floating-point Hz-per-key table. The cleanest solution
-   for CLAP targets (§19); no pitch-bend tricks needed, full polyphony.
+| Strategy | How it works | Polyphony | Targets |
+|---|---|---|---|
+| **Cents offset** | `{:pitch/midi 63 :pitch/cents 50}` — MIDI note + pitch bend | 1 microtonal note per channel | All MIDI targets |
+| **MPE** | Each note on its own channel with per-channel pitch bend | 15–30 simultaneous microtonal notes | MPE-capable synths |
+| **CLAP tuning table** | Floating-point Hz-per-key table via `CLAP_EXT_TUNING` | Full polyphony, no pitch-bend tricks | CLAP plugins only |
 
-**Exploration path**
+**Target routing**:
+- MIDI targets: cents-offset for monophonic/low-polyphony; MPE for polyphonic
+  microtonality. Add `:pitch/mpe-channel` to the pitch type.
+- CLAP targets: build a `CLAP_EXT_TUNING` table from the `.scl` file; `cljseq-audio`
+  sends the tuning table to the plugin on load (IPC type `0x7C`, added to §3.5's
+  message table).
 
-1. For MIDI targets: use cents-offset model (§7) for monophonic or low-polyphony
-   cases; use MPE for polyphonic microtonality. Add `:pitch/mpe-channel` to the
-   pitch type.
-2. For CLAP targets: build a `CLAP_EXT_TUNING` table from the Scala `.scl` file.
-   `cljseq-audio` sends the tuning table to the plugin on load (IPC type `0x7C`,
-   added to §3.5's message table).
-3. The `Pitch` type in `cljseq.pitch` needs a `:pitch/cents` field in its canonical
-   representation. Wire format (§20.5) already includes `cents_offset`.
+**`Pitch` type**: `:pitch/cents` is an **optional field** in `cljseq.pitch`'s
+canonical representation. Absent means 0 cents offset. This keeps the common 12-TET
+case clean at the REPL (`{:pitch/midi 60}` rather than `{:pitch/midi 60 :pitch/cents 0}`);
+microtonal code only encounters `:pitch/cents` when it is actually needed. The wire
+format (§20.5) already includes `cents_offset`.
 
 ---
 
@@ -972,51 +972,35 @@ stroke boundary to avoid rhythmic tears.
 
 ---
 
-## Q29 — `param-loop` and `live-loop`: unification via rhythmic voice abstraction?
+## Q29 — `param-loop` and `live-loop`: unification via rhythmic voice abstraction? — **RESOLVED**
 
 **R&R reference**: §22.7
 
-**The issue**
+**Resolution** (Sprint 2)
 
-`live-loop` and the proposed `param-loop` are structurally almost identical:
+`param-loop` is split by mode:
 
-| | `live-loop` | `param-loop` |
+| Mode | Scheduling | Expansion |
 |---|---|---|
-| Period | `:period beats` | `:dur beats` |
-| Rhythm | implicit (body calls `play!` and `sleep!`) | `:rhythm spec` |
-| Value | note-playing code | `:values sequence-or-fn` |
-| Target | `play!` implicit target | `:target path-or-cc` |
+| Discrete rhythm spec | Virtual-time `sleep!` | Expands to `live-loop` |
+| `:rhythm :continuous` (LFO) | Wall-clock `LockSupport/parkNanos` at 1ms | Separate high-resolution thread |
 
-The "rhythmic voice" abstraction in §22.7 suggests they could share the same
-implementation with different sugar layers. Key question: is `param-loop` a macro
-that expands into a `live-loop`, or is it a separate scheduling primitive?
+**Discrete mode**: `param-loop` with a rhythm spec expands to a `live-loop` body that
+iterates over the rhythm and calls `ctrl/set!` on each hit. Same virtual-time semantics,
+same redefinition boundary, same tree registration.
 
-**Two options:**
+**Continuous mode**: runs on a dedicated wall-clock thread outside the virtual-time
+model. This is necessary because LFO modulation requires sub-millisecond resolution
+that virtual-time `sleep!` cannot provide.
 
-**Option A** (expansion): `param-loop` expands to a `live-loop` body that iterates
-over a rhythm and calls `ctrl/set!` on each hit:
+**Redefinition in continuous mode**: swap at the next tick (~1ms), not at a period
+boundary. "Period boundary" is ill-defined for a continuous waveform; phase-continuous
+swap at next tick is consistent with the high-resolution nature of the loop and
+preserves waveform continuity.
 
-```clojure
-(defmacro param-loop [name & {:keys [target rhythm values dur interp phase]}]
-  `(live-loop ~name
-     ~@(expand-rhythm-loop rhythm values dur target interp)))
-```
-
-This is simpler to implement but constrains `:rhythm :continuous` (LFO mode), which
-needs a tight-loop scheduler below the `live-loop` abstraction.
-
-**Option B** (separate primitive): `param-loop` with `:rhythm :continuous` runs on a
-separate high-resolution timer thread that fires at 1ms intervals (not virtual-time
-`sleep!` which has millisecond-range resolution). This is the correct behavior for
-LFO modulation.
-
-**Recommendation**
-
-Option B: `:rhythm :continuous` needs a separate high-resolution loop running at 1ms
-ticks. Step-mode `param-loop` (discrete rhythm specs) can expand to `live-loop`.
-The LFO scheduler is a new Clojure thread using `LockSupport/parkNanos` — the same
-mechanism as the virtual-time model, but driven by wall-clock intervals rather than
-virtual beats.
+**Control tree**: both modes register under `/cljseq/loops/<name>` identically.
+The scheduling implementation differs but the tree node interface — start, stop,
+inspect, parameter control — is uniform.
 
 ---
 
@@ -1279,32 +1263,34 @@ ensure the context persists when the `live-loop` body is re-evaluated.
 
 ---
 
-## Q35 — Jitter and virtual-time coherence: should jitter perturb virtual time or wall-clock time?
+## Q35 — Jitter and virtual-time coherence: should jitter perturb virtual time or wall-clock time? — **RESOLVED**
 
 **R&R reference**: §23.3, §3.1
 
-**The issue**
+**Resolution** (Sprint 2)
 
-Virtual time is the beat counter that drives `cue!`/`sync!` coordination and the
-IPC timestamp on scheduled events. Jitter perturbs *when* an event fires. Two models:
+**Model A**: virtual time stays clean; jitter is applied only to the IPC event
+`time_ns` at the sidecar delivery boundary.
 
-**Model A — Virtual time stays clean, wall-clock is perturbed**:
-- `sleep!` advances `*virtual-time*` by the exact intended duration
-- The IPC event timestamp = `(nominal-wall-clock-time + jitter-offset-ns)`
-- Effect: `sync!` coordination sees the clean beat; only the *listener* hears jitter
-- Advantage: loops stay in phase; `sync!` still works correctly
+```
+*virtual-time*  ──────●──────────●──────────●──  (clean beat spine)
+wall-clock IPC  ──────●────●──────────●───●────  (jittered delivery times)
+```
 
-**Model B — Virtual time is perturbed**:
-- `sleep!` advances `*virtual-time*` by `(nominal + jitter)`
-- Effect: jitter accumulates in virtual time, desynchronizing `sync!` from other loops
-- Disadvantage: phase coherence is lost; jitter "infects" coordination
+- `sleep!` advances `*virtual-time*` by the exact intended duration — no perturbation
+- IPC event timestamp = `nominal_time_ns + jitter_offset_ns`, drawn per-event
+- `sync!` coordination sees the clean beat; phase coherence across loops is preserved
+- The listener hears humanized timing; coordination is unaffected
 
-**Recommendation**
+Model B (perturbing virtual time) was rejected: jitter would accumulate in the beat
+counter, desynchronizing `sync!` from other loops and making humanization a
+correctness hazard.
 
-Model A: jitter is applied only to the IPC event `time_ns`, not to `*virtual-time*`.
-Virtual time remains the clean temporal spine. The sidecar fires the event at
-`nominal_time_ns + jitter_offset_ns` where jitter_offset is drawn per-event.
-This preserves all coordination semantics while delivering audible timing humanization.
+**Connection to timing modulation** (see Q46): swing, groove, and humanization are
+time-dimension modulators — they produce a `time_ns` offset rather than a pitch or
+velocity value. This is consistent with Model A: all timing perturbation operates
+at the IPC delivery layer, never on `*virtual-time*`. See Q46 for the full design
+question on how swing/humanize fit within the `ITemporalValue` modulation framework.
 
 ---
 
@@ -1411,220 +1397,219 @@ No custom nREPL ops are required for core functionality.
 
 ---
 
-## Q44 — Unified temporal-value abstraction: do clocks and modulators share a protocol?
+## Q44 — Unified temporal-value abstraction: do clocks and modulators share a protocol? — **RESOLVED**
 
 **R&R reference**: §3 (virtual time), §16 (control tree / LFO binding), §22 (param-loop),
 §23 (Marbles stochastic); informed by Sprint 1 design research on Maths/PoliMATHS/Blinds
 (modulator vocabulary) and Pam's Pro Workout / Tempi / Wogglebug (clock vocabulary)
 
-**Stakes**: This is among the highest-leverage architectural decisions in Phase 1. The
-virtual time model (§3) already defines beat-counted time and `sleep!` as a temporal
-barrier. LFOs, envelopes, clocks, stepped random, smooth random, and probability gates
-all produce values that vary over virtual time. If they share a unified abstraction,
-composition is free and the "modulator of modulators" and "clock driving a modulator"
-patterns require no adapter code. If they are separate types, every boundary requires an
-explicit coercion — API friction accumulates across the whole system.
+**Resolution** (Sprint 2)
 
-**The core observation**
+**Option A — single `ITemporalValue` protocol**. All time-varying signals implement
+one protocol; role and routing are determined at the binding site, not in the type.
 
-Everything that varies over virtual time in cljseq can be described as a function from
-beat position to value:
-
-```
-ITemporalValue: Beat → Value
+```clojure
+(defprotocol ITemporalValue
+  (sample    [v beat])   ; value at this beat position
+  (next-edge [v beat]))  ; beat of next 0→1 transition, or nil if continuous
 ```
 
-The apparent differences are roles, not types:
+Every time-varying entity in cljseq implements this protocol:
 
-| Role | Output domain | How consumed |
+| Signal | Output | Routing |
 |---|---|---|
-| Clock / gate | `{0, 1}` | Scheduler detects 0→1 edges to fire events |
-| CV / modulator | `ℝ` | Sampled at parameter-update intervals |
-| LFO | `ℝ` (periodic) | Sampled; period derived from rate × virtual time |
-| Envelope | `ℝ` (one-shot) | Sampled from a trigger-relative beat offset |
-| Stepped random | `ℝ` (piecewise constant) | Value changes at clock-tick boundaries |
-| Smooth random | `ℝ` (continuous) | Interpolated S&H between clock ticks |
-| Probability gate | `{0, 1}` (stochastic) | Scheduler fires events at P% of clock edges |
+| Clock / gate | `{0, 1}` | Scheduler watches for 0→1 edges |
+| LFO / envelope / CV | `ℝ` | Sampled at `watch!` resolution; bound to parameter |
+| Stepped / smooth random | `ℝ` | Sampled; value changes at clock edges |
+| Probability gate | `{0, 1}` stochastic | Edge fires at probability P |
+| Swing / humanize / quantize | `Long` (ns offset) | Routed to `time_ns` at IPC delivery boundary (see Q46) |
 
-All of these are first-class in the hardware vocabularies surveyed in Sprint 1:
-Pam's Cross Operations require clock outputs to compose arithmetically; the Wogglebug's
-Woggle CV is a slewed S&H driven by a clock; Maths channels freely switch between
-envelope, LFO, and slew-limiter roles depending only on patching.
+**Conceptual basis**: this is identical to VCV Rack's signal model (untyped `float`
+cables; role is a matter of patching) and SuperCollider's UGen model (`ar`/`kr` is
+a rate annotation, not a type). Two established, well-understood systems converge on
+the same answer: production and interpretation of a signal are orthogonal.
 
-**Candidate architectures**
+**Option B** (separate `IClock`/`IModulator` protocols) was rejected: explicit
+coercion at every boundary accumulates API friction, and with Q46 timing modulators
+in scope it would require a third protocol with no architectural benefit.
 
-*Option A — Single `ITemporalValue` protocol*
-- `(sample v beat)` → value at that beat
-- `(next-edge v beat)` → beat of the next 0→1 transition (nil if continuous)
-- Clocks, modulators, envelopes, random generators all implement `ITemporalValue`
-- The scheduler has one mechanism: `(watch! v callback resolution)` — calls `callback`
-  with sampled values at `resolution` beat intervals, and/or when edges are detected
-- Composition is unconditional: `(clock-div 4 (lfo :rate 0.1))` just works
+**Option C** (thin role wrappers over `ITemporalValue`) is deferred by YAGNI. If
+profiling demonstrates that scheduling performance requires explicit edge-detection
+or interpolation policy annotations, Option C wrappers can be introduced without
+breaking any existing code. VCV Rack's production codebase demonstrates that untyped
+signals scale to thousands of concurrent signal paths without performance annotations.
 
-*Option B — Separate `IClock` / `IModulator` protocols with coercion*
-- `IClock` produces events (edge-based scheduling infrastructure)
-- `IModulator` produces values (sample-based polling infrastructure)
-- `(clock->mod c)` wraps a clock as a 0/1 modulator
-- `(mod->clock m :threshold 0.5)` wraps a modulator as a zero-crossing clock
-- Cleaner conceptual separation; some additional adapter code at boundaries
+**Composition invariant**: the following must work without coercion:
+```clojure
+(clock-div 4 (lfo :rate 0.1))                       ; modulator as clock source
+(ctrl/bind! [:filter/cutoff] (lfo :rate 0.25))      ; modulator to parameter
+(timing/bind! (swing :amount 0.55))                 ; timing modulator to time_ns
+```
 
-*Option C — Two-layer: `ITemporalValue` + roles as wrappers*
-- `ITemporalValue` is the core function-of-time protocol
-- `Clock` and `Modulator` are thin wrappers that add scheduling-specific metadata
-  (e.g. `Clock` adds edge-detection policy; `Modulator` adds interpolation policy)
-- Role is declared at the use site, not encoded in the type
+These three compositions are the acceptance criteria for the implementation spike.
 
-**Exploration paths**
-
-1. Survey how VCV Rack resolves this: VCV signals are untyped `float` values — no
-   distinction between audio, CV, gate, or clock at the type level; rate (audio vs.
-   control) is a performance concern, not a type concern
-2. Survey how SuperCollider resolves this: UGens produce signals; `ar` vs. `kr` is a
-   rate annotation, not a type — the same `SinOsc` can be audio or control rate
-3. Examine Overtone's model: does it expose the SC rate system or abstract over it?
-4. Consider the Ableton Link model: Link exposes a continuous `phase` value in [0, 1)
-   per beat — a temporal value naturally represented as `ITemporalValue`
-5. Prototype all three options in a small namespace and evaluate:
-   - Can `(clock-div 4 (lfo :rate 0.1))` be written without explicit coercion?
-   - Can the same value be bound via `ctrl/bind!` to a parameter AND used as a
-     scheduler clock source without two different registrations?
-   - Does the `param-loop` (§22) / `live-loop` API unification (Q29) become simpler
-     under Option A than Option B/C?
-
-**Connection to existing questions**
-
-- Q29 (`param-loop` vs `live-loop` unification) — both are temporal processes driven
-  by a clock; a unified temporal-value abstraction may resolve Q29 naturally
-- Q30 (LFO scheduling resolution) — the `resolution` parameter of `watch!` is Q30's
-  answer; it becomes a property of the consumer, not the temporal value itself
-- Q32 (polyrhythm coordination across loop restarts) — phase-locking is natural if
-  clocks are `ITemporalValue` with a defined phase at any beat
-
-**Recommended approach for Sprint 2**
-
-Treat this as a Sprint 2 **blocking architecture question** — it should be answered
-before implementing `cljseq.clock`, `cljseq.mod`, or any scheduler binding code.
-Write a focused design spike: implement a minimal `ITemporalValue` protocol in a scratch
-namespace, express five or six of the primitives from the clock and modulator surveys
-as implementations, and verify the composition patterns above. The spike output should
-be a design decision record, not production code.
+**Connection to Q46**: timing modulators (swing, humanize, groove, quantize) are
+`ITemporalValue` instances whose output is a nanosecond offset routed to `time_ns`
+at the IPC delivery boundary. They are not a special case — they are `ITemporalValue`
+with a different binding target.
 
 ---
 
-## Q45 — Parts vs. tracks: what is the unifying voice-organization abstraction?
+## Q45 — Parts vs. tracks: what is the unifying voice-organization abstraction? — **RESOLVED**
 
 **R&R reference**: §2.3 (NDLR), §2.4 (T-1), §5 (sequencing DSL), §16 (control tree /
 `deflive-loop`); informed by Sprint 2 analysis of Elektron Digitakt/Digitone track model
 
-**The issue**
+**Resolution** (Sprint 2)
 
-Two well-established hardware paradigms organize multi-voice sequencing differently:
-
-**Semantic parts model (NDLR)**: Four named, typed roles — Drone, Pad, Motif 1,
-Motif 2. Each role has a defined musical function: Drone sustains the root, Pad
-voices the current chord, Motifs run melodic patterns against the chord. All parts
-share a global harmonic context (Key + Mode + Chord). The role type determines how
-the part responds to chord changes — a Drone always plays the root; a Motif
-transposes its scale-relative indices to the new chord. The fixed role count is a
-hardware limitation, not a design intention.
-
-**Generic track model (Elektron)**: Eight (or sixteen) interchangeable tracks.
-No semantic role differentiation — all tracks have identical capability; content
-and MIDI channel assignment differentiate them. Tracks share pattern length and
-song-mode arrangement but no shared harmonic context unless the user constructs one
-through MIDI channel routing and an external harmony source.
-
-These are not opposites — they are points on a spectrum. The design question for
-cljseq is: **what is the right abstraction for organizing N voices that may or may
-not share harmonic context, without inheriting the hardware limitations of either
-model?**
-
-**Stakes**
-
-This affects how users think about and structure multi-voice compositions at the
-REPL. Getting it wrong means either: forcing semantic role thinking on users who
-want generic tracks, or failing to provide the coordination primitives (shared
-harmony, group start/stop, voice-leading across parts) that make the NDLR model
-powerful. It also directly impacts the control tree layout (§16) — how voices
-register themselves and how the harmonic context propagates.
-
-**Key observations**
-
-1. **cljseq has no hardware voice limit.** A `live-loop` is a Clojure thread; the
-   system can support as many concurrent voices as the JVM and synthesis target
-   allow. The question is organizational, not computational.
-
-2. **Harmony-relative sequencing is the NDLR's real differentiator.** The part
-   roles (Drone, Pad, Motif) are most valuable because they define how each voice
-   *responds to chord changes* — not because there are exactly four of them. A
-   Drone is "always play root"; a Motif is "play harmony-relative indices against
-   current chord." These are behaviors, not slots.
-
-3. **Elektron tracks gain harmonic awareness through external routing.** The
-   Digitone adds per-track MIDI channels and an FM engine, but harmonic coordination
-   across tracks still requires the user to set it up manually. cljseq can do
-   better: harmonic context can be an explicit shared value in the control tree.
-
-4. **`live-loop` is already the generic track.** A named `live-loop` is the
-   cljseq equivalent of an Elektron track — it runs independently, has its own
-   clock division, and can target any synthesis destination. The question is what
-   sits *above* a single loop.
-
-**Candidate abstraction: `ensemble`**
-
-An `ensemble` (or `section`, or `arrangement` — naming TBD) is a named grouping
-of voices that:
-
-- Declares a shared harmonic context: key, mode, and a chord progression (or a
-  live-mutable chord atom)
-- Holds N named voices, each a `live-loop` (or `deflive-loop`) with an optional
-  semantic role
-- Provides group-level operations: `(start! ens)`, `(stop! ens)`, `(arm! ens)`,
-  `(chord! ens :IV)` — updating the shared harmonic context for all voices
-- Maps cleanly to a subtree in the control tree: `/cljseq/ensembles/<name>/`
-
-Semantic roles would be optional annotations on voices, not mandatory slots:
+**Abstraction**: `defensemble` / `ensemble`. A named grouping of N voices sharing a
+harmonic context, with optional per-voice semantic role annotations.
 
 ```clojure
 (defensemble :morning-raga
   {:key :D :mode :bhairav}
-  (voice :drone  {:role :drone}  (drone-pattern ...))
-  (voice :chords {:role :pad}    (pad-pattern ...))
-  (voice :melody {:role :motif}  (motif-pattern ...))
-  (voice :bass   {}              (bass-pattern ...))   ; generic — no role
-  (voice :tabla  {}              (tabla-pattern ...))) ; fifth voice, no NDLR equivalent
+  (voice :drone  {:role :drone}                        (drone-pattern ...))
+  (voice :chords {:role :pad
+                  :articulation (strum :dir :desc
+                                       :rate 1/32)}    (pad-pattern ...))
+  (voice :melody {:role :motif}                        (motif-pattern ...))
+  (voice :bass   {}                                    (bass-pattern ...))   ; generic
+  (voice :tabla  {}                                    (tabla-pattern ...))) ; fifth voice
 ```
 
-The `:role` annotation tells the harmonic engine how to interpret the pattern
-(root-relative for `:drone`; chord-tone indices for `:pad`; scale-degree indices
-for `:motif`). Voices without a role receive the raw chord root as context and
-interpret it themselves.
+**Naming rationale**: `ensemble` has no conflicting use in Music21, SuperCollider,
+or common DAW terminology. `scene` (Ableton), `section` (Music21 score structure),
+and `group` (SuperCollider audio routing) were rejected for collision risk.
 
-**Exploration paths**
+**Control tree placement**: ensemble voices register under
+`/cljseq/ensembles/<name>/voices/<voice-name>/`. The ensemble is a container node at
+`/cljseq/ensembles/<name>/` with shared harmonic context as child nodes:
 
-1. Survey how other live-coding systems address multi-voice organization:
-   - **Sonic Pi** — no explicit grouping; users coordinate via `cue!`/`sync!`
-   - **Overtone** — no grouping primitive; SC buses and groups handle this
-   - **TidalCycles** — `stack` and `cat` compose patterns; no named groups
-   - **Sardine** — `Bowl` concept groups players with shared clock and scale
-2. Map the NDLR's four roles to cljseq behaviors precisely: what does "respond to
-   chord changes" mean in terms of the harmony-relative index system (§5)?
-3. Determine whether `ensemble` belongs in the control tree (§16) as a container
-   node, or is purely a scheduling/coordination primitive at the `live-loop` level
-4. Evaluate naming: `ensemble`, `section`, `part-group`, `scene`, `arrangement`
-   — each carries connotations; choose one that doesn't collide with Music21 or
-   DAW terminology already in the system
-5. Consider how `ensemble` interacts with Ableton Link (§15) — all voices in an
-   ensemble share the Link beat; ensemble start/stop is phase-quantized
+```
+/cljseq/ensembles/morning-raga/
+  key        → :D
+  mode       → :bhairav
+  chord      → :I
+  voices/
+    drone/   → (subtree for drone live-loop)
+    chords/  → (subtree for pad live-loop)
+    melody/  → (subtree for motif live-loop)
+```
+
+Group operations (`start!`, `stop!`, `arm!`, `chord!`) act on the container node
+and propagate to all voices. Ensemble start/stop is phase-quantized to the Link beat.
+
+**Role semantics**: roles define *harmonic content policy*, not temporal articulation.
+Role and articulation are orthogonal:
+
+| Role | Harmonic behavior |
+|---|---|
+| `:drone` | Ignore chord changes; always use root of current key |
+| `:pad` | Resolve current chord to its constituent tones |
+| `:motif` | Transpose scale-degree indices to current chord |
+| `nil` | Receive current chord root as raw context; loop interprets it |
+
+A role determines what `(current-chord)` returns inside the voice body — it does not
+prescribe temporal delivery.
+
+**Articulation is separate from role**: strum, block-chord, arpeggiation direction and
+rate are `:articulation` parameters on the voice, not baked into `:pad`. The NDLR's
+strum parameter is the canonical example: strum spreads chord tones sequentially
+across a time window — a temporal articulation concern, not a harmonic content concern.
+
+```clojure
+;; role provides the notes; articulation spreads them in time
+(voice :chords {:role :pad
+                :articulation (strum :dir :desc :rate 1/32)} ...)
+```
+
+**Strum direction API**: `:asc` (pitch-ascending, low→high) and `:desc`
+(pitch-descending, high→low). Guitar players will recognise these as down-strum
+(`:asc`) and up-strum (`:desc`); the API uses pitch-order terms to avoid
+instrument-specific connotations. Strum is an ornament on a chord voicing and
+belongs in the ornament vocabulary (§24.5); its timing implementation uses the
+Q46 `ITemporalValue` delivery offset mechanism.
+
+**Membership**: fixed at definition time. Ad-hoc voice joining is deferred.
 
 **Connection to existing questions**
 
-- Q11 (`deflive-loop` / `live-loop` unification) — `ensemble` voices are likely
-  `deflive-loop` forms; Q11's Option A resolution (alias with auto-path) fits cleanly
-- Q9 (multi-source conflict resolution) — if two ensembles declare different global
-  keys, the conflict policy applies
-- Q29 (`param-loop` vs. `live-loop`) — `param-loop` voices inside an ensemble are
-  the continuous-modulation equivalent of Elektron's LFO tracks
+- Q11 — ensemble voices are `deflive-loop` forms; Q11's alias resolution fits cleanly
+- Q29 — `param-loop` voices inside an ensemble are the continuous-modulation
+  equivalent of Elektron's LFO tracks
+- Q46 — strum articulation uses per-note `time_ns` offsets at the IPC delivery
+  boundary, consistent with the timing modulation framework
+- Q9 — if two ensembles declare conflicting global keys, the conflict policy applies
+
+---
+
+## Q46 — Timing modulation: is swing/humanization a time-dimension `ITemporalValue`? — **RESOLVED**
+
+**R&R reference**: §23.3, §22 (param-loop), §3.1 (virtual time); informed by Q35 and Q44 resolutions
+
+**Resolution** (Sprint 2)
+
+Swing, humanize, groove templates, and quantize are all `ITemporalValue` instances
+whose output is a nanosecond offset routed to `time_ns` at the IPC delivery boundary.
+They are not special cases — they are `Beat → Long` functions bound via `timing/bind!`
+rather than `ctrl/bind!`.
+
+**The full family of timing modulators**
+
+| Operation | Behavior | Deterministic? | Output |
+|---|---|---|---|
+| `swing` | Phase-dependent offset; off-beats pushed late | Yes | `Long` (ns) |
+| `humanize` | Bounded random offset per event | No | `Long` (ns) |
+| `groove-template` | Step-indexed offset sequence replayed in a loop | Yes | `Long` (ns) |
+| `quantize` | Snap onset to nearest grid subdivision | Yes | `Long` (ns) |
+| `input-quantize` | Snap incoming MIDI/OSC events to grid at ingestion | Yes | `Long` (ns) |
+
+**Routing: binding site, not type**
+
+```clojure
+(ctrl/bind!   [:filter/cutoff] (lfo :rate 0.25))   ; → parameter value
+(timing/bind! (swing :amount 0.55))                ; → time_ns offset, all events in scope
+(timing/bind! :voice/chords (humanize :amount 5))  ; → time_ns offset, named voice only
+```
+
+`timing/bind!` lives in `cljseq.timing`. No type tag on the modulator — the same
+`ITemporalValue` instance could be used as a parameter modulator or timing modulator
+depending on binding target.
+
+**`time_ns` offset type**: plain `Long`; no protocol extension needed. `ITemporalValue`
+is `Beat → Value`; the value type is unconstrained. The binding site interprets it.
+
+**Groove templates**: a finite step-indexed EDN sequence of nanosecond offsets,
+looped. Implements `ITemporalValue` directly — `(sample groove beat)` returns the
+offset for the step at that beat position. Loaded from EDN, consistent with the
+data format policy.
+
+```clojure
+(def mpc-swing (groove/load "resources/grooves/mpc60-swing66.edn"))
+(timing/bind! mpc-swing)
+```
+
+**Quantization resolution**: arbitrary rational fractions of a beat. Standard
+subdivisions are named constants; user-defined grids are just rationals:
+
+```clojure
+(quantize :grid 1/16)   ; nearest 16th note
+(quantize :grid 1/12)   ; nearest 8th-note triplet
+(quantize :grid 1/32)   ; nearest 32nd note
+```
+
+`input-quantize` applies the same mechanism at the MIDI/OSC ingestion point rather
+than at IPC delivery.
+
+**Link ordering**: timing modulator offsets are applied *after* Link's `timeAtBeat`
+computation, never before:
+
+```
+beat position → Link timeAtBeat → nominal_time_ns → (+offset) → final time_ns → IPC
+```
+
+The offset is local to this process and invisible to Link's consensus timeline.
+Phase alignment across Link peers is preserved.
 
 ---
 
@@ -1677,3 +1662,4 @@ interpret it themselves.
 | Q7 | Link integration | No — post-core feature | High — see §15 |
 | Q44 | Unified temporal-value abstraction: `ITemporalValue` protocol | **Yes** — needed before Phase 1 impl | High — design spike recommended |
 | Q45 | Parts vs. tracks: unifying voice-organization abstraction (`ensemble`?) | **Yes** — needed before multi-voice DSL impl | Medium — conceptual synthesis + naming decision |
+| Q46 | Timing modulation: swing, humanize, groove, quantize as time-dimension `ITemporalValue` | **Yes** — needed before humanization/quantization impl | Medium — connects Q35, Q44, `cljseq.clock` vocabulary |
