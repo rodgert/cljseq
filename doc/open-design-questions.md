@@ -1696,3 +1696,64 @@ beat position of the loop's virtual clock is unaffected — it continues from th
 beat position, just arriving there at the correct (revised) wall-clock time.
 
 **Blocking**: Phase 1 Link integration; tempo automation (Phase 2).
+
+---
+
+## Q61 — Plugin graph DSL: declarative `defrack` vs. imperative API
+
+**R&R reference**: §30.3, §30.10
+
+**Status**: Future sprint — not blocking any current phase
+
+**Question**: Should the plugin graph be defined declaratively (`:nodes` + `:edges`
+EDN map, compiled at eval time) or imperatively (`add-node!`, `connect!`), or both?
+
+**Recommendation**: Declarative `defrack` macro as primary form; imperative API for
+interactive REPL patching. Declarative form compiles to imperative calls internally.
+
+---
+
+## Q62 — Rackspace switching: crossfade and audio continuity
+
+**R&R reference**: §30.4, §30.10
+
+**Status**: Future sprint
+
+**Question**: How long is the rackspace crossfade window? How are overlapping switch
+requests handled? How does latency compensation change during transition?
+
+---
+
+## Q63 — Plugin graph topology: DAG only or feedback loops supported?
+
+**R&R reference**: §30.6, §30.10
+
+**Status**: Future sprint
+
+**Question**: Should the plugin graph require a DAG (no feedback), or support feedback
+loops with automatic delay-buffer insertion? What are the PDC (plugin delay
+compensation) requirements?
+
+---
+
+## Q64 — VST3 support in the plugin container
+
+**R&R reference**: §19.2, §30.8, §30.10
+
+**Status**: Future sprint
+
+**Question**: VST3 has a much larger plugin catalog than CLAP (2024). The architecture
+isolates plugin hosting behind `SynthTarget`, making VST3 a new subclass. When should
+VST3 be prioritised — same sprint as `defrack`, or a subsequent phase?
+
+---
+
+## Q65 — Live graph modification (hot-patching while audio runs)
+
+**R&R reference**: §30.3, §30.10
+
+**Status**: Future sprint
+
+**Question**: Can audio connections be added or removed while the graph is running?
+Requires synchronisation between audio callback thread and IPC thread; likely needs
+double-buffer or copy-on-write for the processing graph applied between callbacks.

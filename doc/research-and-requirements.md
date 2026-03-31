@@ -6892,3 +6892,294 @@ currently sleeping with `Thread/sleep` will wake up at the wrong time. The Phase
 redesign (`parkUntil` + reschedule signal) must define: which loops are affected, how
 they are notified, and whether the partial sleep is absorbed or restarted. This
 interacts with the control tree (§Q47) and Link's timeline API.
+
+---
+
+## 30. Plugin Container and Virtual Performance Rack (Future Sprint)
+
+**Status**: Future design sprint — not Phase 0/1/2.
+**Reference**: Gig Performer 5 user manual (gigperformer.com) as a commercial
+exemplar of the concept. Also: Pedalboard2 (open source), Carla (JACK plugin host),
+Blue Cat's Patchwork.
+
+Section §19 covers single CLAP/VST3 plugin hosting: one plugin, one audio output,
+controlled via `ctrl/send!`. This section captures the design space for the
+**next level up**: a configurable signal flow graph in which multiple plugins are
+wired together as a virtual effects rack or pedalboard, with cljseq's sequencing and
+modulation system as the control layer.
+
+### 30.1 The Concept
+
+A **plugin rack** in cljseq is a directed signal flow graph where:
+
+- **Nodes** are audio/MIDI processing units: CLAP plugins, VST3 plugins, PureData
+  patches (via PlugData), audio inputs/outputs, MIDI inputs/outputs, and built-in
+  utility nodes (mixers, splitters, gain stages)
+- **Edges** are audio signal connections (carrying stereo or multichannel audio
+  buffers) or MIDI/event connections (carrying note and CC streams)
+- The graph has designated **input nodes** (hardware audio in, MIDI in) and
+  **output nodes** (hardware audio out, recording bus, MIDI out)
+
+The signal flows from inputs through the graph to outputs on every audio buffer
+callback, in topological order.
+
+This is the architecture used by Gig Performer ("Wiring View"), Blue Cat's Patchwork,
+and DAW insert chains — but in cljseq it is defined in Clojure data, live-codeable
+at the nREPL, and directly controlled by `deflive-loop`, `defstochastic`, `defflux`,
+and all other cljseq sequencing primitives.
+
+### 30.2 Motivating Use Cases
+
+**Live performance pedalboard replacement**: A guitarist or bassist defines their
+complete signal chain as a plugin rack — tuner, compressor, overdrive, delay, reverb,
+IR loader — wired in series. The rack runs in `cljseq-audio`. Parameters (delay time,
+reverb mix, drive level) are controlled by MIDI foot controllers via `ctrl/bind!`.
+`deflive-loop` sequences tempo-synced delay times and modulates reverb decay.
+
+**Modular synthesizer emulation**: An electronic musician creates a virtual modular
+system: oscillator (CLAP synth) → filter (CLAP effect) → envelope (cljseq `one-shot`)
+→ VCA (gain node) → reverb (CLAP effect). The LFO is a cljseq `lfo` bound to the
+filter cutoff via `ctrl/bind!`. The envelope fires from `deflive-loop`'s step gate.
+
+**Multi-instrument live setup**: A keyboard player loads an organ plugin on channel 1,
+a piano plugin on channel 2, and an effects rack (chorus → reverb) on a shared bus.
+MIDI routing directs channel 1 notes to the organ and channel 2 notes to the piano.
+Both feed the effects bus before the hardware output. Switching between "jazz" and
+"gospel" rackspaces (§30.4) changes the plugin parameters and effects chain
+simultaneously.
+
+**PureData/PlugData DSP integration**: A PlugData patch implements a custom granular
+processor. It is a node in the rack, receiving audio from an upstream synth plugin
+and sending to the output bus. Parameters exposed by the Pd patch are addressable
+via `ctrl/send!` and can be driven by `defstochastic` sequences.
+
+### 30.3 The Plugin Graph as Clojure Data
+
+The rack is a pure Clojure data structure — a map of nodes and edges. It is defined
+at the REPL, serialisable to EDN, and sent to `cljseq-audio` via IPC for realisation.
+
+```clojure
+;; Declarative rack definition
+(defrack :main
+  {:nodes
+   {:audio-in   {:type :audio-in  :channels 2}
+    :guitar-di  {:type :audio-in  :channels 1 :device "BlackHole 2ch"}
+    :comp       {:type :clap      :plugin "com.cableguys.magnetiq" :preset "Opto"}
+    :drive      {:type :clap      :plugin "com.airwindows.Overdrive"}
+    :delay      {:type :clap      :plugin "com.tokyodawn.tdmultiband"}
+    :reverb     {:type :clap      :plugin "com.valhalladsp.ValhallaRoom"}
+    :mixer      {:type :mixer     :channels 2 :stereo true}
+    :audio-out  {:type :audio-out :channels 2}}
+
+   :audio-edges
+   [[:guitar-di :comp]
+    [:comp      :drive]
+    [:drive     :delay]
+    [:delay     :mixer 0]   ; delay → mixer input 0
+    [:drive     :mixer 1]   ; dry signal → mixer input 1 (parallel compression)
+    [:mixer     :reverb]
+    [:reverb    :audio-out]]
+
+   :midi-edges
+   [[:midi-in :comp]
+    [:midi-in :delay]]})   ; MIDI CC to comp and delay for tempo sync
+
+;; Modulation: bind delay time to a beat-synced phasor value
+(ctrl/bind! [:main :delay :params :delay-time]
+  (lfo (clock-div 2) phasor/saw-up))
+
+;; Automation: sweep reverb mix with a live loop
+(deflive-loop :reverb-swell {}
+  (ctrl/send! [:main :reverb :params :wet-level]
+    (phasor/sine-uni (phasor/wrap (* (now) 0.25))))
+  (sleep! 1/8))
+```
+
+The graph is sent to `cljseq-audio` as an IPC command. The audio process
+builds the processing graph, loads plugins, and begins the audio callback.
+
+### 30.4 Rackspaces — Named Graph Configurations
+
+A **rackspace** is a complete named rack definition. Multiple rackspaces can be
+defined and switched atomically during performance — the audio equivalent of `patch!`
+(Q48) at the graph level.
+
+```clojure
+(defrack :clean   { ... })   ; clean guitar tone
+(defrack :crunch  { ... })   ; overdrive + chorus
+(defrack :lead    { ... })   ; high gain + delay + reverb
+
+;; Switch rackspace on the next bar boundary
+(rack/switch! :lead :on :next-bar)
+
+;; Switch immediately (may cause audio glitch)
+(rack/switch! :clean :on :now)
+```
+
+Rackspace switching concerns:
+- **Audio continuity**: reverb and delay tails from the outgoing rackspace should
+  ring out rather than cut abruptly. The audio process fades out the old graph while
+  the new one fades in (crossfade duration configurable).
+- **State preservation**: on switch-back, a rackspace should restore to its last
+  parameter state (not reset to defaults). This is the **variations** concept below.
+- **Latency compensation**: different plugin chains have different latency. The audio
+  process must recompute latency compensation when switching.
+
+### 30.5 Variations — Parameter Snapshots Within a Rackspace
+
+A **variation** is a parameter snapshot for a rackspace — the same plugin graph,
+different parameter values. Analogous to Gig Performer's "Variations" or a DAW's
+A/B comparison.
+
+```clojure
+;; Save current parameter state as a variation
+(rack/save-variation! :main :verse)
+(rack/save-variation! :main :chorus)
+
+;; Recall a variation
+(rack/recall-variation! :main :chorus)
+
+;; Interpolate between variations over N beats (parameter morphing)
+(rack/morph-variation! :main :verse :chorus :beats 4)
+```
+
+`morph-variation!` is a natural extension of `defmorph` (§24 — Bloom-Inspired
+transformations) applied to plugin parameter spaces rather than pitch sequences.
+
+### 30.6 Audio Routing Topology
+
+The plugin graph in `cljseq-audio` must handle:
+
+**Serial chains** (most common): A → B → C — straightforward topological sort.
+
+**Parallel paths with a mixer**: A → B and A → C, then B → mix input 0, C → mix input 1.
+The mixer sums the signals.
+
+**Send/return (FX bus)**: Main chain sends a portion of its signal to a reverb
+bus (return), which is summed back to the main output. Classic wet/dry parallel routing.
+
+**Sidechain**: The kick drum audio feeds the sidechain input of a compressor on the
+bass bus. The kick's envelope triggers the compressor regardless of the bass level.
+
+**Feedback loops**: An output of a plugin is routed back to an earlier input (e.g.,
+delay feedback). This requires a one-buffer-cycle delay on the feedback path to avoid
+an algebraic loop. The audio process detects cycles in the graph and inserts feedback
+delay buffers automatically.
+
+**Constraints to decide in the design sprint**: maximum node count, maximum bus width
+(stereo vs. surround), latency compensation algorithm, and whether the graph must be
+a DAG (no feedback) or whether feedback loops are supported with the delay-buffer
+approach.
+
+### 30.7 Integration with cljseq Modulation and Sequencing
+
+The plugin rack is not a passive signal chain — it is a **live-modulated performance
+instrument**. Every plugin parameter is a leaf node in the cljseq control tree,
+addressable via its rack path:
+
+```clojure
+[:rack-name :node-name :params :param-name]
+;; e.g.
+[:main :reverb :params :room-size]
+```
+
+This means every cljseq modulation primitive applies directly:
+
+| cljseq primitive | Plugin rack use |
+|-----------------|----------------|
+| `ctrl/bind!` | Bind hardware knob to plugin parameter |
+| `ctrl/send!` | Directly set parameter value from a loop or macro |
+| `lfo` | Continuously modulate a parameter (vibrato, tremolo, filter sweep) |
+| `envelope` + `one-shot` | Envelope-shape a parameter on note trigger |
+| `deflive-loop` | Sequence parameter changes in musical time |
+| `defstochastic` | Randomly vary parameter within a distribution |
+| `defflux` | Gradually evolve parameter via CORRUPT-style mutation |
+| `patch!` | Atomically update multiple parameters simultaneously |
+| `rack/morph-variation!` | Interpolate between parameter presets over time |
+
+The plugin rack exposes its parameters to the cljseq modulation system via `defdevice`
+(§Q55) EDN maps, automatically generated by interrogating the plugin's CLAP parameter
+extension at load time.
+
+### 30.8 Relationship to Existing Design
+
+| Existing component | Role in plugin rack |
+|-------------------|---------------------|
+| `cljseq-audio` (§3.5) | The process that hosts and runs the plugin graph |
+| `defdevice` (Q55) | Parameter maps for each plugin node in the graph |
+| `ctrl/send!` (Q4) | Routes parameter updates to the audio process via IPC |
+| `patch!` (Q48) | Atomically updates a set of parameters at a beat boundary |
+| `defrack` (new) | Defines the plugin graph data structure |
+| `rack/switch!` (new) | Switches between rackspaces |
+| PureData / PlugData (§19) | A plugin node type in the graph |
+| Ableton Link (§29.7) | Tempo reference for time-synced parameters in the rack |
+| `cljseq.phasor` (§28) | LFO sources driving plugin parameters |
+
+The primary new component is the `defrack` macro and the IPC protocol for
+communicating graph topology to `cljseq-audio`. Everything else is already in the
+design.
+
+### 30.9 What Makes This Different from Gig Performer
+
+Gig Performer is a strong reference implementation but is fundamentally a
+**GUI-first** tool: plugins are wired by dragging cables, parameters are mapped via
+a widget surface, and scripting (GPScript) is a secondary layer for power users.
+
+cljseq's plugin rack is **code-first**: the graph is defined in Clojure data, wired
+by evaluating a `defrack` form at the REPL, and controlled by live-coding primitives
+that have no GUI analogue. The key differences:
+
+| Dimension | Gig Performer | cljseq plugin rack |
+|-----------|--------------|---------------------|
+| Graph definition | GUI drag-and-drop | Clojure data / `defrack` |
+| Parameter control | Widget surface + MIDI map | `ctrl/send!` / `ctrl/bind!` |
+| Automation | GUI lane editor | `deflive-loop`, `lfo`, `defstochastic` |
+| Rackspace switching | GUI button / MIDI PC | `rack/switch!` (beat-aware) |
+| Scripting | GPScript (proprietary) | Full Clojure DSL |
+| Generative capabilities | None | `defflux`, `defstochastic`, `deffractal` |
+| Version control | Binary project file | Plain Clojure / EDN — git-friendly |
+| Network sync | None | Ableton Link integration |
+
+The live-coding paradigm also enables capabilities that GUI-first tools cannot easily
+provide: a `deflive-loop` that morphs reverb size over 32 bars, a `defstochastic`
+sequence driving delay feedback, or a `defflux` sequence gradually eroding a filter
+cutoff pattern. These are idiomatic cljseq expressions, not special plugin-rack
+features.
+
+### 30.10 Design Questions for the Sprint
+
+**Q61 — Plugin graph DSL: `defrack` macro vs. imperative API**
+
+Should the graph be defined declaratively (`:nodes` + `:edges` map, entire graph sent
+at once) or imperatively (`(add-node! :comp ...)`, `(connect! :comp :drive)`)? Or
+both — a macro that compiles a declarative form to imperative calls?
+
+Recommendation: declarative as the primary form (idiomatic Clojure data; git-diffable;
+serialisable to EDN for saving/loading). Imperative functions for interactive REPL
+patching. The macro compiles the declarative form at eval time.
+
+**Q62 — Rackspace switching and audio continuity**
+
+The crossfade approach (old graph rings out, new graph fades in) requires running
+two graphs simultaneously during the transition. How long is the crossfade window?
+How is it interruptible (e.g., a second switch arrives before the first crossfade
+completes)?
+
+**Q63 — Audio routing topology constraints**
+
+DAG-only (simpler) or allow feedback with delay-buffer insertion (more powerful)?
+Maximum polyphony per plugin node? Latency compensation algorithm (PDC)?
+
+**Q64 — VST3 in the plugin container**
+
+The plugin catalog for VST3 is much larger than CLAP (2024). The architecture
+isolates plugin hosting behind `SynthTarget` (§19.2), so VST3 is a new subclass.
+When should VST3 support be prioritised? Does it belong in the same sprint as
+`defrack`, or as a subsequent phase?
+
+**Q65 — Live graph modification (hot-patching)**
+
+Can an audio connection be added or removed while the graph is running? This requires
+careful synchronisation between the audio callback thread and the IPC command thread.
+The audio process must apply graph modifications between buffer callbacks (not during),
+which requires a double-buffer or copy-on-write approach for the processing graph.
