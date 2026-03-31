@@ -11,3 +11,22 @@ pom.xml.asc
 /.prepl-port
 .hgignore
 .hg/
+
+# C++ build
+/build/
+*.o
+*.so
+*.dylib
+*.a
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+*.egg-info/
+
+# Editor
+.DS_Store
+.idea/
+*.swp

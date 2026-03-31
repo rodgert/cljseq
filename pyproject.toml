@@ -1,0 +1,25 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "cljseq-m21"
+version = "0.1.0"
+description = "cljseq Music21 sidecar — subprocess wrapper for musicological analysis"
+license = { text = "LGPL-2.1-or-later" }
+requires-python = ">=3.10"
+dependencies = [
+    "music21>=9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["python/cljseq_m21"]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]
