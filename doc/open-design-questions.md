@@ -150,47 +150,24 @@ per-session override for tuning.
 
 ---
 
-## Q6 — Stream model real-time consumption path is underspecified
+## Q6 — Stream model real-time consumption path is underspecified — **RESOLVED**
 
 **R&R reference**: §9
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Section 9 describes the Stream/Score model (a sorted map of offset → events) but
-does not specify how a Stream is consumed by the real-time scheduler. Two distinct
-use cases share the same data structure but require different consumption semantics:
+Two consumption modes share the same `Stream` data structure (a sorted map of
+beat-offset → events) but have distinct contracts:
 
-**Offline score generation**: A Stream is rendered completely before playback begins.
-Iteration order is deterministic; the consumer can look ahead arbitrarily.
+- **Offline**: fully materialized sorted map; `(realize stream)` forces complete
+  materialization before playback. Iteration is deterministic and look-ahead is
+  unbounded.
+- **Real-time**: lazy seq pulled event-by-event by the scheduler in virtual time
+  order. The `Playable` protocol's `play!` implementation pulls the next event,
+  schedules it, then advances.
 
-**Real-time scheduling**: A Stream is consumed event by event in virtual time order.
-The consumer must not look ahead past the next event (dynamic patterns may still be
-generating events for later offsets). The scheduler must also handle infinite Streams
-(lazy seqs of generated events).
-
-Without specifying the consumption contract, it is unclear whether a Stream is:
-- A pure value (fully materialized sorted map)?
-- A lazy seq (pull-based, event by event)?
-- A channel (push-based, async delivery)?
-
-**Stakes**
-
-The consumption model affects memory usage (a 3-hour score as a pure value is large),
-composability (lazy seqs compose with transducers), and the live-coding interaction
-model (can you modify a Stream mid-playback?).
-
-**Exploration path**
-
-1. Define a `Playable` protocol with a single method `(events stream)` → lazy-seq of
-   `[offset event]` pairs.
-2. The real-time scheduler consumes this lazy seq, parking between events using the
-   existing `sleep!`/`LockSupport` machinery.
-3. For offline rendering, `(realize stream)` fully materializes the seq into a sorted map.
-4. A `live-loop` body that constructs a Stream can be swapped mid-playback because the
-   scheduler holds only a reference to the current lazy seq head.
-5. Reference: examine how Overtone's `apply-at` / `apply-by` chain achieves a similar
-   effect with temporal recursion, and whether the Stream abstraction adds enough over
-   recursive `live-loop` to justify the complexity.
+The `Playable` protocol is the unifying abstraction; both modes implement it. The
+caller does not need to know which mode is active.
 
 ---
 
@@ -390,75 +367,38 @@ outside `/cljseq/`.
 
 ---
 
-## Q13 — MCP `repl/eval` authorization: per-session or capability-based?
+## Q13 — MCP `repl/eval` authorization: per-session or capability-based? — **RESOLVED**
 
 **R&R reference**: §18.3, §18.7
 
-**The issue**
+**Resolution** (Sprint 3)
 
-`repl/eval` allows an MCP client (Claude) to execute arbitrary Clojure in the live
-session. The authorization model in §18.7 proposes a tiered system with explicit
-user confirmation. But there are three unresolved specifics:
+Per-session authorization: the user confirms once at session start. Revoke by
+restarting the nREPL session — the same model as Claude Code.
 
-1. **Granularity**: is authorization per-tool (allow `repl/eval` forever), per-session
-   (allow it for this nREPL session), per-call (confirm each eval), or per-code-class
-   (allow read-only code, deny side-effecting code)?
-
-2. **Revocation**: how does the user revoke a previously granted authorization without
-   restarting the server?
-
-3. **Sandboxing**: should `repl/eval` run in a restricted namespace that can only
-   access `cljseq.*` namespaces, or full JVM access? A sandbox provides a safety net
-   but requires a Clojure security model (ClojureSandbox or custom classpath filtering).
-
-**Stakes**
-
-`repl/eval` without sandboxing is arbitrary code execution on the user's machine.
-Getting this wrong undermines user trust. Getting it over-restricted makes the most
-powerful MCP capability useless.
-
-**Exploration path**
-
-1. Start with per-session authorization (user confirms once at session start; revoke
-   by restarting). This is the Claude Code model.
-2. Add a namespace whitelist: `repl/eval` submissions are prepended with
-   `(in-ns 'cljseq.user)` and can only refer to `cljseq.*` namespaces unless the
-   user explicitly grants full access.
-3. Log every eval to a session transcript file for auditability.
-4. Revisit sandboxing after evaluating real-world usage patterns.
+- **Namespace whitelist**: all `repl/eval` submissions are prepended with
+  `(in-ns 'cljseq.user)` and may only refer to `cljseq.*` namespaces unless the
+  user explicitly grants full JVM access via a session flag.
+- **Audit log**: every eval is appended to a session transcript file
+  (`~/.cljseq/sessions/<timestamp>.log`) for auditability.
+- **Sandboxing**: deferred — revisit after evaluating real-world usage patterns.
+  The namespace whitelist provides a practical safety boundary for now.
 
 ---
 
-## Q14 — HTML rendering of the tree: server-side or client-side?
+## Q14 — HTML rendering of the tree: server-side or client-side? — **RESOLVED**
 
 **R&R reference**: §17.7
 
-**The issue**
+**Resolution** (Sprint 3)
 
-§17.7 describes the system as a web-navigable resource. Two implementation paths:
+Start with SSR + HTMX: Hiccup templates in the Ring handler; HTMX `hx-ws` for
+WebSocket-driven live value updates. No JavaScript build step, no JS framework,
+fully functional in any browser. The REST API is built regardless.
 
-**Server-side rendering (SSR)**: Hiccup templates in the Ring handler generate HTML
-at request time. Simple, no JavaScript required, fully functional in any browser.
-Interaction (sliders, buttons) requires form POSTs or HTMX-style partial updates.
-
-**Client-side (SPA)**: Serve a static JavaScript application that queries the REST
-API. Richer interaction, WebSocket integration for live updates, but adds a JavaScript
-build step and a JS framework dependency.
-
-**Stakes**
-
-SSR with HTMX is surprisingly capable for a real-time dashboard (HTMX supports
-WebSocket-driven partial updates). An SPA is more work but provides a better UX for
-parameter exploration during a performance.
-
-**Exploration path**
-
-1. Start with SSR + HTMX: no build tooling, zero JS framework, Ring-native. HTMX's
-   `hx-ws` can subscribe to WebSocket streams for live value updates.
-2. Evaluate whether SSR+HTMX is sufficient after a prototype. If a richer UI is
-   needed (e.g., piano roll visualization, waveform display), add a lightweight SPA
-   for those specific views only.
-3. The REST API is built regardless; the frontend is an optional layer over it.
+Add a lightweight SPA only if richer views (piano roll visualization, waveform
+display) prove necessary — and only for those specific views, not as a wholesale
+replacement.
 
 ---
 
@@ -522,99 +462,57 @@ events and makes `cljseq-sidecar` a more complex process with no architectural b
 
 ---
 
-## Q17 — CLAP parameter count: eager vs. lazy tree registration?
+## Q17 — CLAP parameter count: eager vs. lazy tree registration? — **RESOLVED**
 
 **R&R reference**: §19.7
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Surge XT exposes ~600 CLAP parameters. Registering all 600 as tree nodes at plugin
-load time:
-- Pro: full OSC and MIDI addressability from the start; `ctrl/ls` returns complete
-  parameter list; MCP tools can discover and set any parameter
-- Con: 600 atoms and tree entries with rich metadata is not free; navigating the
-  tree in a TUI or browser becomes unwieldy
+The sidecar holds the complete parameter map for each loaded plugin. The JVM
+control tree is a sparse projection, populated lazily on demand:
 
-Lazy registration (only create a tree node when the parameter is first accessed or
-explicitly registered) is lighter but means the tree is incomplete until parameters
-are used.
+- `ctrl/ls` on a device node triggers a bulk-fetch of the full parameter list from
+  the sidecar and populates the tree.
+- `(ctrl/register-all-params! target)` forces eager registration when full
+  MIDI/OSC addressability is required from the start.
+- Individual parameter access always works regardless of registration state — the
+  sidecar is the authoritative store.
 
-**Exploration path**
-
-1. Distinguish between the *parameter map* (complete index of CLAP parameter
-   IDs + names, loaded in the sidecar, queryable via IPC `0x75`) and the *tree*
-   (populated lazily on JVM side as parameters are bound or accessed).
-2. The sidecar always has the full map; the tree is a sparse projection of it.
-3. `ctrl/ls "/cljseq/synths/surge/params"` triggers a bulk fetch that populates the
-   tree on demand.
-4. `(ctrl/register-all-params! path)` is available for explicit eager registration
-   when full addressability is needed.
+This keeps the tree navigable (a 600-parameter Surge XT subtree is only populated
+when the user asks for it) while preserving full addressability on demand.
 
 ---
 
-## Q18 — Pd patch hot-swap: audio continuity during patch reload?
+## Q18 — Pd patch hot-swap: audio continuity during patch reload? — **RESOLVED**
 
 **R&R reference**: §19.8
 
-**The issue**
+**Resolution** (Sprint 3)
 
-`PdTarget::load_patch()` closes the current patch and opens a new one. This
-interrupts audio: there will be a gap (one or more buffers of silence) while Pd
-reinitializes the new patch. In a live performance, this gap is audible.
+Pool of ≤2 `PdTarget` instances per slot:
 
-Options:
-1. **Accept the gap**: document it; performers prepare for patch changes at a
-   natural break.
-2. **Crossfade**: run old patch and new patch in parallel for N buffers, fade out
-   old, fade in new. Doubles DSP cost for the transition period.
-3. **Pre-load**: allow pre-loading a new patch into a dormant PdTarget instance;
-   `swap!` is just a pointer update (atomic) with no re-initialization gap.
+1. `(ctrl/preload-patch! slot path)` — loads the new patch into the standby instance
+   while the current instance continues playing.
+2. `(ctrl/swap-patch! slot)` — promotes the standby to active atomically at the
+   next audio buffer boundary. No audible gap.
 
-**Exploration path**
-
-Option 3 (pre-load + atomic swap) is achievable: `cljseq-audio` maintains a pool
-of at most 2 PdTarget instances per "voice slot"; one is active, one can be
-initialized in the background. `(ctrl/preload-patch! path target)` warms up the
-standby; `(ctrl/swap-patch! target)` atomically promotes it to active at the next
-buffer boundary.
+The prior active instance becomes the new standby (or is released if memory
+pressure demands it).
 
 ---
 
-## Q19 — `cljseq-audio` and Link: second peer on the same machine?
+## Q19 — `cljseq-audio` and Link: second peer on the same machine? — **RESOLVED**
 
 **R&R reference**: §3.5, §19.9
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Both `cljseq-sidecar` and `cljseq-audio` instantiate `ableton::Link` and join the
-session. The Link documentation states that multiple peers on the same machine are
-supported and is a tested use case. However:
+Measure beat-time drift between the JVM's Carabiner connection and `cljseq-audio`'s
+direct Link instance empirically. Acceptable limit: < 100µs on a wired LAN.
 
-1. Each `ableton::Link` instance consumes network resources (multicast socket,
-   background thread). Two instances on the same machine with the same interface
-   means two multicast join/leave cycles.
-2. The two processes will see each other as Link peers, incrementing the peer count
-   visible to other machines on the network. This might confuse users who see 2 peers
-   reported when only one cljseq instance is running.
-3. If the beat timelines of the two processes drift relative to each other (even by
-   a few microseconds), audio events and MIDI events will be out of phase.
-
-**Exploration path**
-
-1. Test: run both processes and measure the beat-time difference between their
-   respective `captureAudioSessionState()` calls at the same wall-clock moment.
-   Acceptable drift: < 100µs (< 5 samples at 48kHz).
-2. If drift is unacceptable: implement a lightweight IPC beat-sync mechanism
-   between the two processes (not Link — just a direct socket message from
-   `cljseq-sidecar` to `cljseq-audio` carrying its current beat estimate, used
-   as a correction signal).
-3. Alternatively: only `cljseq-sidecar` is a Link peer; `cljseq-audio` receives
-   beat timeline via IPC from the sidecar rather than from Link directly.
-
-Option 3 is architecturally cleanest (single Link peer per cljseq instance) but
-adds IPC beat-forwarding to `libcljseq-rt`.
-
----
+If drift exceeds the limit: use a single Link peer in the sidecar; forward Link
+beat-time to `cljseq-audio` via IPC rather than having `cljseq-audio` join the
+session independently. This is a Phase 0 measurement task.
 
 ---
 
@@ -661,124 +559,60 @@ queries) may use the same hint.
 
 ---
 
-## Q21 — Score serialization: canonical representation across the IPC boundary?
+## Q21 — Score serialization: canonical representation across the IPC boundary? — **RESOLVED**
 
 **R&R reference**: §20.5
 
-**The issue**
+**Resolution** (Sprint 3)
 
-The semantic mapping table in §20.5 defines the JSON wire format. Several edge cases
-need a canonical answer before implementation:
+Edge case rules for the JSON wire format (implemented in Python `_note_to_json`):
 
-- **Enharmonic equivalents**: `C#4` and `Db4` have the same MIDI number (61). The wire
-  representation uses `{"midi": 61, "name": "C#", "octave": 4}`. Should the name be
-  canonical (always sharps? context-dependent)? Music21 preserves the spelled name;
-  cljseq may not care.
-- **Microtonal pitches**: `{"midi": 60, "cents_offset": 25}` — the cljseq Pitch type
-  needs a `:pitch/cents` field (see §7). Needs to round-trip faithfully.
-- **Tied notes**: Music21 has `tie.Tie` objects. A tied quarter + eighth = dotted
-  quarter or two separate notes? Flat serialization loses tie information. Decision:
-  flatten ties on the Music21 side (merge durations) before serialization.
-- **Grace notes**: zero-duration notes in Music21. Map to `:dur/beats 0` or omit?
-  Decision: omit from flat serialization (performance-path irrelevant).
-- **Chords**: Music21 `chord.Chord` can appear in a `Stream`. Map to multiple
-  simultaneous notes (same `:time/beat`) in the flat sequence.
-
-**Exploration path**
-
-1. Define the canonical rules in the Python server's `_note_to_json()` helper:
-   enharmonic = preserve Music21 spelling; microtonal = carry cents offset; tied =
-   merge durations; grace = omit; chord = simultaneous notes.
-2. Write round-trip tests: Clojure note map → (m21/export-xml) → (m21/parse-file) →
-   Clojure note map; verify MIDI numbers and durations are preserved.
-3. Document the lossy cases (enharmonic spelling, ties) in `cljseq.m21` docstrings.
+| Case | Rule |
+|---|---|
+| Enharmonic equivalents | Preserve Music21 spelling (`C#` stays `C#`; not rewritten to `Db`) |
+| Microtonal pitches | Carry `cents_offset` field alongside MIDI note number |
+| Tied notes | Merge into single note (flatten ties; sum durations) |
+| Grace notes | Omit (zero-duration events cause scheduler undefined behaviour) |
+| Chords | Expand to simultaneous notes with identical onset timestamps |
 
 ---
 
-## Q22 — In-process Music21: Jython, GraalPy, or JPype?
+## Q22 — In-process Music21: Jython, GraalPy, or JPype? — **RESOLVED**
 
 **R&R reference**: §20.3
 
-**The issue**
+**Resolution** (Sprint 3)
 
-The subprocess architecture adds a round-trip over a Unix socket (1–5ms overhead
-per call). For very fast repeated calls (e.g., analyzing each measure in a long score),
-this overhead accumulates. Three alternatives exist for in-process Music21:
-
-| Option | Status | Notes |
-|---|---|---|
-| **Jython** | Dead (Python 2.7 only) | Not viable |
-| **GraalPy** | Experimental (GraalVM) | Music21 compatibility unknown; adds GraalVM JVM requirement |
-| **JPype** | Active (Python ← JVM bridge) | Wrong direction: JPype calls Java from Python |
-| **Subprocess (current)** | Chosen | Simple, isolated, works with CPython |
-
-**Recommendation**
-
-Retain the subprocess design. The overhead is acceptable for all planned use cases.
-The only high-frequency case (key analysis per measure) can be batched:
-`(m21/analyze-key-floating notes :window-beats 4)` analyzes all windows in one RPC
-call rather than N calls.
-
-Mark this question resolved unless GraalPy matures significantly.
+Retain the subprocess design. 1–5ms IPC overhead per call is acceptable for all
+current use cases. Batch high-frequency calls to amortize overhead (e.g. parse a
+full corpus piece once, not per-note). Revisit only if profiling identifies a
+concrete bottleneck.
 
 ---
 
-## Q23 — Overlap between cljseq pitch/scale types and Music21?
+## Q23 — Overlap between cljseq pitch/scale types and Music21? — **RESOLVED**
 
 **R&R reference**: §20.8
 
-**The issue**
+**Resolution** (Sprint 3)
 
-cljseq defines its own Pitch, Interval, Scale, Chord types (§4) and will implement
-operations on them (transpose, add-interval, chord-build). Music21 can also perform
-these operations. The risk: duplicate implementations diverge; the prize: cljseq
-operations are microsecond-fast (no IPC), Music21 operations are millisecond-slow
-but exhaustive.
-
-The correct division is:
-- **cljseq native**: all operations on the performance path (transpose, scale lookup,
-  chord spelling from Roman numeral, interval arithmetic). These are called in
-  `play!`, `with-harmony`, `sleep!` — sub-millisecond budget.
-- **Music21**: operations that need full musicological depth or corpus access (key
-  analysis, voice leading check, figured bass, counterpoint). These are explicitly
-  async; never on the hot path.
-
-Specifically: cljseq's `analyze/key` should be a thin wrapper over `m21/analyze-key`,
-not a reimplementation of Krumhansl-Schmuckler. The tradeoff is acceptable because
-key analysis is never called per-note.
-
-**Resolution**
-
-Division of labor as defined in §20.8 table. No pitch/interval/scale operations in
-the `cljseq.analyze` namespace should duplicate work Music21 does; they should
-delegate to `cljseq.m21`.
+Division of labour: use cljseq native operations for hot-path work (pitch
+arithmetic, scale lookup, MIDI conversion — microseconds); delegate musicological
+depth to Music21 via `cljseq.m21` (corpus analysis, key detection, voice-leading —
+milliseconds). The §20.8 table is the authoritative mapping; no duplication of
+implementations.
 
 ---
 
-## Q24 — Music21 corpus licensing: distribution policy?
+## Q24 — Music21 corpus licensing: distribution policy? — **RESOLVED**
 
 **R&R reference**: §20.10
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Music21 ships with a built-in corpus including MIDI and MusicXML files. The files have
-varied provenance: some are public domain (Bach, Beethoven, Josquin), some have unclear
-licensing. The cljseq project must not bundle Music21 corpus files in its repository.
-
-The design already handles this: cljseq delegates all corpus access to the Music21
-Python process. No corpus files are copied into the cljseq repo or distribution
-artifact.
-
-The Essen Folksong Collection (included in Music21) is public domain for research use.
-The NKS (virtual corpus) must be installed separately by users.
-
-**Resolution**
-
-cljseq does not redistribute corpus files. `cljseq.m21/search-corpus` and
-`parse-corpus` operate on the user's installed Music21 corpus at runtime. Add a
-documentation note that the corpus is provided by Music21's installation, not cljseq.
-
----
+cljseq does not redistribute any Music21 corpus files. `m21/search-corpus` and
+all corpus access functions operate on the user's locally installed Music21
+installation at runtime. Distribution policy: no bundling.
 
 ---
 
@@ -811,85 +645,42 @@ format (§20.5) already includes `cents_offset`.
 
 ---
 
-## Q26 — Gamelan tuning: per-ensemble files vs. generalized scale parameters?
+## Q26 — Gamelan tuning: per-ensemble files vs. generalized scale parameters? — **RESOLVED**
 
 **R&R reference**: §21.3.1, §7
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Each physical gamelan has its own unique tuning — there is no "standard Pelog" in the
-way there is a standard Western A440. This means:
-
-1. A reference Pelog `.scl` file (as in §21.8) is only an approximation.
-2. For authentic gamelan simulation, the user needs the actual measured tuning of
-   their specific reference ensemble.
-3. For composition, an approximate reference tuning is fine.
-
-The system needs to support both use cases without special-casing gamelan.
-
-**Resolution**
-
-The Scala `.scl` / `.kbm` system (§7) already handles this: ship reference tuning
-files in `resources/scales/gamelan/`; allow users to add their own files to
-`~/.cljseq/scales/`. `(tuning/load! :my-gamelan/pelog)` loads from the user
-directory first, then the bundled resources. No gamelan-specific code needed.
+The Scala `.scl` / `.kbm` system (§7) handles both reference approximations and
+measured per-ensemble tunings without gamelan-specific code. Ship reference tuning
+files in `resources/scales/gamelan/`; allow user files in `~/.cljseq/scales/`.
+`(tuning/load! :my-gamelan/pelog)` searches the user directory first, then bundled
+resources.
 
 ---
 
-## Q27 — Non-Western corpus access via Music21's VirtualCorpus?
+## Q27 — Non-Western corpus access via Music21's VirtualCorpus? — **RESOLVED**
 
 **R&R reference**: §20.7, §21.7
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Music21's built-in corpus has limited non-Western content. The Essen folksong
-collection has some global coverage, but there is no substantial Arabic or gamelan
-corpus. Options:
-
-1. **VirtualCorpus**: Music21 supports registering local directories as additional
-   corpus paths. Users can add their own MusicXML or MIDI files.
-2. **External datasets**: Several non-Western musical corpora exist as research
-   datasets (Farabi corpus for maqam, MIDICPD for gamelan), but they have varied
-   formats and licensing.
-3. **Generate from scale**: for non-Western music, "corpus" may be less relevant
-   than "scale library" — a composer works from the scale/mode structure, not
-   extracted passages.
-
-**Resolution**
-
-Implement `(m21/register-corpus-path! dir)` which calls Music21's `corpus.addPath()`
-via IPC. Document that non-Western corpus access requires the user to provide their
-own files. The cljseq project does not bundle third-party corpus data.
+`(m21/register-corpus-path! dir)` wraps Music21's `corpus.addPath()`. Users
+supply their own non-Western corpus files; cljseq ships none. Documentation
+explains the mechanism and points to known public domain sources (e.g. IRCAM
+Multimedia Library, Humdrum toolkit resources).
 
 ---
 
-## Q28 — Colotomic structure: special API or just `live-loop` with `sleep!`?
+## Q28 — Colotomic structure: special API or just `live-loop` with `sleep!`? — **RESOLVED**
 
 **R&R reference**: §21.3.2
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Gamelan colotomic layers (balungan, bonang, kenong, kendhang, gong) are just
-`live-loop`s with different periods and irama-modulated `sleep!` durations. There
-is no structural difference from ordinary polyrhythm. However, the irama ratio —
-which determines how many bonang notes fit in each balungan note — needs to be
-shared state that all loops read in sync.
-
-**Resolution**
-
-No special API needed. Use `ctrl/bind!` or a shared atom for the irama ratio:
-
-```clojure
-(defonce irama (atom 4))  ; bonang notes per balungan note
-
-(live-loop :bonang
-  (play! :synth/bonang (bonang-elaboration) :dur (/ 1 @irama))
-  (sleep! (/ 1 @irama)))
-```
-
-When `irama` is updated (typically at phrase boundaries), all loops reading the atom
-adapt on their next iteration. Phase-quantize irama changes via `at-sync!` to a gong
-stroke boundary to avoid rhythmic tears.
+No special API. Colotomic layers are polyrhythmic `live-loop`s with a shared irama
+ratio held in an atom or control tree node. Loops read the ratio on each iteration.
+Phase-quantize irama changes via `at-sync!` to the next gong stroke boundary.
 
 ---
 
@@ -960,33 +751,16 @@ the correct sample offset — no fixed-rate JVM polling needed for CLAP.
 
 ---
 
-## Q31 — Arpeggiation library format and corpus extraction pipeline?
+## Q31 — Arpeggiation library format and corpus extraction pipeline? — **RESOLVED**
 
 **R&R reference**: §22.5
 
-**The issue**
+**Resolution** (Sprint 3)
 
-The arpeggiation library consists of two tiers:
-1. **Hand-curated built-in patterns**: defined as EDN maps in `resources/arpeggios/`.
-2. **Corpus-extracted patterns**: derived by the Music21 sidecar from the Bach chorales
-   and other works; written to `resources/arpeggios/corpus-derived.edn`.
-
-Key questions:
-- What constitutes a "pattern" in the corpus? Figuration patterns must be extracted
-  from analysis of the score texture (Alberti bass = sustained bass + alternating
-  chord notes, etc.). This requires Music21's feature extraction.
-- How is the corpus extraction triggered? As a build step, a user command
-  `(corpus/extract-arpeggios!)`, or never (ship pre-extracted)?
-- What is the minimum pattern frequency for inclusion (avoid noise patterns)?
-
-**Exploration path**
-
-1. Ship pre-extracted patterns (avoid requiring the user to run a long extraction job
-   at first use). Extraction is a development-time step that updates the bundled file.
-2. Pattern extraction uses Music21's `analysis.elements` module to identify repeated
-   figurations in each voice. Minimum frequency: 50 occurrences in the Bach corpus.
-3. Pattern format: EDN with `:order`, `:rhythm`, `:dur`, `:source` fields. The
-   `:source` field lists the corpus works where the pattern was found.
+EDN pattern maps with `:order :rhythm :dur :source` fields. Ship pre-extracted
+patterns in `resources/arpeggios/`. Extraction pipeline uses Music21's
+`analysis.elements`; minimum corpus frequency of 50 occurrences filters noise.
+The `:source` field records the corpus work each pattern was extracted from.
 
 ---
 
@@ -1021,166 +795,95 @@ Two problems:
 
 ---
 
-## Q39 — Branch regeneration trigger: pure function vs. reactive watch?
+## Q39 — Branch regeneration trigger: pure function vs. reactive watch? — **RESOLVED**
 
 **R&R reference**: §24.2
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Bloom regenerates all branches whenever the trunk is edited. Two models in cljseq:
+Reactive watch with filter predicate. The `deffractal` macro installs a watch on
+the trunk; regeneration fires only when fields matching the filter change:
 
-**Option A (pure function, explicit call)**: `bloom/build-tree` is called by the
-programmer whenever the trunk changes. No reactivity; the programmer controls when
-branches update.
+```clojure
+(deffractal :my-seq :regen-filter #{:pitch :gate} ...)
+```
 
-**Option B (reactive watch)**: the trunk is a control tree node; a `watch!` callback
-automatically calls `build-tree` on every trunk change and stores the result.
+`(fractal/freeze! name)` disables regeneration temporarily for multi-step edits;
+`(fractal/thaw! name)` re-enables it. Prevents surprise regeneration mid-edit.
 
-**Stakes**: Option A is simpler and avoids surprise re-generation during live editing.
-Option B matches Bloom's behavior exactly. The configurable "Regenerate Branches
-Filter" in Bloom (controls which trunk edits trigger regeneration) suggests Option B
-with a filter predicate is the right design.
-
-**Recommendation**
-
-Option B with filtering: `(bloom name :trunk-path path :regen-filter #{:pitch :gate})`
-— watches the trunk node and regenerates branches only on changes to the allowed
-fields. The programmer can call `(bloom/freeze! name)` to temporarily disable
-regeneration during a multi-step trunk edit.
+Note: the cljseq implementation uses the name `fractal` throughout (namespace
+`cljseq.fractal`, macro `deffractal`). The Teenage Engineering Bloom sequencer is
+the design inspiration; "Bloom" is retained only as an attribution label in §24 of
+the R&R.
 
 ---
 
-## Q40 — Ornament timing: how do ornament sub-steps interact with virtual time?
+## Q40 — Ornament timing: how do ornament sub-steps interact with virtual time? — **RESOLVED**
 
 **R&R reference**: §24.5
 
-**The issue**
+**Resolution** (Sprint 3)
 
-An ornament like a mordent expands one step into 3 sub-steps (current → above →
-current), each lasting 1/3 of the original step duration. The `play!` calls for these
-sub-steps must happen within the original step's virtual time slot.
-
-If the original step has `:dur/beats 1/4`, the three mordent sub-steps should each
-be `1/12` beats. This requires sub-beat `sleep!` calls, which cljseq already supports
-(rationals).
-
-The more complex case: a Trill expands to 8 sub-steps, each `1/32` beats (if the
-step is `1/4` beats). At 120 BPM this is a 31.25ms step — within the scheduler's
-timing budget.
-
-**Resolution**
-
-Ornaments are pure functions that return a sequence of sub-steps. The caller iterates
-over them with ordinary `sleep!`:
-
-```clojure
-(doseq [sub-step (bloom/ornament step :mordent-up context)]
-  (play! target (:pitch/midi sub-step) :dur (:dur/beats sub-step))
-  (sleep! (:dur/beats sub-step)))
-```
-
-No special scheduler support needed. The sub-step durations sum to the original step
-duration by construction.
+Ornaments are pure functions returning a sequence of sub-step maps
+`{:pitch p :dur d :vel v}`. The caller iterates the sequence with ordinary
+`sleep!` calls. Sub-step durations sum to the parent step's duration, so the
+virtual time budget is consumed correctly. No special scheduler support is needed.
 
 ---
 
-## Q41 — Unified step map: is it a protocol, a record, or a plain map?
+## Q41 — Unified step map: is it a protocol, a record, or a plain map? — **RESOLVED**
 
 **R&R reference**: §24.10
 
-**The issue**
+**Resolution** (Sprint 3)
 
-The canonical step map (§24.10) is used by all sequencing primitives. Should it be:
-- **Plain map**: zero overhead, most Clojure-idiomatic, no enforcement
-- **Defrecord**: faster field access, protocol dispatch, but less flexible
-- **Spec**: validation via `clojure.spec.alpha`; documents the schema without a type
-
-**Recommendation**
-
-Plain map with `clojure.spec.alpha/def` for the `:cljseq/step` spec. This provides
-validation (in development, via `instrument`) without imposing a record type on every
-function. The `:pitch/midi`, `:dur/beats`, etc. keys are namespace-qualified, making
-accidental collision with other maps unlikely.
+Plain Clojure map with namespace-qualified keys. `clojure.spec.alpha/def` provides
+validation. Maps are printable, serializable, REPL-friendly, and require no
+import. Namespace qualification (`:step/pitch`, `:step/dur`, `:step/gate`) avoids
+key collisions with user data.
 
 ---
 
-## Q42 — `play-bloom-step!` vs. extending `play!` with step-map overload?
+## Q42 — `play-bloom-step!` vs. extending `play!` with step-map overload? — **RESOLVED**
 
 **R&R reference**: §24.6
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Section §24.6 proposes `play-bloom-step!` as a function that dispatches note, gate,
-ratchet, slew, and mod events from a step map. But `play!` already exists as the
-primary note-playing primitive. Two options:
-
-**Option A**: `play!` accepts a step map as its second argument when passed a map:
-```clojure
-(play! :midi/synth step-map)   ; dispatches all step fields
-(play! :midi/synth 60)          ; legacy: just a MIDI note
-```
-
-**Option B**: `play-bloom-step!` is a separate, explicit name for the richer dispatch.
-
-**Recommendation**
-
-Option A: overload `play!` to accept both a MIDI note and a step map. When a step map
-is passed, dispatch note, ratchet, slew, and mod as a bundle. The mod target is taken
-from the current device's `:mod-target` if not specified in the step map. This keeps
-the API surface small and makes the step map a first-class citizen of `play!`.
+Overload `play!` to accept a step map as its argument. `play!` dispatches on the
+argument type: a step map triggers note, ratchet, slew, and mod fields as a
+coordinated bundle. Keeps the API surface small; no separate `play-fractal-step!`
+function needed.
 
 ---
 
-## Q43 — Path navigation: index sequence or named path strategy?
+## Q43 — Path navigation: index sequence or named path strategy? — **RESOLVED**
 
 **R&R reference**: §24.3
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Bloom's 128 paths at max branches are specific index sequences determined by the
-module's firmware. In cljseq, paths can be:
-- **Integer index** (0–127, matching Bloom's numbering): for hardware compatibility
-- **Named strategy** (`:forward :reverse :random :alternate`): more readable
-- **Explicit index vector** `[0 2 4 2 0 6 4 6]`: maximum flexibility
+Support all three path forms via dispatch in `(fractal/path branches :path p)`:
 
-**Recommendation**
+- **Integer**: firmware-compatible path generated from binary tree encoding
+  (e.g. `3` → left-right-left in a binary tree)
+- **Named strategy**: `:leftmost`, `:rightmost`, `:random`, `:depth-first`
+- **Explicit vector**: `[0 1 0]` for direct branch address
 
-Support all three. `(bloom/path branches :path 3)` accepts integer (Bloom-compatible),
-keyword (named strategy), or vector (explicit indices). Bloom-compatible integer paths
-are generated by the same algorithm as the firmware: path N is determined by treating
-N as a binary number that encodes the branch traversal direction at each level of the
-tree.
+All three are interchangeable at the call site.
 
 ---
 
-## Q34 — DEJA VU ring buffer: identity across live-loop redefinitions?
+## Q34 — DEJA VU ring buffer: identity across live-loop redefinitions? — **RESOLVED**
 
 **R&R reference**: §23.6, §23.9
 
-**The issue**
+**Resolution** (Sprint 3)
 
-A `stochastic-sequence` with DEJA VU maintains an internal ring buffer. When a
-`live-loop` is redefined (the central live-coding operation), the loop body is
-re-evaluated — but if the sequence source is defined inside the loop body, the ring
-buffer is lost and the accumulated "crystallized" pattern resets to empty.
-
-**Resolution**
-
-Declare the sequence source with `defonce` outside the loop body. Because `defonce`
-is a no-op if the var already has a value, the ring buffer persists across REPL
-redefinitions:
-
-```clojure
-(defonce melody-gen
-  (stochastic-sequence :spread 0.4 :deja-vu (atom 0.7) :loop-len 8 ...))
-
-(live-loop :melody
-  (play! :midi/synth (next! melody-gen))
-  (sleep! 1/4))
-```
-
-Document this pattern prominently. The `marbles` macro uses `defonce` internally to
-ensure the context persists when the `live-loop` body is re-evaluated.
+Declare the sequence source with `defonce` outside the loop body. `defonce` survives
+REPL redefinitions and namespace reloads, preserving the ring buffer's accumulated
+history. The `marbles` macro wraps this automatically — users do not need to think
+about it for normal usage.
 
 ---
 
@@ -1215,106 +918,69 @@ question on how swing/humanize fit within the `ITemporalValue` modulation framew
 
 ---
 
-## Q36 — Weighted scale degrees: extension of IntervalNetwork or separate type?
+## Q36 — Weighted scale degrees: extension of IntervalNetwork or separate type? — **RESOLVED**
 
 **R&R reference**: §23.5, §4
 
-**The issue**
+**Resolution** (Sprint 3)
 
-The `IntervalNetwork` model (§4) describes scales as graphs of interval relationships.
-A weighted scale (§23.5) adds probability weights to each degree. Are these the same
-type with an optional weight field, or distinct types?
+Add an optional `:scale/weights` map to the existing scale map — no new type.
+Interval structure says *which* pitches are in the scale; weights say *how likely*
+each degree is to be chosen. Default when `:scale/weights` is absent: uniform
+weights over all degrees.
 
-**Exploration path**
-
-1. The simplest approach: `weighted-scale` is a map from pitch-class (relative to
-   tonic) to weight, alongside the scale's interval structure:
-   ```clojure
-   {:scale/type :major
-    :scale/root :C
-    :scale/weights {0 1.0, 2 0.4, 4 0.8, 5 0.5, 7 0.9, 9 0.4, 11 0.2}}
-   ```
-2. `IntervalNetwork` generates the pitches in the scale; the weight map selects among
-   them. They are orthogonal: interval structure says *which* pitches are in the scale;
-   weights say *how likely* each is to be chosen.
-3. Default `weighted-scale` with no weights specified = uniform weights over the
-   IntervalNetwork's degrees.
-4. No new type needed beyond adding an optional `:scale/weights` key to the existing
-   scale map.
+```clojure
+{:scale/type    :major
+ :scale/root    :C
+ :scale/weights {0 1.0, 2 0.4, 4 0.8, 5 0.5, 7 0.9, 9 0.4, 11 0.2}}
+```
 
 ---
 
-## Q37 — Correlated sequences: how is correlation implemented without shared mutable state?
+## Q37 — Correlated sequences: how is correlation implemented without shared mutable state? — **RESOLVED**
 
 **R&R reference**: §23.7
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Multiple correlated channels share a "parent" random draw but diverge via per-channel
-perturbation. In a concurrent Clojure setting with multiple live-loops reading
-different channels, the parent draw must be the same for all channels on the same
-"step" — but channels may advance at different rates (if clocked differently).
+`promise`-per-step for simultaneously-clocked channels: the first channel to
+advance on a given step computes the parent random draw and delivers the promise;
+all other channels deref the same promise. For independently-clocked channels,
+correlation is approximate (no shared step counter).
 
-**Exploration path**
-
-1. Correlation is only meaningful when channels advance simultaneously (same clock).
-   For simultaneously-clocked channels, use a shared `step-counter` atom: on each
-   `next!` call, check if the step has already been computed; if so, return the
-   pre-computed parent draw for this step.
-2. Implement with a `promise`-per-step: each new step creates a `promise` for the
-   parent draw; the first channel to advance computes the parent draw and delivers
-   it; subsequent channels deref the same promise.
-3. Per-channel perturbation: `channel_value = lerp(parent, (gen-fn), 1 - correlation)`
-   where `(gen-fn)` is an independent per-channel draw.
-4. For independently-clocked channels, correlation is approximate — the "parent" is
-   the most recent shared draw, which may be stale by a few steps.
+Per-channel value:
+```clojure
+(lerp parent-draw (gen-fn) (- 1 correlation))
+```
+where `gen-fn` is an independent per-channel draw and `lerp` blends toward the
+parent at high correlation values.
 
 ---
 
-## Q38 — `marbles` context in the control tree: auto-registration?
+## Q38 — `marbles` context in the control tree: auto-registration? — **RESOLVED**
 
 **R&R reference**: §23.8, §16
 
-**The issue**
+**Resolution** (Sprint 3)
 
-The `marbles` macro creates a generative context with many live parameters (all T and
-X parameters are atoms). Should the macro automatically register these atoms as tree
-nodes at `/cljseq/marbles/<name>/`, or should registration be explicit?
-
-**Resolution**
-
-Auto-register, matching the behavior of `deflive-loop` (§16). The `marbles` macro
-expands to include `ctrl/defnode` calls for each parameter:
-
-```
-/cljseq/marbles/my-gen/t-bias       → atom wrapping t-bias
-/cljseq/marbles/my-gen/t-jitter     → atom wrapping t-jitter
-/cljseq/marbles/my-gen/t-deja-vu    → atom wrapping t-deja-vu
-/cljseq/marbles/my-gen/x-spread     → atom wrapping x-spread
-/cljseq/marbles/my-gen/x-bias       → atom wrapping x-bias
-/cljseq/marbles/my-gen/x-steps      → atom wrapping x-steps
-/cljseq/marbles/my-gen/x-deja-vu    → atom wrapping x-deja-vu
-```
-
-All parameters become MIDI-CC-bindable, OSC-addressable, WebSocket-subscribable,
-and MCP-tool-accessible automatically. A single hardware knob can live-control the
-`deja-vu` parameter of any `marbles` context.
+Auto-register all T/X parameters as control tree nodes at
+`/cljseq/marbles/<name>/` when the `marbles` macro is evaluated. Makes all
+parameters MIDI-CC-bindable, OSC-addressable, and MCP-accessible without any
+explicit registration call. Consistent with `deflive-loop` auto-registration
+behaviour (Q11).
 
 ---
 
-## Q33 — nREPL integration: resolved
+## Q33 — nREPL integration: resolved — **RESOLVED**
 
 **R&R reference**: §13.2
 
-**Resolution**
+**Resolution** (Sprint 3)
 
-See §13 item 2 (updated). Standard nREPL is the developer interface. The control tree
-(§16) is the canonical state model — all introspection happens via `ctrl/ls`,
-`ctrl/describe`, WebSocket subscriptions (§17), or MCP resources (§18). Optional
-`cljseq-nrepl` middleware can add a `cljseq/watch` op for editor-side real-time
-display, but this is a non-blocking development item.
-
-No custom nREPL ops are required for core functionality.
+Standard nREPL is the developer interface; no custom nREPL ops required for core
+functionality. The control tree is the canonical state model. Optional
+`cljseq-nrepl` middleware for editor-side parameter display and loop inspection can
+be added later as a separate library without affecting the core.
 
 ---
 

@@ -4878,7 +4878,7 @@ See `doc/open-design-questions.md` Q34–Q38.
 
 ---
 
-## 24. Bloom-Inspired Sequence Architecture
+## 24. Fractal Sequence Architecture (Bloom-Inspired)
 
 ### 24.1 Overview
 
