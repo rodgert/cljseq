@@ -179,6 +179,11 @@ fixed to date; to be updated as new configurable parameters are decided.
   range remap, polarity inversion), multi-axis combinators.
 - **Arturia KeyStep Pro and BeatStep Pro** exemplar analysis (Sprint 1 summary).
 - **P2P control plane** (Q50) — deferred to post-control-tree-implementation sprint.
+- **Moog Labyrinth exemplar analysis** — separate play/write head architecture, CORRUPT
+  mutation, BIT FLIP CV, EG TRIG MIX; will inform a future sequencer archetype name.
+- **Packaged releases** — binary packaging strategy (AppImage for Linux, Homebrew formula /
+  `.pkg` for macOS, Windows installer); CPack integration; interaction with FetchContent
+  dependency model (Q51). Defer to a future sprint once the C++ implementation is stable.
 
 ---
 

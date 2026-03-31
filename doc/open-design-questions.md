@@ -1413,6 +1413,44 @@ Flag for design when the control tree (§16) implementation is complete and stab
 
 ---
 
+## Q51 — Native C++ dependency strategy — **RESOLVED**
+
+**R&R reference**: build system (§0); raised in Sprint 4 scaffold discussion
+
+**Context**: cljseq's C++ layer (`libcljseq-rt`, `cljseq-sidecar`, `cljseq-audio`) requires
+decisions on how to manage native dependencies (OSC, MIDI, Ableton Link, CLAP) across
+macOS, Linux, and Windows. System packages (Boost as shipped by e.g. Fedora) apply
+distro-specific errata and diverge across platforms; this cannot be assumed consistent.
+
+**Decision**:
+
+1. **Avoid Boost entirely.** C++17 STL covers the value previously obtained from Boost
+   (`std::optional`, `std::variant`, `std::filesystem`, `std::string_view`, `std::chrono`,
+   `std::span` in C++20). No `find_package(Boost)` will appear in any cljseq CMakeLists.
+
+2. **Standalone Asio for the OSC server.** The OSC server requires an async I/O layer with
+   cross-platform POSIX/Windows socket abstraction. Standalone Asio (header-only, no Boost
+   dependency, BSL-1.0 licensed) is the right tool:
+   - Same API as Boost.Asio, so documentation transfers, but zero Boost dependency
+   - Fetched via CMake FetchContent pinned to a specific Asio tag
+   - Eliminates the platform divergence concern entirely
+
+3. **Ableton Link**: CMake FetchContent, pinned tag, behind `CLJSEQ_ENABLE_LINK=ON` opt-in
+   flag. Link ships its own CMake integration and is a well-behaved FetchContent target.
+
+4. **CLAP headers**: header-only, git submodule pinned to a release tag. No build step.
+
+5. **General rule for any future dependency**: prefer header-only; use FetchContent with
+   a pinned version for anything with a build step; document the pinned version and
+   rationale in the CMakeLists comment. Never use `find_package` for a library that
+   could diverge across platforms via distro packaging.
+
+6. **Packaged releases**: captured as a future sprint topic. Binary packaging (AppImage,
+   Homebrew formula, Windows installer) and CPack integration will need to account for
+   the FetchContent dependency model. See Future Design Topics.
+
+---
+
 ## Exploration Priorities
 
 | # | Question | Blocking? | Effort |
@@ -1467,3 +1505,4 @@ Flag for design when the control tree (§16) implementation is complete and stab
 | Q48 | Patch system: named tree states with beat-aware application | **Yes** — needed before control tree impl | Medium — builds on Q47 atom model |
 | Q49 | Synth-style morphs: named input→parameter-set mappings | No — needed before §16 morph impl | Medium — surface explicit concept in DSL |
 | Q50 | P2P control plane: peer discovery and remote tree composition | No — future capability | Low — ensure design doesn't close it off |
+| Q51 | Native C++ dependency strategy: Boost, Asio, Link, CLAP | No — build infrastructure | Medium — resolved: STL + standalone Asio + FetchContent |

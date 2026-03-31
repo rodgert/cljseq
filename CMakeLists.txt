@@ -10,6 +10,32 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ---------------------------------------------------------------------------
+# Dependency policy (Q51)
+#
+# - No Boost. C++17 STL is sufficient for all use cases.
+# - Standalone Asio (BSL-1.0, header-only) for async I/O / OSC server.
+#   Fetched via FetchContent at a pinned tag — no system package assumption.
+# - Ableton Link via FetchContent, behind CLJSEQ_ENABLE_LINK opt-in flag.
+# - CLAP headers via git submodule (header-only, no build step).
+# - General rule: FetchContent + pinned tag for anything with a build step;
+#   no find_package for libraries that diverge across distro packaging.
+# ---------------------------------------------------------------------------
+
+include(FetchContent)
+
+# Standalone Asio — async I/O for OSC server (Q12, Q51)
+# BSL-1.0; header-only; same API as Boost.Asio without the Boost dependency.
+# Pin: asio-1-30-2 — update deliberately and document the reason.
+FetchContent_Declare(asio
+  GIT_REPOSITORY https://github.com/chriskohlhoff/asio.git
+  GIT_TAG        asio-1-30-2
+  GIT_SHALLOW    TRUE)
+FetchContent_MakeAvailable(asio)
+add_library(asio INTERFACE)
+target_include_directories(asio INTERFACE ${asio_SOURCE_DIR}/asio/include)
+target_compile_definitions(asio INTERFACE ASIO_STANDALONE)
+
+# ---------------------------------------------------------------------------
 # Build options
 # ---------------------------------------------------------------------------
 
