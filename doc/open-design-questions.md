@@ -1451,6 +1451,91 @@ distro-specific errata and diverge across platforms; this cannot be assumed cons
 
 ---
 
+## Q52 — Per-step `:probability` and `:time-shift` on the step map — **RESOLVED**
+
+**R&R reference**: §6 (step map); raised by KeyStep Pro exemplar analysis (Sprint 5)
+
+**Decision**: Both keys are added to the core step map spec as optional keys. `nil`
+(or absent) means the default behaviour — the step fires unconditionally and has zero
+timing offset.
+
+```clojure
+;; Step with both optional keys
+{:pitch/midi  64
+ :dur/beats   1/4
+ :velocity    80
+ :gate        0.75
+ :probability 0.75   ; fires ~75% of passes; nil = always fire
+ :time-shift  1/32}  ; push 1/32 beat late; nil = no offset
+```
+
+**`:probability` mechanics**: sampled once per step pass via `(< (rand) probability)`.
+No new protocol machinery — it is evaluated in the step scheduler before the event
+is dispatched.
+
+**`:time-shift` mechanics**: a beat-fraction offset (rational), additive with any
+`timing/bind!` modulators. Positive = late, negative = early. Applied at the same
+point as the swing offset: after Link `timeAtBeat`, before IPC dispatch.
+
+**Default cascade**: `:velocity` and `:gate` already inherit from track/global defaults
+when absent. `:probability` defaults to `1.0` (unconditional) and `:time-shift`
+defaults to `0` when absent.
+
+---
+
+## Q53 — `defflux` read/write head concurrency model — **RESOLVED**
+
+**R&R reference**: §26.5; raised by Moog Labyrinth exemplar analysis (Sprint 5)
+
+**Decision**: Vector of atoms — one Clojure atom per step position.
+
+```clojure
+;; Conceptual structure of the defflux step buffer
+(vec (repeatedly n #(atom {:value 60 :gate true})))
+```
+
+**Rationale**: Independent atoms per position means:
+- The read head and write head can operate concurrently without any global lock
+- Contention only arises when both heads are at the same position simultaneously —
+  this is a rare, musically interesting event (the write head is overwriting a step
+  that is currently playing), not a performance problem
+- The CORRUPT process uses `swap!` on randomly selected position atoms — no lock needed
+- Single-atom-of-vector (`swap!` replacing the whole vector) would create allocation
+  pressure at high mutation rates and would serialize all write operations
+
+**Consequence**: `defflux` initializes its buffer as:
+```clojure
+(defonce buffer (vec (repeatedly steps #(atom default-step))))
+```
+
+---
+
+## Q54 — Scale as `ITemporalValue` in the output quantization stage — **RESOLVED**
+
+**R&R reference**: §26.4; raised by Moog Labyrinth exemplar analysis (Sprint 5)
+
+**Decision**: The output stage's scale quantization accepts either a static keyword
+or any `ITemporalValue`. When an `ITemporalValue` is provided, it is sampled once
+per step output and the resulting keyword is used as the scale.
+
+```clojure
+;; Static scale (common case)
+(defflux :simple {:scale :dorian ...})
+
+;; Dynamic scale (ITemporalValue; sampled per step)
+(defflux :morphing
+  {:scale (fn [beat]                           ; ITemporalValue as fn
+             (nth [:major :dorian :mixolydian]
+                  (mod (long (* beat 0.05)) 3)))
+   ...})
+```
+
+This extends Q8 (control tree node types) — a `:scale` node can hold a keyword
+or an `ITemporalValue`. The same pattern applies wherever a static parameter could
+benefit from time-varying behaviour (a general principle, not a special case of `defflux`).
+
+---
+
 ## Exploration Priorities
 
 | # | Question | Blocking? | Effort |

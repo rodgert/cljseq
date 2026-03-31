@@ -18,12 +18,16 @@
   :codox {:output-path "target/codox"
           :namespaces [cljseq.clock
                        cljseq.ctrl
+                       cljseq.device
+                       cljseq.dsl
+                       cljseq.flux
                        cljseq.fractal
                        cljseq.loop
                        cljseq.m21
                        cljseq.stochastic
                        cljseq.mod
                        cljseq.morph
+                       cljseq.random
                        cljseq.sidecar
                        cljseq.timing]
           :source-uri "https://github.com/YOUR_ORG/cljseq/blob/{version}/{filepath}#L{line}"})

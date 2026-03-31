@@ -5299,3 +5299,220 @@ validation rules. Until then, these values are compile-time defaults.
 | `link-quantum` | 4 beats | `Long` beats, > 0 | Ableton Link | §15.4 |
 | `osc-control-port` | 57121 | `Long`, 1024–65535 | OSC control-plane server | Q12, §17.1 |
 | `osc-data-port` | 57110 | `Long`, 1024–65535 | OSC data-plane / sidecar passthrough | Q12, §17.1 |
+
+---
+
+## 26. Flux Sequence Architecture (Labyrinth-Inspired)
+
+Inspired by the Moog Labyrinth Eurorack sequencer (see `doc/attribution.md`).
+`defflux` is a step sequencer archetype in which a **read head** and a **write
+head** operate independently on a shared circular step buffer.
+
+### 26.1 Core Model
+
+A `defflux` instance maintains:
+- A circular step buffer: N positions, each holding a current value (MIDI note
+  or parameter value) and a gate state
+- A read head: advances at a configurable clock rate and direction; emits events
+  to an output target on each step
+- A write head: advances at its own clock rate and direction; writes values from
+  a configurable source (any `ITemporalValue`) into buffer positions
+- An optional CORRUPT process: applies probabilistic bit-level mutation to stored
+  values at its own clock rate, with an `ITemporalValue` intensity control
+
+The three processes (read, write, CORRUPT) are concurrent but operate on independent
+atoms per step position, so they do not contend unless two heads are at the same
+position simultaneously — which is musically interesting, not an error.
+
+### 26.2 API
+
+```clojure
+(defflux :evolving
+  {:steps   16
+   :scale   (scale :C :dorian)       ; optional output-stage quantization
+   :read    {:clock     master-clock
+             :direction :forward}
+   :write   {:clock     (clock-div 3 master-clock)
+             :source    (lfo :rate 0.1)
+             :direction :forward}
+   :corrupt {:intensity (lfo :rate 0.05)  ; ITemporalValue drives corruption rate
+             :clock     (clock-div 4 master-clock)}
+   :output  {:target :midi/synth :channel 1}})
+
+;; React to corruption events (BIT FLIP equivalent)
+(flux/on-corrupt! :evolving
+  (fn [step-idx _old-val _new-val]
+    (ctrl/send! [:env/trig] 1)))
+
+;; Freeze the read head at current position
+(flux/freeze! :evolving)
+
+;; Query current read-head position
+(flux/read-pos :evolving)    ;=> 7
+
+;; Query current write-head position
+(flux/write-pos :evolving)   ;=> 3
+```
+
+### 26.3 CORRUPT Mutation Model
+
+CORRUPT applies a probabilistic bit-flip to the integer representation of stored
+step values. The probability of flipping bit N decreases with N's significance:
+high-order bits (octave-level) are least likely; low-order bits (semitone-level)
+are most likely. At low intensity the mutation is subtle pitch drift; at high
+intensity octave jumps and register crossing occur.
+
+### 26.4 Scale as `ITemporalValue` (Q54)
+
+The `:scale` parameter in `defflux` (and in any output-stage quantization) accepts
+either a static keyword (`:dorian`, `:major`, etc.) or an `ITemporalValue`. When an
+`ITemporalValue` is provided, it is sampled on each step output and the resulting
+keyword is applied as the quantization scale. This enables CV-controlled scale
+morphing matching the Labyrinth's scale mode behavior.
+
+### 26.5 Concurrency Model (Q53)
+
+Each step position is an independent Clojure atom (`(vec (repeatedly n atom))`).
+The read and write heads hold only their current position index and clock state.
+Concurrent access to the same position is handled by `swap!` on the per-step atom;
+no global lock is required. The CORRUPT process uses `swap!` on randomly selected
+step atoms.
+
+### 26.6 Design Questions
+
+- **Q53**: `defflux` read/write head concurrency model — resolved: vector of atoms
+- **Q54**: Scale as `ITemporalValue` in output quantization — resolved: accepted; sampled per step output
+
+
+## 27. DSL Sugar Layer
+
+The sugar layer provides concise interactive forms layered on top of the core API.
+All sugar is implemented as macros or functions in `cljseq.dsl` and re-exported
+from `cljseq.core`. The underlying protocol-level API (`play!` with a full step map,
+`deflive-loop`, `ctrl/bind!`, etc.) remains available and is what the sugar expands to.
+
+The forms below are prioritised by frequency of use at the REPL during live performance.
+
+### 27.1 Note Playback
+
+```clojure
+;; Shorthand play — pitch keyword or MIDI integer; uses *default-dur*
+(play! :C4)          ;=> (play! {:pitch/midi 60 :dur/beats *default-dur*})
+(play! 60)           ;=> (play! {:pitch/midi 60 :dur/beats *default-dur*})
+(play! :C4 1/2)      ;=> (play! {:pitch/midi 60 :dur/beats 1/2})
+
+;; *default-dur* is a dynamic var; default value 1/4 beat
+;; Set globally:
+(set-default-dur! 1/8)
+
+;; Set for a scope:
+(with-dur 1/8
+  (play! :C4)
+  (play! :E4))
+```
+
+### 27.2 Phrase Playback
+
+```clojure
+;; Uniform duration
+(phrase! [:C4 :E4 :G4 :C5] :dur 1/4)
+
+;; Pitch/duration pairs
+(phrase! [:C4 1/4  :E4 1/8  :G4 1/8  :C5 1/2])
+
+;; Both expand to: (doseq [...] (play! n d) (sleep! d))
+```
+
+`phrase!` is a macro so that the pitch vector is not evaluated eagerly in the
+context of the surrounding `live-loop`.
+
+### 27.3 Conditional / Structural Forms
+
+```clojure
+;; Fire every N beats (relative to loop's internal beat counter)
+(every 4 :beats
+  (play! :C4 1))
+
+;; Fire with probability 1/N
+(one-in 4
+  (play! :C4))
+
+;; Both are macros — body is only evaluated when the condition is met
+```
+
+`every` tracks a loop-local counter using a `defonce` atom. It is designed for
+use inside `deflive-loop`.
+
+### 27.4 Cycling Sequences
+
+```clojure
+;; Returns an infinite cycling seq with a cljseq ring type that tracks position
+(def my-ring (ring :C4 :E4 :G4 :B4))
+
+;; tick! returns the next value and advances the ring
+(tick! my-ring)     ;=> :C4
+(tick! my-ring)     ;=> :E4
+
+;; reset! returns ring to start
+(ring/reset! my-ring)
+```
+
+`ring` returns a stateful object backed by a Clojure atom holding the current
+index. Compared to `(cycle [...])` it is:
+- Bounded (its length is known: `(ring/len my-ring)`)
+- Resettable
+- Registered in the control tree if named with `defring`
+
+### 27.5 Chord Playback
+
+```clojure
+;; Absolute chord (no harmonic context required)
+(play-chord! :C4 :major)
+(play-chord! :C4 :minor :dur 1)
+
+;; Arpeggiate a chord
+(arp! :C4 :major :up 1/16)     ; ascending, 16th-note steps
+(arp! :C4 :major :down 1/8)    ; descending, 8th-note steps
+(arp! :C4 :major :up-down 1/16)
+```
+
+`play-chord!` resolves the chord to MIDI notes and calls `play!` for each.
+`arp!` plays notes sequentially with `sleep!` between each.
+
+### 27.6 Scale / Random Helpers
+
+```clojure
+;; Random note from a scale (interactive improvisation helper)
+(choose-from-scale :C :major)    ;=> 67 (random MIDI note in C major)
+(choose-from-scale :C :dorian 4) ;=> MIDI note in C dorian within octave 4
+
+;; Use with play!
+(play! (choose-from-scale :C :minor))
+```
+
+### 27.7 Synth Context
+
+```clojure
+;; Set default routing for following play! calls within scope
+(with-synth :piano
+  (play! :C4)
+  (phrase! [:E4 :G4] :dur 1/4))
+
+;; Persistent default (until changed)
+(use-synth! :piano)
+```
+
+`use-synth!` sets a control tree path `[:default/synth]`. `with-synth` binds
+it dynamically within a scope.
+
+### 27.8 Implementation Notes
+
+All sugar forms live in `cljseq.dsl` and are re-exported from `cljseq.core` via
+`:refer :all` in the ns form (or explicit refer list). The underlying `play!`
+accepting a full step map remains the canonical form; sugar forms expand to it.
+
+Dynamic vars used by the sugar layer:
+- `*default-dur*` — default note duration in beats; default `1/4`
+- `*default-synth*` — overridden by `use-synth!` / `with-synth`
+
+Both are registered in the Configuration Registry (§25).
