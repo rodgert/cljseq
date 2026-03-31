@@ -1757,3 +1757,29 @@ VST3 be prioritised — same sprint as `defrack`, or a subsequent phase?
 **Question**: Can audio connections be added or removed while the graph is running?
 Requires synchronisation between audio callback thread and IPC thread; likely needs
 double-buffer or copy-on-write for the processing graph applied between callbacks.
+
+---
+
+## Q66 — DAWProject export scope
+
+**R&R reference**: §31.5
+
+**Status**: Future sprint
+
+**Question**: Should DAWProject export be limited to captured MIDI clips and the tempo
+map (Phase A), or should it also include automation curves and CLAP plugin states
+(Phase B)? What triggers a capture — explicit `export!` call, or automatic on
+`stop!`?
+
+---
+
+## Q67 — DAWProject import granularity
+
+**R&R reference**: §31.5
+
+**Status**: Future sprint
+
+**Question**: Should import support full project reconstruction (mapping DAWProject
+track hierarchy to cljseq constructs and generating a `defrack` form) or only
+selective import (tempo map, MIDI clips)? Selective import is lower risk for Phase 1;
+full import requires resolving the `defrack` generation strategy first.

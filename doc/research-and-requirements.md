@@ -7183,3 +7183,133 @@ Can an audio connection be added or removed while the graph is running? This req
 careful synchronisation between the audio callback thread and the IPC command thread.
 The audio process must apply graph modifications between buffer callbacks (not during),
 which requires a double-buffer or copy-on-write approach for the processing graph.
+
+---
+
+## 31. DAWProject Interchange Format (Future Sprint)
+
+**Status**: Future design sprint — not Phase 0/1/2.
+**Reference**: https://github.com/bitwig/dawproject — MIT license, official Java SDK,
+XSD schemas. Developed by Bitwig and Steinberg; supported by Bitwig Studio 5+,
+Studio One 6.5+, Cubase 14, VST Live 2.2.
+
+### 31.1 What DAWProject Is
+
+DAWProject (`.dawproject`) is an open DAW interchange format: a ZIP archive containing
+`project.xml` (main project data), `metadata.xml`, embedded audio files, and plugin
+state files. XML schema (XSD) governs the format; a Java reference SDK is available.
+
+Key capabilities captured by the format:
+
+| Category | Content |
+|----------|---------|
+| Timing | Tempo track (BPM automation), time signature changes, markers |
+| Arrangement | Tracks, clips (MIDI and audio), clip launcher scenes |
+| MIDI | Note sequences with velocity and expression |
+| Automation | Parameter curves (points-based with interpolation modes) |
+| Plugin state | CLAP, VST3, VST2, AU — state blobs as ZIP-embedded files |
+| Mix | Channel hierarchy, sends, built-in EQ/compressor/gate parameters |
+| Metadata | Artist, composer, copyright, tempo, key, genre |
+
+Intentionally excluded: view settings, preferences, low-level MIDI events.
+
+### 31.2 Value Assessment for cljseq
+
+**High value — export path (cljseq → DAW)**:
+
+The primary workflow is "sketch in cljseq, finish in a DAW." A live-coded session
+produces patterns, modulation curves, and plugin configurations that a producer then
+wants to arrange, mix, and export. DAWProject provides a clean bridge:
+
+```
+deflive-loop patterns  →  MIDI clips in arrangement
+ctrl/send! automation  →  parameter automation curves
+defdevice + CLAP state →  plugin instances with loaded presets
+:config :bpm / :time-sig →  tempo track + time signature
+```
+
+This is the "sketch-to-DAW" workflow: cljseq as a generative composition and
+performance tool that hands off to Bitwig, Studio One, or Cubase for production.
+
+**Medium value — import path (DAW → cljseq)**:
+
+Selective import is useful for specific use cases:
+- **Tempo map**: import BPM automation and time signature changes from a video project
+  or collaboration; ingest into cljseq's system-state timeline (§29.9)
+- **MIDI clips**: import reference material as seed sequences for `deffractal` trunks,
+  `defstochastic` weighted scale learning, or `defflux` buffer initialisation
+- **Plugin states**: load a plugin's `.dawproject` state blob into a running
+  `cljseq-audio` session — equivalent to loading a preset saved in Bitwig
+
+Full round-trip import (entire project) is lower priority; the format's "notable
+omissions" (MIDI events at the granular level, view data) mean it is not a lossless
+representation of a cljseq session.
+
+**Low value — using the Java SDK as a dependency**:
+
+The official SDK is a Java 16+ Gradle/Maven project using XML class annotations to
+generate schemas. Taking it as a JVM dependency is feasible but adds build complexity.
+A thin Clojure implementation using `clojure.data.xml` and `java.util.zip` covers the
+cljseq-relevant subset with no added dependency and is straightforward to write from
+the published XSD schemas.
+
+### 31.3 cljseq Concept → DAWProject Mapping
+
+| cljseq concept | DAWProject equivalent |
+|---------------|----------------------|
+| `deflive-loop` pattern (one pass) | MIDI clip on an instrument track |
+| `play!` note events | MIDI note elements with velocity |
+| `ctrl/send!` parameter automation | Automation lane on a plugin parameter |
+| `lfo` / `envelope` curves | Automation points with interpolation mode |
+| `:config :bpm` | Tempo track point |
+| `:config :time-sig` | TimeSignature element |
+| `defdevice` + loaded CLAP state | `<ClapPlugin>` element + state file |
+| Rack variation snapshot (§30.5) | DAWProject clip with parameter values |
+| Session markers / loop points | Marker track elements |
+
+The tempo track and time signature elements in DAWProject align directly with the
+§29.9 master timeline design — a cljseq session's time configuration serialises
+naturally.
+
+### 31.4 Technical Notes
+
+**Format**: ZIP archive. In Clojure: `java.util.zip.ZipInputStream` /
+`ZipOutputStream` with `clojure.data.xml` for XML serialisation. No external
+dependencies needed.
+
+**Automation curves**: DAWProject uses a points-based model (list of `[time value]`
+pairs with interpolation mode: `linear`, `hold`, `curved`). This maps directly to
+the `envelope` breakpoints from §28.7 — cljseq's piecewise-linear envelopes can be
+serialised as DAWProject automation with `linear` interpolation.
+
+**Plugin state blobs**: CLAP plugin states are stored as opaque binary files within
+the ZIP, referenced by path from `project.xml`. The `cljseq-audio` sidecar can
+request a state blob from a loaded plugin via `CLAP_EXT_STATE` and write it into the
+ZIP; on import, it can deliver the blob back to the plugin to restore its state.
+
+**MIDI representation**: DAWProject's MIDI note model (pitch, velocity, start time,
+duration) maps directly to the cljseq step map (`:pitch/midi`, `:dur/beats`,
+`:gate/on?`, `:mod/value` for velocity). The time values in DAWProject are in beats
+(quarter notes) — same anchor as cljseq's rational beat positions (§29.2).
+
+**Bitwig as the primary interchange target**: Bitwig Studio and cljseq share two
+foundational choices — CLAP as the primary plugin standard and Ableton Link for
+network sync. A cljseq session exported to DAWProject will have the best fidelity
+when imported into Bitwig, including CLAP plugin states.
+
+### 31.5 Design Questions for the Sprint
+
+**Q66 — Export scope: what cljseq constructs should export to DAWProject?**
+
+Should export be limited to captured patterns (MIDI clips from rendered loop
+iterations) or should it also include live modulation curves, plugin configurations,
+and the tempo/time-signature timeline? A phased approach: Phase A exports MIDI clips
+and tempo map; Phase B adds automation curves and plugin states.
+
+**Q67 — Import granularity: full project or selective?**
+
+Full project import requires mapping the complete DAWProject track hierarchy to
+cljseq constructs (or producing a `defrack` form from the DAWProject's plugin chain).
+Selective import (tempo map only, or MIDI clips only) is simpler and covers the
+immediate use cases. Recommendation: selective import first; full import as a later
+phase if the demand exists.
