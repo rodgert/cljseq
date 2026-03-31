@@ -5383,6 +5383,477 @@ step atoms.
 - **Q53**: `defflux` read/write head concurrency model — resolved: vector of atoms
 - **Q54**: Scale as `ITemporalValue` in output quantization — resolved: accepted; sampled per step output
 
+### 26.7 Complete API Reference
+
+All public symbols are in `cljseq.flux`. Import with:
+
+```clojure
+(require '[cljseq.flux :as flux])
+```
+
+#### `defflux` — define a flux sequence
+
+```clojure
+(defflux name option-map)
+```
+
+Defines and starts a named flux sequence. Registers it in the control tree at
+`/cljseq/flux/<name>/`. Returns `name`.
+
+**Option map keys:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `:steps` | integer | 16 | Number of positions in the circular step buffer |
+| `:init` | value or `[value]` | 60 | Initial MIDI value written to all (or each) step |
+| `:scale` | keyword or `ITemporalValue` | `nil` | Output-stage scale quantization; sampled per read step (Q54) |
+| `:read` | map | `{:clock master-clock :direction :forward}` | Read head configuration (see below) |
+| `:write` | map or `nil` | `nil` | Write head configuration; `nil` disables the write head |
+| `:corrupt` | map or `nil` | `nil` | CORRUPT process configuration; `nil` disables CORRUPT |
+| `:output` | map | `{:target :stdout}` | Output routing for read-head events |
+
+**`:read` sub-keys:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `:clock` | `ITemporalValue` | `master-clock` | Clock source driving the read head |
+| `:direction` | `:forward` `:backward` `:ping-pong` `:random` | `:forward` | Read head advance direction |
+| `:start` | integer | 0 | Initial read position (0-indexed) |
+
+**`:write` sub-keys:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `:clock` | `ITemporalValue` | `(clock-div 2 master-clock)` | Clock source driving the write head |
+| `:source` | `ITemporalValue` or fn | required | Value generator; sampled on each write step |
+| `:direction` | same as `:read` | `:forward` | Write head advance direction |
+| `:start` | integer | 0 | Initial write position |
+| `:transform` | fn or `nil` | `nil` | `(fn [old-val new-val] -> val)` applied before writing; enables merge strategies |
+
+**`:corrupt` sub-keys:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `:clock` | `ITemporalValue` | `(clock-div 4 master-clock)` | Clock source driving the CORRUPT process |
+| `:intensity` | number or `ITemporalValue` | 0.1 | Mutation intensity [0.0–1.0]; sampled per CORRUPT tick |
+| `:target` | `:all` `:read-region` `:write-region` | `:all` | Which steps are eligible for corruption |
+
+**`:output` sub-keys:**
+
+| Key | Type | Description |
+|-----|------|-------------|
+| `:target` | keyword or path | Output target (`:stdout`, `:midi/synth`, control tree path) |
+| `:channel` | integer | MIDI channel (1–16); only meaningful for MIDI targets |
+
+**Example:**
+
+```clojure
+(defflux :melody
+  {:steps   16
+   :init    60
+   :scale   :C :dorian
+   :read    {:clock     master-clock
+             :direction :forward}
+   :write   {:clock     (clock-div 3 master-clock)
+             :source    (lfo :rate 0.1)
+             :direction :forward}
+   :corrupt {:intensity (lfo :rate 0.05)
+             :clock     (clock-div 8 master-clock)}
+   :output  {:target :midi/synth :channel 1}})
+```
+
+---
+
+#### `flux/freeze!` / `flux/unfreeze!` — suspend/resume the read head
+
+```clojure
+(flux/freeze!   name)   ; suspends read head at current position
+(flux/unfreeze! name)   ; resumes read head
+```
+
+The write head and CORRUPT process continue while frozen. Freeze captures the
+current read position; `unfreeze!` resumes from that position.
+
+---
+
+#### `flux/freeze-write!` / `flux/unfreeze-write!` — suspend/resume the write head
+
+```clojure
+(flux/freeze-write!   name)
+(flux/unfreeze-write! name)
+```
+
+Suspends the write head; the step buffer is no longer updated. Useful to lock
+in an evolved sequence state.
+
+---
+
+#### `flux/read-pos` / `flux/write-pos` — query head positions
+
+```clojure
+(flux/read-pos  name)   ;=> integer [0, steps)
+(flux/write-pos name)   ;=> integer [0, steps)
+```
+
+Returns the current 0-indexed position of the read or write head.
+
+---
+
+#### `flux/peek` — read buffer without advancing
+
+```clojure
+(flux/peek name)            ;=> vector of all step values
+(flux/peek name step-idx)   ;=> value at step-idx
+```
+
+Non-destructive read. Does not advance any head or trigger output.
+
+---
+
+#### `flux/set-step!` — manual step write
+
+```clojure
+(flux/set-step! name step-idx value)
+```
+
+Writes `value` directly to position `step-idx`. This is a manual override that
+bypasses the write head and its clock. Useful for seeding the buffer or
+correcting corruption.
+
+---
+
+#### `flux/reset!` — reinitialise the step buffer
+
+```clojure
+(flux/reset! name)           ; reset to the :init value from defflux
+(flux/reset! name init-val)  ; reset all steps to init-val
+(flux/reset! name [v0 v1 …]) ; reset each step to the corresponding value
+```
+
+---
+
+#### `flux/on-corrupt!` — register a corruption event listener
+
+```clojure
+(flux/on-corrupt! name callback-fn)
+```
+
+Registers `callback-fn` to be called each time the CORRUPT process mutates a
+step. See §26.9 for the full callback contract.
+
+---
+
+#### `flux/remove-corrupt-listener!` — deregister a listener
+
+```clojure
+(flux/remove-corrupt-listener! name callback-fn)
+```
+
+Removes a previously registered `on-corrupt!` callback (by identity).
+
+---
+
+#### `flux/stop!` — stop and deregister
+
+```clojure
+(flux/stop! name)
+```
+
+Stops all three processes (read, write, CORRUPT) and removes the entry from the
+control tree. Analogous to stopping a `deflive-loop`.
+
+---
+
+### 26.8 CORRUPT Mutation Algorithm
+
+The CORRUPT process runs on its own clock (`(clock-div k master-clock)` by default).
+On each tick it:
+
+1. Samples `:intensity` (an `ITemporalValue` or constant in [0.0, 1.0])
+2. Selects a target step (uniform random draw from eligible positions, per `:target` policy)
+3. Applies `corrupt-value` to the current step value
+4. If the value changed, writes the new value back to the step atom and fires all
+   registered `on-corrupt!` callbacks
+
+```clojure
+(defn corrupt-value
+  "Apply probabilistic bit-level mutation to MIDI integer `v` at `intensity`.
+
+  Bits are indexed 0 (LSB) through 6 (covers MIDI range 0–127).
+  Flip probability for bit N is: intensity / (1 + N)
+  This creates a profile where low-order bits (semitone detail) are most
+  likely to flip at any intensity, and high-order bits (octave register) flip
+  only at high intensity.
+
+  Result is clamped to [0, 127] to remain a valid MIDI note number."
+  [v intensity]
+  (let [flip-mask (reduce bit-or 0
+                   (for [bit (range 7)
+                         :when (< (rand) (/ (double intensity) (inc bit)))]
+                     (bit-shift-left 1 bit)))]
+    (max 0 (min 127 (bit-xor v flip-mask)))))
+```
+
+**Probability schedule at representative intensities:**
+
+| Intensity | Bit 0 (1¢ equiv.) | Bit 1 | Bit 2 | Bit 3 | Bit 4 | Bit 5 | Bit 6 (octave) |
+|-----------|-------------------|-------|-------|-------|-------|-------|----------------|
+| 0.05 | 5% | 2.5% | 1.7% | 1.25% | 1% | 0.8% | 0.7% |
+| 0.2  | 20% | 10% | 6.7% | 5% | 4% | 3.3% | 2.9% |
+| 0.5  | 50% | 25% | 17% | 12.5% | 10% | 8.3% | 7.1% |
+| 1.0  | 100% | 50% | 33% | 25% | 20% | 17% | 14% |
+
+At intensity 1.0, bit 0 always flips (±1 semitone guaranteed). Bits 5–6 flip
+roughly once every 6–7 ticks — octave jumps are occasional even at maximum
+intensity, matching the hardware character.
+
+**Musical character by intensity range:**
+
+| Range | Character |
+|-------|-----------|
+| 0.0–0.1 | Imperceptible; rare ±1 semitone micro-drift |
+| 0.1–0.3 | Subtle pitch drift; occasional semitone neighbour-note ornaments |
+| 0.3–0.6 | Melodic mutation; 3rds and 5ths appear; sequence evolves perceptibly |
+| 0.6–0.9 | Aggressive mutation; octave jumps; original sequence partially obscured |
+| 0.9–1.0 | Near-random; sequence degrades toward noise |
+
+---
+
+### 26.9 `on-corrupt!` Callback Contract
+
+```clojure
+(flux/on-corrupt! :my-flux
+  (fn [step-idx old-val new-val]
+    ;; react to mutation
+    ))
+```
+
+**Arguments passed to the callback:**
+
+| Arg | Type | Description |
+|-----|------|-------------|
+| `step-idx` | integer | 0-indexed position in the step buffer that was mutated |
+| `old-val` | integer | Value before the bit-flip(s) |
+| `new-val` | integer | Value after the bit-flip(s) and clamping |
+
+**Contract:**
+
+- The callback is invoked **in the CORRUPT process thread** (not the read-head
+  thread, not the calling thread). Side-effecting code must be thread-safe.
+- The callback is called **after** the new value is written to the step atom,
+  so a concurrent read head reading that position will see the new value.
+- **Multiple callbacks** registered on the same flux are called in registration
+  order. All are called even if one is slow; they share the CORRUPT tick budget.
+- **Exceptions** thrown from a callback are caught, printed to `*err*`, and do
+  not abort the CORRUPT process or prevent subsequent callbacks from running.
+- **Deregistration** is by identity (`=` on the fn object). Store the fn in a
+  var if you intend to deregister it later.
+- **No callback** is fired if `corrupt-value` returns `old-val` unchanged (no
+  bits flipped, or all flips cancelled out). The no-op case is common at low
+  intensity.
+
+**Typical uses:**
+
+```clojure
+;; Trigger an envelope each time a corruption fires (BIT FLIP equivalent)
+(flux/on-corrupt! :melody
+  (fn [_idx _old _new]
+    (ctrl/send! [:env/trig] 1)))
+
+;; Log the mutation delta for diagnostic purposes
+(flux/on-corrupt! :melody
+  (fn [idx old new]
+    (println (format "corrupt step=%d %d→%d (Δ%+d)" idx old new (- new old)))))
+
+;; Suppress large jumps: if new-val is more than an octave away, revert
+(flux/on-corrupt! :melody
+  (fn [idx old new]
+    (when (> (Math/abs (- new old)) 12)
+      (flux/set-step! :melody idx old))))
+```
+
+The last example shows the "soft limit" pattern: an `on-corrupt!` callback
+that rolls back mutations exceeding a musical threshold, effectively bounding
+the CORRUPT character while retaining fine drift.
+
+---
+
+### 26.10 Interaction with `defstochastic` (§23)
+
+`defflux` and `defstochastic` address orthogonal aspects of generative sequencing
+and compose naturally.
+
+#### Write head driven by a stochastic X-section
+
+The write head's `:source` accepts any `ITemporalValue`, including a
+`defstochastic` X-section output. This combines Marbles-style distribution
+shaping with Labyrinth-style buffer inscription:
+
+```clojure
+(defstochastic :gen
+  :x-spread 0.5 :x-bias 0.6 :x-steps 0.7
+  :x-scale (weighted-scale :C :major)
+  :channels 1)
+
+(defflux :stoch-flux
+  {:steps  16
+   :write  {:clock  (clock-div 2 master-clock)
+            :source #(next-x! :gen 0)}  ; fn wrapping stochastic draw
+   :output {:target :midi/synth :channel 1}})
+```
+
+The write head inscribes stochastically-drawn pitches into the flux buffer at
+half the read rate. The buffer accumulates the distribution's shape over time;
+the read head plays the running record. CORRUPT then adds another layer of
+probabilistic drift on top.
+
+#### DEJA VU + flux buffer = frozen stochastic loops
+
+The Marbles DEJA VU mechanism (§23.6) locks the X-section into a repeating
+loop. When DEJA VU is high, the stochastic sequence repeats; the write head
+inscribes that loop into the flux buffer repeatedly. The flux buffer then
+holds a stable stochastic loop that CORRUPT can gradually erode:
+
+```clojure
+;; Lock the stochastic generator into a loop
+(ctrl/set! [:stochastic :gen :x-deja-vu] 1.0)
+
+;; CORRUPT at low intensity to erode it slowly
+(defflux :crystallized
+  {:steps   8
+   :write   {:source #(next-x! :gen 0) :clock (clock-div 4 master-clock)}
+   :corrupt {:intensity 0.05 :clock (clock-div 8 master-clock)}
+   :output  {:target :midi/synth :channel 1}})
+```
+
+Starting from a locked loop, CORRUPT introduces imperfections at a rate
+controlled by `:intensity`. The result evolves from the DEJA VU loop toward
+entropy — a gradual "crystallization erosion" arc.
+
+#### Three-layer generative stack
+
+| Layer | Component | Role |
+|-------|-----------|------|
+| 1 | `defstochastic` | Generates raw pitch material from a distribution |
+| 2 | `defflux` write head | Inscribes that material into a circular buffer |
+| 3 | `defflux` CORRUPT | Perturbs the buffered material over time |
+
+The flux buffer acts as a shared "short-term memory" between the stochastic
+generator and the play head. CORRUPT is the forgetting process.
+
+---
+
+### 26.11 Interaction with `deffractal` (§24)
+
+`defflux` and `deffractal` represent contrasting philosophies — fractal sequences
+are deterministically transformed from an explicit trunk; flux sequences are
+continuously mutated from a shared buffer. They are complementary rather than
+competing.
+
+#### Fractal branch piped into a flux write head
+
+A `deffractal` branch output is a sequence of step maps. These can be wrapped
+into an `ITemporalValue`-compatible source and piped to a `defflux` write head:
+
+```clojure
+(deffractal :theme
+  {:trunk      [60 62 64 65 67]   ; C major scale fragment
+   :branches   2
+   :transforms [:inverse :transpose]})
+
+;; Pipe fractal branch 0 into a flux write head
+(defflux :eroding-theme
+  {:steps  16
+   :write  {:clock  (clock-div 3 master-clock)
+            :source #(:pitch/midi (next-step! :theme 0))}
+   :corrupt {:intensity 0.15 :clock (clock-div 6 master-clock)}
+   :output  {:target :midi/synth :channel 1}})
+```
+
+The fractal branch inscribes a deterministically transformed version of the
+trunk into the flux buffer. CORRUPT then degrades that inscription. The result
+is a fractal theme that gradually drifts away from its origin — "theme and
+dissolution" rather than "theme and development".
+
+#### Trunk seeded from a flux buffer
+
+The reverse direction — seeding a `deffractal` trunk from the current state of
+a `defflux` buffer — creates a feedback arc where corruption feeds back into
+structure:
+
+```clojure
+;; Capture the current flux buffer as a new fractal trunk
+(let [buffer (flux/peek :eroding-theme)]
+  (deffractal :recrystallized
+    {:trunk      buffer
+     :branches   3
+     :transforms [:retrograde :transpose :mutate]}))
+```
+
+This is the "recrystallization" pattern: CORRUPT erodes a sequence until it is
+captured as a new fractal seed, which then branches into structured variations
+of the eroded material. Repeating this cycle produces long-form evolution
+without composer intervention.
+
+#### Contrast summary
+
+| Dimension | `deffractal` | `defflux` |
+|-----------|--------------|-----------|
+| Starting point | Explicit trunk | Seeded buffer (or any source) |
+| Variation mechanism | Deterministic transforms (inverse, retrograde, transpose) | Continuous probabilistic mutation |
+| Memory model | Fixed branch tree until trunk changes | Rolling circular buffer |
+| Predictability | High (same input → same output) | Low (entropy accumulates) |
+| Long-form arc | Development (structured variation) | Erosion / crystallization |
+| Interaction | Fractal feeds flux; flux seeds fractal | Both directions valid |
+
+#### EG TRIG MIX / trigger merge
+
+The Labyrinth's EG TRIG MIX concept (combining step-gate triggers and CORRUPT
+event triggers into a single envelope trigger) maps to the `on-corrupt!`
+callback plus `ctrl/send!`:
+
+```clojure
+;; Envelope fires on both step events and corrupt events (EG TRIG MIX = :or)
+(flux/on-corrupt! :eroding-theme
+  (fn [_idx _old _new]
+    (ctrl/send! [:bass-voice :env/trig] 1)))
+```
+
+When the fractal's step gate fires, it also calls `ctrl/send! [:bass-voice :env/trig] 1`
+through the normal output pipeline. The two trigger streams merge at the
+`ctrl/send!` level — the envelope sees both, firing more densely as CORRUPT
+intensity increases.
+
+---
+
+### 26.12 Compositional Chaining
+
+`defflux` instances can be chained, with the read head of one driving the write
+head of another:
+
+```clojure
+;; Two-stage flux chain: upstream evolves slowly; downstream evolves faster
+(defflux :upstream
+  {:steps  8
+   :write  {:source (lfo :rate 0.05) :clock (clock-div 4 master-clock)}
+   :output {:target :internal}})  ; suppress direct MIDI output
+
+(defflux :downstream
+  {:steps  16
+   :write  {:source #(flux/peek :upstream (mod (long (now)) 8))
+            :clock  (clock-div 2 master-clock)}
+   :corrupt {:intensity 0.2 :clock (clock-div 4 master-clock)}
+   :output  {:target :midi/synth :channel 1}})
+```
+
+The upstream flux evolves its buffer slowly via an LFO. The downstream flux
+reads from the upstream buffer (via `flux/peek`) as its write source, adds its
+own CORRUPT layer, and sends the result to MIDI. The downstream sequence contains
+a delayed, further-evolved version of the upstream material.
+
+This chaining pattern is analogous to patching one Eurorack module's output into
+another's input — compositional depth through composition of primitives.
+
 
 ## 27. DSL Sugar Layer
 
