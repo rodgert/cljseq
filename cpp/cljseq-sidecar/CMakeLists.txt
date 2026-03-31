@@ -18,6 +18,12 @@ add_executable(cljseq-sidecar
 
 target_link_libraries(cljseq-sidecar
   PRIVATE cljseq-rt
+          asio
+          rtmidi
+)
+
+target_include_directories(cljseq-sidecar
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
 
 set_target_properties(cljseq-sidecar PROPERTIES

@@ -35,6 +35,15 @@ add_library(asio INTERFACE)
 target_include_directories(asio INTERFACE ${asio_SOURCE_DIR}/asio/include)
 target_compile_definitions(asio INTERFACE ASIO_STANDALONE)
 
+# RtMidi — cross-platform MIDI I/O (MIT)
+# Pin: 6.0.0 — stable release; matches Phase 1 handoff spec (Q51).
+FetchContent_Declare(rtmidi
+  GIT_REPOSITORY https://github.com/thestk/rtmidi.git
+  GIT_TAG        6.0.0
+  GIT_SHALLOW    TRUE)
+set(RTMIDI_BUILD_TESTING OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(rtmidi)
+
 # ---------------------------------------------------------------------------
 # Build options
 # ---------------------------------------------------------------------------
