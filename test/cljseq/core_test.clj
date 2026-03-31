@@ -62,15 +62,15 @@
 
 (deftest virtual-time-test
   (testing "now returns *virtual-time* in loop context"
-    (binding [loop-ns/*virtual-time* 4N]
-      (is (= 4N (loop-ns/now)))))
+    (binding [loop-ns/*virtual-time* 4.0]
+      (is (= 4.0 (loop-ns/now)))))
   (testing "sleep! advances *virtual-time*"
-    ;; We need system started to get BPM; use a very fast BPM to minimise sleep
+    ;; Use a very fast BPM (6000 = 10ms/beat) to keep test fast.
     (core/start! :bpm 6000)
     (try
-      (binding [loop-ns/*virtual-time* 0N]
+      (binding [loop-ns/*virtual-time* 0.0]
         (loop-ns/sleep! 1)
-        (is (= 1N (loop-ns/now))))
+        (is (= 1.0 (loop-ns/now))))
       (finally
         (core/stop!)))))
 

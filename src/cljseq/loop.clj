@@ -9,13 +9,15 @@
   Re-evaluating a `deflive-loop` form hot-swaps the body: the running thread
   picks up the new fn at its next iteration without restarting.
 
-  Virtual time (`*virtual-time*`) is a thread-local rational beat counter.
-  `sleep!` advances it and parks the thread for the equivalent wall-clock
-  duration. `now` returns the current virtual beat position.
+  Virtual time (`*virtual-time*`) is a thread-local beat counter anchored to
+  the master timeline. `sleep!` advances it and parks the thread until the
+  corresponding wall-clock deadline (absolute, drift-free). `now` returns the
+  current virtual beat position.
 
-  Key design decisions: Q11 (live-loop alias), Q1 (virtual time),
-  Q2–Q3 (sync! semantics — basic stub in Phase 0)."
-  (:require [cljseq.clock :as clock]))
+  Key design decisions: Q11 (live-loop alias), Q1 (virtual time), Q59
+  (LockSupport/parkUntil for drift-free sleep), Q2–Q3 (sync! stub Phase 0)."
+  (:require [cljseq.clock :as clock])
+  (:import  [java.util.concurrent.locks LockSupport]))
 
 ;; ---------------------------------------------------------------------------
 ;; System state reference (injected by cljseq.core/start!)
@@ -44,30 +46,63 @@
     (get-in @s [:config :bpm])
     120))
 
+(defn- get-timeline
+  "Return the current system timeline, or nil if not started."
+  []
+  (when-let [s @system-ref]
+    (:timeline @s)))
+
 ;; ---------------------------------------------------------------------------
 ;; Virtual time
 ;; ---------------------------------------------------------------------------
 
 (def ^:dynamic *virtual-time*
-  "Current beat position within a live-loop iteration.
-  Rational; advanced by sleep!. Bound per-thread by deflive-loop."
-  0N)
+  "Current beat position, anchored to the master timeline.
+  Advanced by sleep!. Bound per-thread by deflive-loop.
+  Initialised to the current master-clock beat when the loop starts
+  (not 0), so that beat->epoch-ms conversion is always valid (Q59)."
+  0.0)
 
 (defn now
   "Return the current virtual beat position."
   []
   *virtual-time*)
 
-(defn sleep!
-  "Advance virtual time by `beats` and sleep for the equivalent wall-clock
-  duration at the current BPM.
+(defn -current-beat
+  "Return the current beat position from the master timeline.
+  Used by deflive-loop to initialise *virtual-time* on thread start.
+  Returns 0.0 if the system is not yet started."
+  ^double []
+  (if-let [tl (get-timeline)]
+    (clock/epoch-ms->beat (System/currentTimeMillis) tl)
+    0.0))
 
-  `beats` may be any number (integer, ratio, float). Internally stored as
-  a rational to preserve exact beat arithmetic (Q1)."
+(defn- park-until!
+  "Park the current thread until the epoch-ms wall-clock deadline.
+  Loops to handle spurious wakeups (LockSupport/parkUntil contract)."
+  [^long epoch-ms]
+  (loop []
+    (when (< (System/currentTimeMillis) epoch-ms)
+      (LockSupport/parkUntil epoch-ms)
+      (recur))))
+
+(defn sleep!
+  "Advance virtual time by `beats` and park until the corresponding
+  wall-clock deadline (absolute, drift-free).
+
+  Uses LockSupport/parkUntil against the master timeline for correct
+  scheduling across BPM changes (Q59). Falls back to Thread/sleep if
+  the system is not started.
+
+  `beats` may be any number (integer, ratio, float). *virtual-time*
+  is stored as a double to match the timeline epoch-ms arithmetic;
+  beat arithmetic on the Clojure side uses rationals where it matters."
   [beats]
-  (let [ms (clock/beats->ms beats (get-bpm))]
-    (set! *virtual-time* (+ *virtual-time* (rationalize beats)))
-    (Thread/sleep (long ms))))
+  (let [target-beat (+ (double *virtual-time*) (double beats))]
+    (set! *virtual-time* target-beat)
+    (if-let [tl (get-timeline)]
+      (park-until! (clock/beat->epoch-ms target-beat tl))
+      (Thread/sleep (long (clock/beats->ms beats (get-bpm)))))))
 
 (defn sync!
   "Align to the next beat boundary within the sync window.
@@ -119,7 +154,7 @@
                  :thread     nil})
          (let [t# (Thread.
                    (fn []
-                     (binding [cljseq.loop/*virtual-time* 0N]
+                     (binding [cljseq.loop/*virtual-time* (cljseq.loop/-current-beat)]
                        (loop []
                          (when @running?#
                            (let [f# (get-in @@sref#

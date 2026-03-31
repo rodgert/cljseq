@@ -102,3 +102,38 @@
   "Current wall-clock time in nanoseconds."
   ^long []
   (System/nanoTime))
+
+;; ---------------------------------------------------------------------------
+;; Beat ↔ epoch-ms conversion (requires a timeline map)
+;; ---------------------------------------------------------------------------
+
+;; A timeline map has the shape:
+;;   {:bpm            <number>     ; current BPM
+;;    :beat0-epoch-ms <long>       ; epoch-ms at which beat0-beat occurred
+;;    :beat0-beat     <double>}    ; beat position corresponding to beat0-epoch-ms
+;;
+;; The anchor rolls on every BPM change (see cljseq.core/set-bpm!), so the
+;; linear mapping is always valid within the current tempo segment.
+
+(defn beat->epoch-ms
+  "Convert an absolute beat position to an epoch-millisecond wall-clock deadline.
+
+  `timeline` is the map held at [:timeline] in the system-state atom.
+  The result is suitable for `LockSupport/parkUntil` (Q59)."
+  ^long [^double target-beat timeline]
+  (let [bpm             (double (:bpm timeline))
+        beat0-epoch-ms  (double (:beat0-epoch-ms timeline))
+        beat0-beat      (double (:beat0-beat timeline))]
+    (long (Math/round (+ beat0-epoch-ms
+                         (* (- target-beat beat0-beat)
+                            (bpm->ms-per-beat bpm)))))))
+
+(defn epoch-ms->beat
+  "Convert an epoch-millisecond timestamp to a beat position using `timeline`."
+  ^double [^long epoch-ms timeline]
+  (let [bpm             (double (:bpm timeline))
+        beat0-epoch-ms  (double (:beat0-epoch-ms timeline))
+        beat0-beat      (double (:beat0-beat timeline))]
+    (+ beat0-beat
+       (/ (- (double epoch-ms) beat0-epoch-ms)
+          (bpm->ms-per-beat bpm)))))

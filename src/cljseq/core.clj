@@ -36,7 +36,8 @@
          :undo-stack  []
          :checkpoints {}
          :loops       {}
-         :config      {:bpm 120}}))
+         :config      {:bpm 120}
+         :timeline    nil}))
 
 ;; ---------------------------------------------------------------------------
 ;; Configuration
@@ -47,10 +48,33 @@
   []
   (get-in @system-state [:config :bpm]))
 
+(defn get-timeline
+  "Return the current timeline map for beat↔epoch-ms conversion.
+  Returns nil before start! is called."
+  []
+  (:timeline @system-state))
+
 (defn set-bpm!
-  "Set the master BPM."
+  "Set the master BPM.
+
+  Rolls the timeline anchor to the current wall-clock instant so that
+  in-flight sleep! calls remain accurate across tempo changes.
+  Any loops parked via LockSupport/parkUntil will wake at the wrong
+  time for the one sleep that straddles the change; subsequent sleeps
+  are correct (Q59)."
   [bpm]
-  (swap! system-state assoc-in [:config :bpm] bpm)
+  (swap! system-state
+         (fn [s]
+           (let [tl      (:timeline s)
+                 now-ms  (System/currentTimeMillis)
+                 cur-beat (if tl
+                            (clock/epoch-ms->beat now-ms tl)
+                            0.0)]
+             (-> s
+                 (assoc-in [:config :bpm] bpm)
+                 (assoc :timeline {:bpm            bpm
+                                   :beat0-epoch-ms now-ms
+                                   :beat0-beat     cur-beat})))))
   nil)
 
 ;; ---------------------------------------------------------------------------
@@ -63,12 +87,20 @@
   Options:
     :bpm  — initial BPM (default 120)
 
-  Registers the system-state atom with cljseq.loop."
+  Registers the system-state atom with cljseq.loop and initialises the
+  master timeline anchored at the current wall-clock instant / beat 0."
   [& {:keys [bpm] :or {bpm 120}}]
-  (swap! system-state assoc-in [:config :bpm] bpm)
-  (loop-ns/-register-system! system-state)
-  (println (str "cljseq started at " bpm " BPM"))
-  nil)
+  (let [now-ms (System/currentTimeMillis)]
+    (swap! system-state
+           (fn [s]
+             (-> s
+                 (assoc-in [:config :bpm] bpm)
+                 (assoc :timeline {:bpm            bpm
+                                   :beat0-epoch-ms now-ms
+                                   :beat0-beat     0.0}))))
+    (loop-ns/-register-system! system-state)
+    (println (str "cljseq started at " bpm " BPM"))
+    nil))
 
 (defn stop!
   "Gracefully stop all live loops and shut down the system."
