@@ -1654,22 +1654,33 @@ pure-audio North American contexts.
 
 **R&R reference**: §29.7, §29.10
 
-**Status**: Open — **Phase 1 blocker**
+**Status**: Resolved — Sprint 8 (2026-03-31)
 
 **Question**: Phase 0's `sleep!` uses `Thread/sleep(beats × ms_per_beat)`, which is
 correct only at constant tempo. Under Link (or any tempo change), threads wake at the
 wrong wall-clock time.
 
-**Resolution**: Phase 1 `sleep!` must:
-1. Compute the target beat position: `target = *virtual-time* + beats`
-2. Call `time_at(target)` from the Link timeline (or local BPM formula) to get
-   the absolute `time_ns`
-3. Use `LockSupport/parkUntil(time_ns / 1e6)` to park until that wall-clock instant
-4. Support early unpark when a tempo change signals that `time_at(target)` has changed
+**Decision**: Implemented in `cljseq.loop/sleep!` and supporting infrastructure:
 
-This is the primary Phase 1 scheduler task on the Clojure side.
+1. `cljseq.core/start!` anchors the master timeline `{:bpm, :beat0-epoch-ms,
+   :beat0-beat}` at the current epoch-ms when the system starts.
+2. `cljseq.clock/beat->epoch-ms` converts an absolute beat position to an
+   epoch-ms deadline using the timeline anchor — a pure linear mapping valid
+   within the current tempo segment.
+3. `sleep!` computes `target-beat = *virtual-time* + beats`, calls
+   `beat->epoch-ms`, and parks via `LockSupport/parkUntil` (loops on spurious
+   wakeup). No accumulated drift at constant tempo.
+4. `set-bpm!` rolls the anchor atomically: reads the current beat via
+   `epoch-ms->beat`, writes a new `{:bpm, :beat0-epoch-ms, :beat0-beat}` at
+   that instant. The one sleep straddling a BPM change fires at the old
+   deadline; all subsequent sleeps are correct.
+5. `deflive-loop` initialises `*virtual-time*` from `-current-beat` (current
+   epoch-ms → beat via timeline) rather than `0N`, so `beat->epoch-ms` is
+   always valid relative to the master anchor.
 
-**Blocking**: Phase 1 Link integration; correct behaviour under any tempo change.
+**Remaining**: Early unpark of sleeping threads on BPM change (Q60). Under
+Link, `beat->epoch-ms` will delegate to `link.time_at(beat)` — the
+`park-until!` loop structure is already compatible with that future change.
 
 ---
 
@@ -1677,7 +1688,7 @@ This is the primary Phase 1 scheduler task on the Clojure side.
 
 **R&R reference**: §29.7, §29.9, §29.10
 
-**Status**: Open — depends on Q59
+**Status**: Partially resolved — Sprint 8; remainder Phase 1 Link sprint
 
 **Question**: When BPM changes (Link peer suggestion, `set-bpm!`, tempo automation),
 what happens to loops currently parked in `sleep!`?
@@ -1695,7 +1706,21 @@ call `LockSupport/unpark` on all sleeping loop threads. Each thread wakes, recom
 beat position of the loop's virtual clock is unaffected — it continues from the same
 beat position, just arriving there at the correct (revised) wall-clock time.
 
-**Blocking**: Phase 1 Link integration; tempo automation (Phase 2).
+**Partial resolution (Sprint 8)**: `set-bpm!` rolls the timeline anchor atomically
+so that the sleep *following* a BPM change computes the correct deadline. The sleep
+*straddling* the change fires at the old deadline (one-iteration error, acceptable
+for Phase 1 without Link).
+
+Sub-question answers for the Link sprint:
+1. **Detection**: watch on `:timeline` key in system-state atom (already atomic).
+2. **Notification**: `set-bpm!` collects all loop threads from `[:loops * :thread]`
+   and calls `LockSupport/unpark` on each after rolling the anchor.
+3. **Partial sleep semantics**: the loop continues from `*virtual-time*` unchanged —
+   same beat position, new wall-clock mapping. The `park-until!` loop re-evaluates
+   `beat->epoch-ms(*virtual-time*, new-tl)` after wakeup and parks again if still
+   in the future. No change to `park-until!` required.
+
+**Blocking**: Phase 1 Link integration (the unpark notification step).
 
 ---
 

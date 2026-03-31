@@ -94,13 +94,13 @@
 ;; sync
 ;; ---------------------------------------------------------------------------
 
-(deftest sync-test
-  (testing "sync: resets phase to 0 on positive trigger"
-    (is (≈ 0.0 (phasor/sync 0.7 1)))
-    (is (≈ 0.0 (phasor/sync 0.3 5))))
-  (testing "sync: preserves phase when trigger is zero or negative"
-    (is (≈ 0.7 (phasor/sync 0.7 0)))
-    (is (≈ 0.3 (phasor/sync 0.3 -1)))))
+(deftest phase-reset-test
+  (testing "phase-reset: resets phase to 0 on positive trigger"
+    (is (≈ 0.0 (phasor/phase-reset 0.7 1)))
+    (is (≈ 0.0 (phasor/phase-reset 0.3 5))))
+  (testing "phase-reset: preserves phase when trigger is zero or negative"
+    (is (≈ 0.7 (phasor/phase-reset 0.7 0)))
+    (is (≈ 0.3 (phasor/phase-reset 0.3 -1)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Shape functions

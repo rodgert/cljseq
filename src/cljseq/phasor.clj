@@ -50,8 +50,9 @@
   ^long [p p-prev]
   (if (< (double p) (double p-prev)) 1 0))
 
-(defn sync
-  "Return 0.0 (reset phase) if trigger is positive, otherwise return p unchanged."
+(defn phase-reset
+  "Return 0.0 (reset phase) if trigger is positive, otherwise return p unchanged.
+  Models a hard sync input: a positive trigger forces the phasor back to 0."
   ^double [p trigger]
   (if (pos? (double trigger)) 0.0 (double p)))
 
