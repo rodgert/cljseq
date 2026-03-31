@@ -100,11 +100,11 @@ LFO primitives (sine/triangle/sawtooth/square/s&h/envelope) defined in beats
 Arpeggiation library: 11 built-in named patterns + corpus-derived from
 Bach/Mozart/Beethoven.
 
-### 13. Marbles-Inspired Generative Primitives (§23)
+### 13. Stochastic Generative Primitives (§23, Marbles-Inspired)
 `stochastic-rhythm` (T section: complementary-Bernoulli, independent-Bernoulli,
 divider, drums modes). `stochastic-sequence` (X section: spread/bias/steps
 continuum). DEJA VU ring-buffer memory (0=random, 1=locked loop). Correlated
-multi-channel generation. `marbles` macro auto-registers all parameters in the
+multi-channel generation. `defstochastic` macro auto-registers all parameters in the
 control tree. DEJA VU ring buffers persist across `live-loop` redefinitions via
 `defonce`.
 
@@ -184,8 +184,8 @@ single decision at the start of Sprint 2:
 | Q28 | Colotomic layering API | No special API; `irama` atom + `at-sync!` for ratio changes |
 | Q31 | Arpeggiation library format | EDN with `:order :rhythm :dur :source`; ship pre-extracted |
 | Q33 | nREPL integration scope | Resolved: standard nREPL; optional `cljseq-nrepl` middleware later |
-| Q34 | DEJA VU ring buffer across redefines | `defonce` outside loop body; `marbles` macro does this automatically |
-| Q38 | `marbles` context auto-registration | Auto-register at `/cljseq/marbles/<name>/`; matches `deflive-loop` behavior |
+| Q34 | DEJA VU ring buffer across redefines | `defonce` outside loop body; `defstochastic` macro does this automatically |
+| Q38 | `stochastic` context auto-registration | Auto-register at `/cljseq/stochastic/<name>/`; matches `deflive-loop` behavior |
 | Q40 | Ornament timing and virtual time | Ornaments = pure functions returning sub-step sequences; caller iterates with `sleep!` |
 | Q41 | Unified step map: plain map vs. record | Plain map + `clojure.spec.alpha` for validation |
 | Q42 | `play-bloom-step!` vs. `play!` overload | Overload `play!` to accept step map as second argument |
@@ -219,7 +219,7 @@ Maps each R&R section to the open design questions and Sprint 2 tasks that depen
 | §20 | Music21 sidecar | Q20 | Q21, Q22, Q23 | `m21/eventually!` helper; serialization rules |
 | §21 | World music / microtonality | Q25 | Q26, Q27, Q28 | Maqam representation; gamelan `.scl` files; colotomic API |
 | §22 | Rhythmic modulation / param-loop | Q29, Q35 | Q30 | `param-loop` unification design decision |
-| §23 | Marbles-inspired primitives | Q35 | Q30, Q32, Q34, Q37 | Jitter model; correlated sequence algorithm |
+| §23 | Stochastic (Marbles-Inspired) primitives | Q35 | Q30, Q32, Q34, Q37 | Jitter model; correlated sequence algorithm |
 | §24 | Bloom / unified step map | Q2, Q3 | Q39, Q40, Q41, Q42, Q43 | Step map spec; branch regeneration policy |
 | Cross-cutting | Licensing | — | — | EPL-2.0; LGPL/GPL sidecar; SPDX headers; REUSE compliance |
 | Cross-cutting | Project structure | — | — | Directory layout; CMake skeleton; pyproject.toml; Makefile |
@@ -915,7 +915,7 @@ products are used. All trademarks are the property of their respective owners.
 | Elektron Digitakt / Digitone | Elektron Music Machines | P-locks, trig conditions, micro-timing, track scaling, sound locks |
 | Polyend Tracker | Polyend | Pattern grid, effect columns, song mode, tracker-style step entry |
 | Moog Labyrinth | Moog Music Inc. | Play/write head separation, CORRUPT mutation, BIT FLIP CV, EG TRIG MIX, scale mode catalog |
-| Make Noise Marbles | Make Noise Music | Stochastic gate/pitch generation, X/Y/T output model, distribution bias |
+| Mutable Instruments Marbles | Mutable Instruments | Stochastic gate/pitch generation, X/Y/T output model, distribution bias |
 | Ornament & Crime (Bloom) | Multiple open-source contributors | Euclidean sequencing, unified step map |
 | VCV Rack | VCV (Andrew Belt) | Modular signal graph concepts; plugin architecture reference |
 

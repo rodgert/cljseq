@@ -28,7 +28,7 @@ It is configured in `project.clj`:
 :plugins [[lein-codox "0.10.8"]]
 :codox {:output-path "target/codox"
         :namespaces [cljseq.clock cljseq.ctrl cljseq.fractal cljseq.loop
-                     cljseq.m21 cljseq.marbles cljseq.mod cljseq.morph
+                     cljseq.m21 cljseq.stochastic cljseq.mod cljseq.morph
                      cljseq.sidecar cljseq.timing]
         :source-uri "https://github.com/YOUR_ORG/cljseq/blob/{version}/{filepath}#L{line}"}
 ```

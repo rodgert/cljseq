@@ -5,6 +5,29 @@ and conceptual works that have influenced or are referenced in the cljseq design
 
 ---
 
+## Naming Convention for Inspired Abstractions
+
+When a cljseq abstraction is directly inspired by a commercial hardware product,
+the following convention applies:
+
+- The **cljseq API name** is a generic descriptive term that accurately describes
+  the abstraction's behaviour without embedding a trademarked product name.
+- The **R&R section subtitle** retains "(X-Inspired)" as explicit attribution to
+  the original design.
+- The **attribution.md entry** (this file) records the full product name, its
+  owner, and which cljseq abstraction draws from it.
+
+| Hardware product              | Owner                    | cljseq abstraction           |
+|-------------------------------|--------------------------|------------------------------|
+| Bloom step sequencer          | Teenage Engineering AB   | `deffractal` / `cljseq.fractal` |
+| Marbles random sampler        | Mutable Instruments      | `defstochastic` / `cljseq.stochastic` |
+| Labyrinth sequencer           | Moog Music Inc.          | TBD (future design sprint)   |
+
+New entries should be added to this table whenever a hardware-inspired abstraction
+is named.
+
+---
+
 ## Hardware Sequencers and Instruments
 
 ### Teenage Engineering Pocket Operator series
@@ -29,6 +52,22 @@ design.
 The BeatStep Pro is a product of Arturia. Referenced in cljseq design for its
 melodic vs. drum track distinction, CV/gate model, and polyrhythm support.
 Identified as an exemplar for `defdevice` design.
+
+### Mutable Instruments Marbles
+Marbles is an open-source Eurorack random sampler module by Mutable Instruments
+(Émilie Gillet). The hardware and firmware source are MIT-licensed. The cljseq
+`cljseq.stochastic` namespace and `defstochastic` abstraction are directly
+inspired by Marbles' T/X section model, DEJA VU ring buffer, spread/bias
+continuum, and correlated multi-channel generation. The design document §23
+retains the subtitle "Marbles-Inspired" as explicit attribution. The name
+"stochastic" was chosen for the cljseq API to avoid trademark conflict.
+
+### Moog Labyrinth
+The Labyrinth is a sequencer module produced by Moog Music Inc. Identified as
+a future exemplar for analysis — notable features include separate play/write
+head architecture, CORRUPT mutation, BIT FLIP CV, EG TRIG MIX, and a scale
+mode catalog. The cljseq abstraction inspired by Labyrinth has not yet been
+designed or named; this is a future design sprint topic.
 
 ### Conductive Labs NDLR
 The NDLR (Next Dimensional Loop Rider) is a product of Conductive Labs.

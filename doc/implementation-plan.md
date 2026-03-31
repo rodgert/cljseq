@@ -570,7 +570,7 @@ forwards matched events to the JVM without any GC-induced jitter on the receive 
   ornament sub-steps sum to original duration; `bloom` macro persists across REPL
   redefine; `play!` with step map fires note + ratchet + mod CC bundle
 
-### 6i — Marbles-Inspired Generative Primitives
+### 6i — Stochastic Generative Primitives (Marbles-Inspired)
 
 *Implements §23. Depends on §5 (rhythm), §16 (control tree), Phase 2 (virtual time).*
 
@@ -580,7 +580,7 @@ forwards matched events to the JVM without any GC-induced jitter on the receive 
   - `(weighted-scale scale-type weights)` → weighted scale map with `:scale/weights`
   - `(learn-scale-weights notes & {:keys [key]})` → pitch-class histogram → weighted scale
   - `(progressive-quantize value weighted-scale steps)` — steps [0,1] controls degree survival
-- [ ] `cljseq.marbles` namespace:
+- [ ] `cljseq.stochastic` namespace:
   - `(stochastic-rhythm & opts)` → lazy seq of `{:beat offset :channel k}` events
     - Modes: `:complementary-bernoulli :independent-bernoulli :three-states :divider :drums`
     - Parameters: `:bias :jitter :channels :rate`
@@ -592,12 +592,12 @@ forwards matched events to the JVM without any GC-induced jitter on the receive 
     - Parameters: `:correlation :spread :bias :steps :scale :deja-vu :loop-len`
   - `(make-deja-vu-source gen-fn loop-len deja-vu-atom)` — ring buffer wrapper
   - `(next! source)` — advance source and return next value
-  - `(marbles name & opts)` macro — creates full T+X context; auto-registers in control tree;
+  - `(defstochastic name & opts)` macro — creates full T+X context; auto-registers in control tree;
     uses `defonce` for ring buffer persistence across REPL redefines
-  - `(marbles-loops name targets durs)` — drives N live-loops from a single marbles context
+  - `(stochastic-loops name targets durs)` — drives N live-loops from a single stochastic context
 - [ ] LFO-as-X-source: `stochastic-sequence` with `:rhythm :continuous` feeds `param-loop`
-- [ ] Control tree registration: all `marbles` parameters auto-registered at
-  `/cljseq/marbles/<name>/t-bias`, `/x-deja-vu`, etc. for live CC/OSC control
+- [ ] Control tree registration: all `defstochastic` parameters auto-registered at
+  `/cljseq/stochastic/<name>/t-bias`, `/x-deja-vu`, etc. for live CC/OSC control
 - [ ] Test: `(stochastic-rhythm :mode :complementary-bernoulli :bias 0.6)` produces mutually
   exclusive events; `(stochastic-sequence :spread 0.5 :deja-vu (atom 0.8) :loop-len 4)`
   repeats a 4-step pattern 80% of the time; jitter test confirms virtual time is unperturbed
@@ -754,7 +754,7 @@ substitution should be a project-wide decision made before Phase 0.
 | Q35: Jitter and virtual time | Phase 6i: perturb IPC time_ns only; virtual time stays clean |
 | Q36: Weighted scale vs IntervalNetwork | Phase 6i: extend scale map with :scale/weights |
 | Q37: Correlated sequences shared draw | Phase 6i: promise-per-step + parent+perturbation lerp |
-| Q38: marbles control tree registration | Phase 6i: auto-register all atom parameters |
+| Q38: stochastic context control tree registration | Phase 6i: auto-register all atom parameters |
 | Q39: Branch regeneration | Phase 6j: reactive watch + filter predicate + freeze!/thaw! |
 | Q40: Ornament sub-step timing | Phase 6j: rational durations summing to step duration |
 | Q41: Unified step map type | Phase 6j: plain map + clojure.spec/def ::step |

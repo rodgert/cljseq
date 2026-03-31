@@ -21,7 +21,7 @@
                        cljseq.fractal
                        cljseq.loop
                        cljseq.m21
-                       cljseq.marbles
+                       cljseq.stochastic
                        cljseq.mod
                        cljseq.morph
                        cljseq.sidecar

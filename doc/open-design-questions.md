@@ -882,7 +882,7 @@ All three are interchangeable at the call site.
 
 Declare the sequence source with `defonce` outside the loop body. `defonce` survives
 REPL redefinitions and namespace reloads, preserving the ring buffer's accumulated
-history. The `marbles` macro wraps this automatically — users do not need to think
+history. The `defstochastic` macro wraps this automatically — users do not need to think
 about it for normal usage.
 
 ---
@@ -957,14 +957,14 @@ parent at high correlation values.
 
 ---
 
-## Q38 — `marbles` context in the control tree: auto-registration? — **RESOLVED**
+## Q38 — `stochastic` context in the control tree: auto-registration? — **RESOLVED**
 
 **R&R reference**: §23.8, §16
 
 **Resolution** (Sprint 3)
 
 Auto-register all T/X parameters as control tree nodes at
-`/cljseq/marbles/<name>/` when the `marbles` macro is evaluated. Makes all
+`/cljseq/stochastic/<name>/` when the `defstochastic` macro is evaluated. Makes all
 parameters MIDI-CC-bindable, OSC-addressable, and MCP-accessible without any
 explicit registration call. Consistent with `deflive-loop` auto-registration
 behaviour (Q11).
@@ -987,7 +987,7 @@ be added later as a separate library without affecting the core.
 ## Q44 — Unified temporal-value abstraction: do clocks and modulators share a protocol? — **RESOLVED**
 
 **R&R reference**: §3 (virtual time), §16 (control tree / LFO binding), §22 (param-loop),
-§23 (Marbles stochastic); informed by Sprint 1 design research on Maths/PoliMATHS/Blinds
+§23 (Stochastic, Marbles-Inspired); informed by Sprint 1 design research on Maths/PoliMATHS/Blinds
 (modulator vocabulary) and Pam's Pro Workout / Tempi / Wogglebug (clock vocabulary)
 
 **Resolution** (Sprint 2)
@@ -1453,7 +1453,7 @@ Flag for design when the control tree (§16) implementation is complete and stab
 | Q35 | Jitter vs. virtual-time clock coherence | **Yes** — needed before §23.3 impl | Medium — perturb wall-clock only |
 | Q36 | Weighted scale vs. IntervalNetwork (§4) | No — model question | Medium — extension, not replacement |
 | Q37 | Correlated sequences: shared random draw model | No — algorithm design | Medium — parent+perturbation lerp |
-| Q38 | `marbles` context in control tree | No — API design | Low — auto-register at startup |
+| Q38 | `stochastic`/`defstochastic` context in control tree | No — API design | Low — auto-register at startup |
 | Q20 | Music21 async from live-loop | **Yes** — usage convention needed | Low — document + `m21/eventually!` helper |
 | Q21 | Score serialization canonical form | No — needed before Music21 impl | Low — define rules in Python server |
 | Q22 | In-process Music21 (GraalPy) | No — performance question | Low — subprocess is sufficient |

@@ -4441,7 +4441,7 @@ See `doc/open-design-questions.md` Q29–Q33.
 
 ---
 
-## 23. Marbles-Inspired Generative Primitives
+## 23. Stochastic Generative Primitives (Marbles-Inspired)
 
 ### 23.1 Overview
 
@@ -4750,13 +4750,13 @@ This produces musically coherent families: at high correlation, the voices move 
 parallel (like parallel voicing); at low correlation, they behave independently
 (polyphonic counterpoint).
 
-### 23.8 The `marbles` Macro
+### 23.8 The `defstochastic` Macro
 
-Bringing the complete Marbles model together, cljseq provides a `marbles` macro that
+Bringing the complete Marbles model together, cljseq provides a `defstochastic` macro that
 creates a fully parametrized generative context:
 
 ```clojure
-(marbles my-gen
+(defstochastic my-gen
   ;; T section: rhythm
   :t-mode     :complementary-bernoulli
   :t-bias     0.5
@@ -4779,15 +4779,15 @@ creates a fully parametrized generative context:
 (next-x! my-gen 0)   ; next pitch value for channel 0
 (next-x! my-gen 1)   ; channel 1
 
-;; Shortcut: drive three live-loops from a single marbles context
-(marbles-loops my-gen
+;; Shortcut: drive three live-loops from a single stochastic context
+(stochastic-loops my-gen
   :targets [:midi/bass :midi/lead :midi/pad]
   :durs    [1/4 1/4 1/2])
 ```
 
 All T and X parameters are atoms, so they are live-update-capable via `ctrl/bind!`
-or `ctrl/set!`. The `marbles` macro registers the context in the control tree at
-`/cljseq/marbles/<name>/`, making all parameters addressable from MIDI CC, OSC,
+or `ctrl/set!`. The `defstochastic` macro registers the context in the control tree at
+`/cljseq/stochastic/<name>/`, making all parameters addressable from MIDI CC, OSC,
 HTTP, and MCP.
 
 ### 23.9 Integration with the Existing Design
@@ -4870,7 +4870,7 @@ within the same weighted scale.
 | Correlated channels | `correlated-sequences N :correlation C` | 0=independent, 1=identical |
 | Custom scale learning | `learn-scale-weights notes` | note frequency histogram |
 | Y output | `param-loop :rhythm :continuous :period (* 16 x2-period)` | slow LFO |
-| Full module | `(marbles name & opts)` | all parameters |
+| Full module | `(defstochastic name & opts)` | all parameters |
 
 ### 23.11 Design Questions Raised
 
@@ -5176,10 +5176,10 @@ plain `live-loop` steps. They are especially interesting when applied to the bra
 tree: a Converge path through 7 branches creates a phrase that gravitates toward
 the innermost (most transformed) branch, then returns.
 
-### 24.8 The `bloom` Macro
+### 24.8 The `deffractal` Macro
 
 ```clojure
-(bloom my-bloom
+(deffractal my-fractal
   ;; Trunk sequence (hand-programmed or generated)
   :trunk    [{:pitch/midi 60 :dur/beats 1/4}
              {:pitch/midi 64 :dur/beats 1/4}
@@ -5202,19 +5202,19 @@ the innermost (most transformed) branch, then returns.
   :mod-target   {:midi/cc 1 :channel 1})
 
 ;; Access:
-(next-step! my-bloom)  ; advance and return next step (with mod data)
-(current-branch my-bloom)  ; which branch is currently playing
-(set-path! my-bloom 3)     ; live path switch at next branch boundary
-(mutate! my-bloom)         ; reseed mutations on all branches
-(reseed! my-bloom)         ; randomize trunk (like Bloom's Reseed button)
-(unmutate! my-bloom)       ; return to last manual trunk state
+(next-step! my-fractal)       ; advance and return next step (with mod data)
+(current-branch my-fractal)   ; which branch is currently playing
+(fractal/path my-fractal 3)   ; live path switch at next branch boundary
+(mutate! my-fractal)          ; reseed mutations on all branches
+(reseed! my-fractal)          ; randomize trunk (like Bloom's Reseed button)
+(unmutate! my-fractal)        ; return to last manual trunk state
 ```
 
-Like `marbles`, the `bloom` macro uses `defonce` internally and auto-registers all
-parameters in the control tree at `/cljseq/bloom/<name>/`, making Branch count, Path,
+Like `defstochastic`, the `deffractal` macro uses `defonce` internally and auto-registers all
+parameters in the control tree at `/cljseq/fractal/<name>/`, making Branch count, Path,
 Mutate probability, and playback Order all live-addressable.
 
-### 24.9 Interplay with Marbles (§23)
+### 24.9 Interplay with Stochastic Contexts (§23)
 
 Bloom and Marbles represent orthogonal generative strategies that combine:
 
@@ -5264,7 +5264,7 @@ primitives understand:
  :mod/rate      1}        ; LFO rate multiplier for :shape mode only
 ```
 
-This is the data vocabulary that `bloom`, `marbles`, `live-loop`, `param-loop`,
+This is the data vocabulary that `bloom`, `defstochastic`, `live-loop`, `param-loop`,
 `play-arpeggio!`, and `play-timeline!` all produce and consume. The step map is
 a plain Clojure map — immutable, serializable, printable, comparable. Musical
 operations on sequences are pure functions from `[step-map]` to `[step-map]`.

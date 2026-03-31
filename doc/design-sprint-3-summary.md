@@ -114,10 +114,10 @@ Option A: direct JVM-to-process IPC. Routing key in `cljseq.sidecar` Clojure map
 | Q28 | No special colotomic API; irama atom + `at-sync!` |
 | Q31 | EDN pattern maps; pre-extracted; min 50 corpus occurrences |
 | Q33 | Standard nREPL; optional `cljseq-nrepl` middleware later |
-| Q34 | `defonce` ring buffer outside loop; `marbles` handles it |
+| Q34 | `defonce` ring buffer outside loop; `defstochastic` handles it |
 | Q36 | `:scale/weights` optional key on existing scale map |
 | Q37 | `promise`-per-step for correlated channels; `lerp` perturbation |
-| Q38 | `marbles` auto-registers at `/cljseq/marbles/<name>/` |
+| Q38 | `defstochastic` auto-registers at `/cljseq/stochastic/<name>/` |
 | Q39–Q43 | Fractal sequencer: `deffractal`, `fractal/freeze!`, `fractal/path`; reactive regen with filter predicate; ornaments as pure functions; step maps as plain maps + spec; `play!` overloaded for step maps; all three path forms supported |
 
 ### New Abstractions
