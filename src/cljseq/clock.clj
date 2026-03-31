@@ -137,3 +137,9 @@
     (+ beat0-beat
        (/ (- (double epoch-ms) beat0-epoch-ms)
           (bpm->ms-per-beat bpm)))))
+
+(defn beat->epoch-ns
+  "Convert an absolute beat position to epoch-nanoseconds.
+  Suitable for the sidecar `time_ns` wire field (C++ system_clock epoch)."
+  ^long [^double target-beat timeline]
+  (* (beat->epoch-ms target-beat timeline) 1000000))

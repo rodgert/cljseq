@@ -16,7 +16,8 @@
   Key design decisions: Q47 (single system-state atom), Q48 (patch system),
   Q11 (live-loop alias), Q1 (virtual time), phase0-readiness.md."
   (:require [cljseq.clock    :as clock]
-            [cljseq.loop     :as loop-ns])
+            [cljseq.loop     :as loop-ns]
+            [cljseq.sidecar  :as sidecar])
   (:gen-class))
 
 ;; ---------------------------------------------------------------------------
@@ -143,34 +144,47 @@
 ;; ---------------------------------------------------------------------------
 
 (defn play!
-  "Play a note. Phase 0: prints to stdout. Phase 1: emits MIDI via sidecar.
+  "Play a note. Routes to the sidecar for MIDI output when connected;
+  falls back to stdout when running without a sidecar (Phase 0 mode).
 
   Accepts:
     (play! {:pitch/midi 60 :dur/beats 1/2})   ; step map (canonical form)
+    (play! {:pitch/midi 60 :dur/beats 1/4
+            :midi/channel 2 :mod/velocity 80}) ; with channel and velocity
     (play! :C4)                                ; note keyword, *default-dur*
     (play! :C4 1/2)                            ; note keyword + explicit dur
     (play! 60)                                 ; MIDI integer, *default-dur*
     (play! 60 1/4)                             ; MIDI integer + explicit dur
 
-  The *default-dur* dynamic var (from cljseq.dsl, default 1/4) controls the
-  fallback duration when none is provided."
+  Step map keys honoured:
+    :pitch/midi     — MIDI note number (required)
+    :dur/beats      — note duration in beats (default 1/4)
+    :midi/channel   — MIDI channel 1–16 (default 1)
+    :mod/velocity   — MIDI velocity 0–127 (default 64)"
   ([note]
    (play! note nil))
   ([note dur]
-   (let [midi  (cond
-                 (map? note)     (:pitch/midi note)
-                 (keyword? note) (keyword->midi note)
-                 (integer? note) note
-                 :else           (throw (ex-info "play!: unrecognised note form"
-                                                 {:note note})))
-         beats (or (and (map? note) (:dur/beats note))
-                   dur
-                   1/4)
-         bpm   (get-bpm)
-         ms    (long (clock/beats->ms beats bpm))
-         beat  loop-ns/*virtual-time*]
-     (println (format "[play!] beat=%-8s midi=%-3d dur=%s beats (%dms)"
-                      (str beat) midi (str beats) ms)))))
+   (let [midi     (cond
+                    (map? note)     (:pitch/midi note)
+                    (keyword? note) (keyword->midi note)
+                    (integer? note) note
+                    :else           (throw (ex-info "play!: unrecognised note form"
+                                                    {:note note})))
+         beats    (or (and (map? note) (:dur/beats note))
+                      dur
+                      1/4)
+         now-beat (double loop-ns/*virtual-time*)]
+     (if (sidecar/connected?)
+       (let [tl       (:timeline @system-state)
+             channel  (or (and (map? note) (:midi/channel note)) 1)
+             velocity (or (and (map? note) (:mod/velocity note)) 64)
+             on-ns    (clock/beat->epoch-ns now-beat tl)
+             off-ns   (clock/beat->epoch-ns (+ now-beat (double beats)) tl)]
+         (sidecar/send-note-on!  on-ns channel midi velocity)
+         (sidecar/send-note-off! off-ns channel midi))
+       (let [ms (long (clock/beats->ms beats (get-bpm)))]
+         (println (format "[play!] beat=%-8s midi=%-3d dur=%s beats (%dms)"
+                          (str now-beat) midi (str beats) ms)))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Re-export live-loop API from cljseq.loop
@@ -187,9 +201,14 @@
   (loop-ns/sleep! beats))
 
 (defn sync!
-  "Align to beat boundary. Delegates to cljseq.loop/sync!"
-  []
-  (loop-ns/sync!))
+  "Align to the next beat-grid boundary and park until it.
+  See cljseq.loop/sync! for full docs.
+
+  (sync!)    — next whole beat
+  (sync! 4)  — next bar boundary (4 beats)
+  (sync! 1/2) — next half-beat"
+  ([] (loop-ns/sync!))
+  ([divisor] (loop-ns/sync! divisor)))
 
 (defmacro deflive-loop
   "Define a named live loop. See cljseq.loop/deflive-loop for full docs."

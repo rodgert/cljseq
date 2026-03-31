@@ -75,6 +75,33 @@
         (core/stop!)))))
 
 ;; ---------------------------------------------------------------------------
+;; sync!
+;; ---------------------------------------------------------------------------
+
+(deftest sync-test
+  (testing "sync! advances to next whole-beat boundary"
+    (core/start! :bpm 6000) ; 10ms per beat
+    (try
+      (binding [loop-ns/*virtual-time* 3.2]
+        (loop-ns/sync!)
+        (is (= 4.0 (loop-ns/now))))
+      (finally (core/stop!))))
+  (testing "sync! with divisor 4 advances to next 4-beat boundary"
+    (core/start! :bpm 6000)
+    (try
+      (binding [loop-ns/*virtual-time* 1.5]
+        (loop-ns/sync! 4)
+        (is (= 4.0 (loop-ns/now))))
+      (finally (core/stop!))))
+  (testing "sync! from exact boundary advances to NEXT boundary"
+    (core/start! :bpm 6000)
+    (try
+      (binding [loop-ns/*virtual-time* 4.0]
+        (loop-ns/sync!)
+        (is (= 5.0 (loop-ns/now))))
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
 ;; deflive-loop — smoke test
 ;; ---------------------------------------------------------------------------
 

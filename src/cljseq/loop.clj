@@ -105,10 +105,25 @@
       (Thread/sleep (long (clock/beats->ms beats (get-bpm)))))))
 
 (defn sync!
-  "Align to the next beat boundary within the sync window.
-  Phase 0 stub — returns current virtual time unchanged."
-  []
-  *virtual-time*)
+  "Align the current loop to the next beat-grid boundary and park until it.
+
+  `divisor` — beat grid to align to (default 1). Examples:
+    (sync!)    — next whole beat
+    (sync! 4)  — next bar boundary (4 beats)
+    (sync! 1/2) — next half-beat
+
+  Sets *virtual-time* to the aligned boundary, parks until the corresponding
+  wall-clock deadline, and returns the new *virtual-time*."
+  ([] (sync! 1))
+  ([divisor]
+   (let [d    (double divisor)
+         vt   (double *virtual-time*)
+         next (+ (* (Math/floor (/ vt d)) d) d)]
+     (set! *virtual-time* next)
+     (if-let [tl (get-timeline)]
+       (park-until! (clock/beat->epoch-ms next tl))
+       (Thread/sleep (long (clock/beats->ms (- next vt) (get-bpm)))))
+     *virtual-time*)))
 
 ;; ---------------------------------------------------------------------------
 ;; deflive-loop
