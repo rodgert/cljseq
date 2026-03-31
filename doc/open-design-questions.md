@@ -1506,3 +1506,6 @@ distro-specific errata and diverge across platforms; this cannot be assumed cons
 | Q49 | Synth-style morphs: named input→parameter-set mappings | No — needed before §16 morph impl | Medium — surface explicit concept in DSL |
 | Q50 | P2P control plane: peer discovery and remote tree composition | No — future capability | Low — ensure design doesn't close it off |
 | Q51 | Native C++ dependency strategy: Boost, Asio, Link, CLAP | No — build infrastructure | Medium — resolved: STL + standalone Asio + FetchContent |
+| Q52 | Per-step `:probability` and `:time-shift` on step map | No — step map extension | Low — add as optional keys; nil = unconditional/zero-offset |
+| Q53 | `defflux` read/write head concurrency model | No — impl detail for `cljseq.flux` | Medium — vector-of-atoms vs. single-atom-of-vector |
+| Q54 | Scale as `ITemporalValue` in output quantization stage | No — needed before `defflux` scale morphing | Medium — extends Q8 node types |

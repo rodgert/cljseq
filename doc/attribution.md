@@ -21,7 +21,7 @@ the following convention applies:
 |-------------------------------|--------------------------|------------------------------|
 | Bloom step sequencer          | Teenage Engineering AB   | `deffractal` / `cljseq.fractal` |
 | Marbles random sampler        | Mutable Instruments      | `defstochastic` / `cljseq.stochastic` |
-| Labyrinth sequencer           | Moog Music Inc.          | TBD (future design sprint)   |
+| Labyrinth sequencer           | Moog Music Inc.          | `defflux` / `cljseq.flux`    |
 
 New entries should be added to this table whenever a hardware-inspired abstraction
 is named.
@@ -63,11 +63,12 @@ retains the subtitle "Marbles-Inspired" as explicit attribution. The name
 "stochastic" was chosen for the cljseq API to avoid trademark conflict.
 
 ### Moog Labyrinth
-The Labyrinth is a sequencer module produced by Moog Music Inc. Identified as
-a future exemplar for analysis — notable features include separate play/write
-head architecture, CORRUPT mutation, BIT FLIP CV, EG TRIG MIX, and a scale
-mode catalog. The cljseq abstraction inspired by Labyrinth has not yet been
-designed or named; this is a future design sprint topic.
+The Labyrinth is a sequencer module produced by Moog Music Inc. (2024). The
+cljseq `cljseq.flux` namespace and `defflux` abstraction are directly inspired
+by the Labyrinth's play head / write head separation model, CORRUPT bit-level
+mutation, and BIT FLIP side-channel trigger. The design document §26 retains the
+subtitle "Labyrinth-Inspired" as explicit attribution. The name "flux" was chosen
+for the cljseq API to avoid trademark conflict.
 
 ### Conductive Labs NDLR
 The NDLR (Next Dimensional Loop Rider) is a product of Conductive Labs.
