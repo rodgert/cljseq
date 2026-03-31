@@ -1594,3 +1594,105 @@ benefit from time-varying behaviour (a general principle, not a special case of 
 | Q52 | Per-step `:probability` and `:time-shift` on step map | No — step map extension | Low — add as optional keys; nil = unconditional/zero-offset |
 | Q53 | `defflux` read/write head concurrency model | No — impl detail for `cljseq.flux` | Medium — vector-of-atoms vs. single-atom-of-vector |
 | Q54 | Scale as `ITemporalValue` in output quantization stage | No — needed before `defflux` scale morphing | Medium — extends Q8 node types |
+
+---
+
+## Q56 — Time signature API impact: does it affect `sleep!`?
+
+**R&R reference**: §29.3, §29.10
+
+**Status**: Open — needed before Phase 1 `sync!` implementation
+
+**Question**: Does the active time signature affect the semantics of `sleep! 1`, or is
+`sleep! 1` always exactly one quarter note?
+
+**Recommendation**: `sleep!` and all beat arithmetic is always quarter-note relative,
+matching the MIDI convention. Time signature affects only bar boundaries, bar-level
+`sync!`, and display/annotation. This keeps the beat model uniform and avoids the
+compound-time BPM ambiguity documented in §29.3.
+
+**Blocking**: Phase 1 `sync!` implementation; bar-level phasor in `cljseq.loop`.
+
+---
+
+## Q57 — PPQN for MIDI Clock output: 24 only, or configurable?
+
+**R&R reference**: §29.4, §29.5, §29.10
+
+**Status**: Open — needed before MIDI Clock output implementation
+
+**Question**: Should the MIDI Clock output be fixed at 24 PPQN (MIDI standard) or
+configurable (e.g. 96 PPQN for drum machines that support higher resolution)?
+
+**Recommendation**: Always emit at 24 PPQN for MIDI Clock output — this is what the
+MIDI specification defines and all hardware expects. Higher PPQN (96, 960) is exposed
+only for SMF export, not for live MIDI Clock messages.
+
+**Blocking**: Phase 1 MIDI Clock output in `cljseq-sidecar`.
+
+---
+
+## Q58 — MTC frame rate: default, drop-frame handling
+
+**R&R reference**: §29.6, §29.10
+
+**Status**: Open — needed before MTC implementation
+
+**Question**: What frame rate should cljseq default to for MTC production? Must
+drop-frame be implemented for 29.97 NTSC sync?
+
+**Recommendation**: Default 25 fps (cleanest math at 48 kHz: 1 frame = 1920 samples
+exactly). Implement drop-frame correction gated behind explicit config
+`{:frame-rate 29.97 :drop-frame true}`. 30 fps non-drop as a secondary default for
+pure-audio North American contexts.
+
+**Blocking**: Phase 2 MTC implementation.
+
+---
+
+## Q59 — `sleep!` redesign for tempo correctness (Phase 1 blocker)
+
+**R&R reference**: §29.7, §29.10
+
+**Status**: Open — **Phase 1 blocker**
+
+**Question**: Phase 0's `sleep!` uses `Thread/sleep(beats × ms_per_beat)`, which is
+correct only at constant tempo. Under Link (or any tempo change), threads wake at the
+wrong wall-clock time.
+
+**Resolution**: Phase 1 `sleep!` must:
+1. Compute the target beat position: `target = *virtual-time* + beats`
+2. Call `time_at(target)` from the Link timeline (or local BPM formula) to get
+   the absolute `time_ns`
+3. Use `LockSupport/parkUntil(time_ns / 1e6)` to park until that wall-clock instant
+4. Support early unpark when a tempo change signals that `time_at(target)` has changed
+
+This is the primary Phase 1 scheduler task on the Clojure side.
+
+**Blocking**: Phase 1 Link integration; correct behaviour under any tempo change.
+
+---
+
+## Q60 — Tempo change propagation to sleeping loops
+
+**R&R reference**: §29.7, §29.9, §29.10
+
+**Status**: Open — depends on Q59
+
+**Question**: When BPM changes (Link peer suggestion, `set-bpm!`, tempo automation),
+what happens to loops currently parked in `sleep!`?
+
+Three sub-questions:
+1. **Detection**: how does the scheduler learn a tempo change occurred?
+2. **Notification**: how are sleeping loop threads unparked so they can recompute
+   their target `time_ns`?
+3. **Partial sleep semantics**: does the loop replay from the beat where it was, or
+   from where wall-clock time says it should be?
+
+**Recommendation**: Add a watch on the `:config :bpm` system-state key; on change,
+call `LockSupport/unpark` on all sleeping loop threads. Each thread wakes, recomputes
+`time_at(*virtual-time* + remaining-beats)`, and parks again at the new target. The
+beat position of the loop's virtual clock is unaffected — it continues from the same
+beat position, just arriving there at the correct (revised) wall-clock time.
+
+**Blocking**: Phase 1 Link integration; tempo automation (Phase 2).

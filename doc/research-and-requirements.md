@@ -6275,3 +6275,620 @@ for step position, and `phasor/delta` for step boundary triggers.
 | `Lfo` moves from `cljseq.clock` to `cljseq.mod` | `cljseq.clock` is clock infrastructure; LFOs are modulation signals |
 | `Swing` moves from `cljseq.clock` to `cljseq.timing` | Timing modulators have their own namespace (Q46) |
 | BPM removed from clock record | BPM is a scheduling concern; phasors are beat-relative, BPM-agnostic |
+
+---
+
+## 29. Time Model and Synchronization
+
+Time is the most fundamental concern of a sequencer, and the most treacherous. cljseq
+operates across five distinct time representations simultaneously. Getting the
+conversions between them correct — and understanding which representation is
+authoritative in each context — is critical to correctness under real-world studio
+conditions.
+
+This section establishes the complete time model: what each representation is, how it
+relates to the others, where authority lies, and what the known failure modes are.
+
+### 29.1 Time Representation Inventory
+
+| Representation | Domain | Unit | Authority |
+|----------------|--------|------|-----------|
+| **Beat position** | Musical / logical | rational beats | Link (networked) or local BPM |
+| **BPM** | Musical / tempo | quarter notes per minute | User or Link peer |
+| **Bar position** | Musical / structural | bars + beat offset | Time signature + beat position |
+| **PPQN ticks** | MIDI internal | integer ticks | Selected PPQN resolution |
+| **MIDI Clock** | MIDI sync | 24 pulses per quarter note | cljseq (master) or external (slave) |
+| **MIDI Time Code** | Wall-clock (SMPTE) | HH:MM:SS:FF | cljseq (master) or external (slave) |
+| **Wall-clock ns** | Physical | nanoseconds | System clock / Link |
+| **Sample position** | Audio / physical | integer samples | Audio interface / word clock |
+
+None of these is strictly derivable from another without additional parameters:
+- Beat → wall-clock requires BPM (and its entire tempo history if tempo has changed)
+- Beat → bar requires time signature
+- Beat → PPQN ticks requires the chosen PPQN resolution
+- Beat → SMPTE requires BPM, SMPTE frame rate, and a reference zero point
+- Beat → sample position requires BPM and sample rate
+
+### 29.2 The Quarter Note as MIDI's Time Anchor
+
+The MIDI specification defines tempo as **microseconds per quarter note** (μs/QN) in
+a 24-bit value range [1, 16777215]. This is the `Set Tempo` meta-event (0x51) in
+Standard MIDI Files and the implicit tempo model in MIDI Clock.
+
+The BPM↔μs/QN conversion:
+
+```
+μs_per_QN = 60,000,000 / BPM
+BPM       = 60,000,000 / μs_per_QN
+```
+
+Common reference points:
+
+| BPM | μs per quarter note | ms per quarter note |
+|-----|--------------------|--------------------|
+| 60  | 1,000,000 | 1000.00 |
+| 90  | 666,667   | 666.67  |
+| 120 | 500,000   | 500.00  |
+| 140 | 428,571   | 428.57  |
+| 180 | 333,333   | 333.33  |
+
+**The quarter note is a notation convention, not a physical unit.** The MIDI
+specification anchors all tempo to the quarter note by convention. This means that in
+any time signature, the BPM value always counts quarter notes per minute — even when
+the musical beat is not a quarter note (see §29.3).
+
+cljseq adopts this convention: `sleep! 1` advances by one quarter note, regardless of
+the active time signature. This matches DAW behaviour universally.
+
+### 29.3 Time Signatures — Simple, Compound, and the Bar Problem
+
+A time signature N/D communicates two things:
+- **N** (numerator): how many beat units fill one bar
+- **D** (denominator): which note value is the beat unit (2=half, 4=quarter, 8=eighth, 16=sixteenth)
+
+#### Simple time
+
+In simple time signatures (2/4, 3/4, 4/4, 5/4, 7/4), the beat unit is a single note
+value and N counts felt beats directly.
+
+| Time sig | Felt beats per bar | Beat unit | Bar = N quarter notes |
+|----------|-------------------|-----------|----------------------|
+| 2/4      | 2                 | quarter   | 2 QN |
+| 3/4      | 3                 | quarter   | 3 QN |
+| 4/4      | 4                 | quarter   | 4 QN |
+| 5/4      | 5                 | quarter   | 5 QN |
+| 7/4      | 7                 | quarter   | 7 QN |
+| 3/8      | 3                 | eighth    | 1.5 QN |
+| 5/8      | 5                 | eighth    | 2.5 QN |
+
+#### Compound time — where the trap is
+
+In compound time (6/8, 9/8, 12/8), the numerator counts subdivisions, not felt beats.
+The felt beat is a **dotted note** containing D/2 of the notated subdivision.
+
+| Time sig | Felt beats per bar | Beat unit | Bar = N quarter notes | BPM ref |
+|----------|-------------------|-----------|----------------------|---------|
+| 6/8      | **2** (not 6)     | dotted quarter (= 3 eighth notes) | 4 QN = 3 × (4/3) | dotted quarter |
+| 9/8      | **3** (not 9)     | dotted quarter | 4.5 QN | dotted quarter |
+| 12/8     | **4** (not 12)    | dotted quarter | 6 QN | dotted quarter |
+
+**The BPM ambiguity in compound time**: When a conductor or DAW says "120 BPM" in
+6/8, do they mean 120 dotted-quarter beats per minute, or 120 quarter notes per
+minute? These differ by a factor of 3/2.
+
+- 120 dotted-quarter BPM in 6/8: dotted quarter = (3/2) × (60/120) s = 750 ms; bar = 2 × 750 ms = 1500 ms
+- 120 quarter-note BPM in 6/8: quarter = 500 ms; bar = 4 × 500 ms = 2000 ms
+
+MIDI always uses quarter-note BPM. Most notation software does too. Live performers
+and conductors typically mean dotted-quarter BPM in 6/8. **cljseq follows the MIDI
+convention: BPM always counts quarter notes.**
+
+#### Bar length in cljseq
+
+```clojure
+;; In system-state:
+{:config {:bpm          120
+          :time-sig     {:n 4 :d 4}}}
+
+;; Bar length in quarter notes:
+(defn beats-per-bar [{:keys [n d]}]
+  ;; For simple time: n × (4/d) quarter notes
+  ;; For compound time: (n/3) × (4/(d/2)) = (n/3) × (8/d) — but we flag compound
+  (* n (/ 4.0 d)))
+
+;; 4/4: 4 × (4/4) = 4 QN per bar
+;; 3/4: 3 × (4/4) = 3 QN per bar
+;; 6/8: 6 × (4/8) = 3 QN per bar  ← but felt as 2 dotted-quarter beats
+;; 7/8: 7 × (4/8) = 3.5 QN per bar
+```
+
+**Grouping within compound and irregular time** (5/4, 7/8, etc.) is
+performer/arrangement information, not derivable from the time signature alone.
+A 7/8 bar is typically grouped as either 3+2+2 or 2+2+3 eighth notes. cljseq
+exposes grouping as an optional annotation (`:groups [3 2 2]`) in the time signature
+map for display and quantization purposes; it does not affect the underlying beat
+arithmetic.
+
+#### The `bar` phasor
+
+Given the system time signature, a bar-level phasor:
+
+```clojure
+(defn bar-phasor []
+  (let [bpb (beats-per-bar (get-in @system-state [:config :time-sig]))]
+    (->Phasor (/ 1.0 bpb) 0)))
+
+;; Bar index at beat b:
+(phasor/index (clock/sample (bar-phasor) b) ...)
+
+;; Beat within bar (0-indexed) at beat b:
+(int (* (clock/sample (bar-phasor) b) (beats-per-bar ...)))
+```
+
+### 29.4 Rational Beat Arithmetic and PPQN
+
+#### Why rationals subsume PPQN
+
+Internal beat positions in cljseq are exact Clojure rationals. Every PPQN resolution
+is exactly representable:
+
+| PPQN | 1 tick in beats | Rational form |
+|------|----------------|--------------|
+| 24   | 1/24 beat      | `1/24` |
+| 96   | 1/96 beat      | `1/96` |
+| 480  | 1/480 beat     | `1/480` |
+| 960  | 1/960 beat     | `1/960` |
+
+There is no need to choose a PPQN for internal representation. A 32nd note is `1/8`
+beat exactly. A 32nd-note triplet is `1/12` beat exactly. These are not approximations
+in rational arithmetic; they are exact.
+
+**PPQN is an output format concern, not an internal representation concern.**
+
+#### When PPQN matters
+
+| Context | Required PPQN | Reason |
+|---------|--------------|--------|
+| MIDI Clock output | 24 | MIDI spec: 24 Clock messages per quarter note |
+| Sync to vintage DIN sync hardware | 24 | Roland/Korg DIN sync standard |
+| High-resolution drum machine sync | 96 | 32nd-note accuracy at 3× normal resolution |
+| Standard MIDI File (SMF) | 480 or 960 | DAW import/export convention |
+| Pro Tools / Logic SMF | 960 | Matches their internal tick resolution |
+| Ableton Live SMF | 96 | Ableton's native PPQN |
+
+cljseq must be capable of exporting at any of these PPQN values by quantising
+rational beat positions to the nearest tick. Quantisation error is at most
+`0.5 / PPQN` beats; at 960 PPQN and 120 BPM this is `0.5/960 × 500 ms ≈ 0.26 ms` —
+well within perceptual thresholds.
+
+#### PPQN conversion
+
+```clojure
+;; Beat position → tick number at given PPQN
+(defn beat->tick [beat ppqn]
+  (Math/round (* (double beat) (double ppqn))))
+
+;; Tick number → beat position at given PPQN
+(defn tick->beat [tick ppqn]
+  (/ tick ppqn))   ; returns exact rational
+
+;; Beat position → time_ns at given BPM
+(defn beat->ns [beat bpm]
+  (long (* (double beat) (/ 6.0e10 (double bpm)))))   ; 60e9 ns/min ÷ BPM
+```
+
+### 29.5 MIDI Clock — Production and Reception
+
+MIDI Clock is a tempo-relative sync protocol: 24 pulse messages per quarter note,
+regardless of BPM. The receiver counts pulses and infers tempo from their timing.
+
+#### Production via phasor
+
+MIDI Clock output maps directly to the phasor model:
+
+```clojure
+;; A phasor at 24 cycles per beat fires 24 times per quarter note.
+;; Each rising edge (delta = 1) triggers a MIDI Clock message.
+(def midi-clock-phasor (clock/clock-mul 24))
+
+;; In the scheduler: at each next-edge, send a MIDI Clock message and schedule the next
+(defn schedule-midi-clock [beat]
+  (let [next-beat (clock/next-edge midi-clock-phasor beat)
+        time-ns   (beat->ns next-beat (get-bpm))]
+    (sidecar/send! {:type :midi-clock :time-ns time-ns})
+    (schedule-midi-clock next-beat)))
+```
+
+At 120 BPM, clock messages arrive every `500ms / 24 = 20.833 ms`.
+
+#### MIDI transport messages
+
+MIDI Clock is accompanied by three transport messages:
+
+| Message | Byte | Meaning |
+|---------|------|---------|
+| Start   | 0xFA | Begin from tick 0 |
+| Continue| 0xFB | Resume from current position |
+| Stop    | 0xFC | Halt transport |
+
+A cljseq `start!` when MIDI Clock output is enabled sends Start + begins Clock
+messages. `stop!` sends Stop. Re-starting from a non-zero beat sends Continue, not
+Start.
+
+#### Song Position Pointer
+
+The Song Position Pointer (SPP) message encodes a position in MIDI beats (1 beat = 6
+MIDI Clock pulses = 1/4 of a quarter note). Range: 0–16383 beats (0–682 bars in 4/4).
+SPP is sent before Continue to allow receivers to locate to the correct position before
+transport resumes.
+
+```clojure
+;; Song Position Pointer: position in 1/6-beat units (MIDI "beats")
+(defn beat->spp [beat]
+  (Math/round (* (double beat) 6.0)))   ; 6 MIDI beats per quarter note
+```
+
+#### Reception (cljseq as MIDI Clock slave)
+
+When slaving to an external MIDI Clock:
+1. Receive Clock messages on the MIDI input
+2. Measure the interval between successive Clock messages (wall-clock time)
+3. Derive BPM: `BPM = 60,000 / (interval_ms × 24)`
+4. Apply jitter filtering (exponential moving average or median filter over N pulses)
+5. Update the system-state BPM; live loops pick up the new BPM on their next `sleep!`
+
+Jitter filtering is critical: raw MIDI Clock intervals have ±1–2 ms USB MIDI latency
+variance, which corresponds to ±2.4–4.8 BPM error at 120 BPM without filtering.
+
+### 29.6 MIDI Time Code — SMPTE Framing
+
+MIDI Time Code (MTC) encodes wall-clock time in SMPTE timecode format over MIDI,
+decoupled from musical tempo. It is used for synchronization to video and to devices
+that track real time (tape machines, video recorders, film projectors).
+
+#### SMPTE frame rates
+
+| Rate | Frames/sec | Frame duration | Context |
+|------|-----------|----------------|---------|
+| 24 fps | 24 | 41.667 ms | Cinema (film) |
+| 25 fps | 25 | 40.000 ms | PAL video; European broadcast; 48 kHz audio (clean math) |
+| 29.97 fps drop-frame | ≈29.97 | 33.367 ms | NTSC colour video; US broadcast |
+| 29.97 fps non-drop | ≈29.97 | 33.367 ms | NTSC broadcast (legacy); some US audio work |
+| 30 fps | 30 | 33.333 ms | Audio-only; film (in some regions); MIDI default |
+
+**Drop frame (DF) explained**: NTSC colour video runs at 30000/1001 ≈ 29.97 Hz,
+not 30 Hz exactly. Over 1 hour, 30 fps timecode drifts from real time by
+`3600 × (30 − 30000/1001) ≈ 3.6 seconds`. Drop-frame corrects this by skipping
+frame numbers 00 and 01 of the first second of every minute, except every tenth
+minute. Drop-frame timecode is therefore accurate to wall-clock time over long
+durations; non-drop timecode accumulates error. **Drop-frame is a number-skipping
+convention — no frames are actually dropped from the video.**
+
+For pure audio work with no video sync requirement, **30 fps non-drop** or **25 fps**
+are the safest choices. 25 fps is particularly clean because `1 frame = 40 ms =
+1920 samples at 48 kHz` — a perfect integer.
+
+#### MTC quarter-frame protocol
+
+MTC transmits timecode as a stream of quarter-frame messages (0xF1), each carrying
+4 bits of data. Eight quarter-frame messages complete one full timecode value, covering
+two SMPTE frames of time. The eight messages in order:
+
+| QF index | Data nibble |
+|----------|------------|
+| 0 | frame number LSB (bits 0–3) |
+| 1 | frame number MSB (bits 4–5, plus 2 spare) |
+| 2 | seconds LSB (bits 0–3) |
+| 3 | seconds MSB (bits 4–6) |
+| 4 | minutes LSB (bits 0–3) |
+| 5 | minutes MSB (bits 4–6) |
+| 6 | hours LSB (bits 0–3) |
+| 7 | hours MSB (bit 4) + frame-rate code (bits 5–6) |
+
+Frame-rate codes in QF 7: `00`=24fps, `01`=25fps, `10`=29.97df, `11`=30fps.
+
+Quarter-frame messages arrive at `fps × 4` per second:
+- 25 fps: 100 QF messages/second, one every 10 ms
+- 30 fps: 120 QF messages/second, one every 8.333 ms
+
+**The 2-frame decode latency**: by the time all 8 quarter-frame messages have been
+received to reconstruct a timecode value, 2 frames of time have elapsed. The decoded
+timecode describes a moment 2 frames in the past. A receiver must add 2 frames to the
+decoded value to obtain the current position.
+
+#### MTC production (cljseq as master)
+
+```clojure
+;; System state: MTC configuration
+{:config {:mtc {:enabled    true
+                :frame-rate 25
+                :origin     0}}}   ; SMPTE time at beat 0 (in frames)
+
+;; Beat position → SMPTE components at frame-rate fps
+(defn beat->smpte [beat bpm fps]
+  (let [wall-sec (/ (* (double beat) 60.0) (double bpm))
+        total-frames (long (* wall-sec (double fps)))
+        hours   (quot total-frames (* fps 3600))
+        minutes (quot (rem total-frames (* fps 3600)) (* fps 60))
+        seconds (quot (rem total-frames (* fps 60)) fps)
+        frames  (rem  total-frames fps)]
+    {:hours hours :minutes minutes :seconds seconds :frames frames}))
+
+;; Each quarter-frame MTC message carries 4 bits of the timecode.
+;; qf-index cycles 0–7; produces the correct nibble for that index.
+(defn mtc-quarter-frame [qf-index {:keys [hours minutes seconds frames]} fps]
+  (let [fr-code ({24 0, 25 1, 29.97 2, 30 3} fps 3)]
+    (case qf-index
+      0 (bit-and frames 0x0F)
+      1 (bit-shift-right (bit-and frames 0x30) 4)  ; frames MSB (max 29 = 5 bits)
+      2 (bit-and seconds 0x0F)
+      3 (bit-shift-right (bit-and seconds 0x70) 4)
+      4 (bit-and minutes 0x0F)
+      5 (bit-shift-right (bit-and minutes 0x70) 4)
+      6 (bit-and hours 0x0F)
+      7 (bit-or (bit-shift-right (bit-and hours 0x10) 4)
+                (bit-shift-left fr-code 1)))))
+
+;; MTC quarter-frame messages fire at fps×4 per second, scheduled via sidecar
+```
+
+#### MTC reception (cljseq as slave)
+
+1. Collect 8 consecutive quarter-frame messages to assemble a full timecode
+2. Validate: QF indices should arrive in order 0–7 repeatedly (or 7–0 in reverse on
+   rewind — reverse-chase mode, frame rate must still be inferred)
+3. Add 2 frames to the decoded value to account for decode latency
+4. Convert SMPTE → wall-clock seconds: `wall_sec = H×3600 + M×60 + S + F/fps`
+   (for drop-frame: also apply the dropped-frame correction)
+5. Convert wall-clock seconds → beat position: `beat = wall_sec × BPM / 60`
+6. Apply this beat position to the virtual timeline; update system BPM if tempo
+   messages are also being received on the same connection
+
+**Full-frame MTC message (0xF0 7F 7F 01 01 H M S F 0xF7)**: A SysEx message
+containing the complete timecode in a single packet. Sent when transport locates to
+a new position. Receiver should apply it immediately without the 2-frame correction
+(it describes the current position precisely).
+
+**MTC vs. MIDI Clock — when to use each:**
+
+| Use case | Protocol |
+|----------|---------|
+| Sync among music hardware | MIDI Clock |
+| Sync to video timeline | MTC |
+| Sync to tape / film | MTC (via SMPTE-to-MTC converter) |
+| Record position in SMF | PPQN ticks (not MTC) |
+| Long-form session with video | MTC (drop-frame if NTSC) |
+| Live performance (tempo-elastic) | MIDI Clock or Link |
+
+### 29.7 Ableton Link — The Shared Timeline
+
+Ableton Link is a network protocol (UDP multicast on the local subnet) that
+synchronizes **beat position**, **tempo**, and **phase** among participating
+applications and devices. It is embedded in the cljseq C++ sidecar.
+
+#### What Link provides
+
+Link maintains a **shared timeline**: a monotonically increasing beat counter that all
+peers agree on. The timeline maps between beat position and wall-clock time:
+
+```
+beat_at(wall_ns)  → double    ; beat position at a given wall-clock instant
+time_at(beat)     → int64_t   ; wall-clock nanoseconds when a given beat will occur
+```
+
+These two functions are the complete interface to the Link timeline. They replace the
+simple `beats × ms_per_beat` calculation that the Phase 0 `sleep!` uses.
+
+#### Tempo authority under Link
+
+Link's tempo model: **any peer may suggest a tempo change**. The Link protocol
+propagates tempo changes to all peers. The new tempo takes effect at a specific beat
+position (not immediately), so all peers change tempo at the same musical moment.
+
+In cljseq:
+- `(set-bpm! 140)` at the REPL sends a tempo suggestion to Link
+- Other Link peers may simultaneously suggest different tempos — the protocol
+  negotiates
+- The system-state BPM reflects the Link-agreed tempo, updated in real time
+- When no peers are connected, cljseq's local BPM is authoritative
+
+#### Phase quantization
+
+Link's `RequestBeat` mechanism: when cljseq starts its transport or a loop wants to
+re-enter on a beat boundary, it can request that Link quantise the start to the
+nearest beat (or bar). This is the network equivalent of `sync!`.
+
+#### The critical implication for `sleep!`
+
+Phase 0's `sleep!`:
+```clojure
+(Thread/sleep (long (clock/beats->ms beats (get-bpm))))
+```
+This is **incorrect under tempo change**. If BPM changes from 120 to 140 while a
+loop is sleeping for 4 beats, the thread will wake up at the wrong wall-clock time.
+
+The correct Phase 1 `sleep!`:
+```clojure
+(defn sleep! [beats]
+  (let [target-beat (+ *virtual-time* (rationalize beats))
+        target-ns   (sidecar/time-at target-beat)]  ; from Link timeline or local BPM
+    (set! *virtual-time* target-beat)
+    (LockSupport/parkUntil (long (/ target-ns 1000000)))))  ; park until epoch ms
+```
+
+`LockSupport/parkUntil` parks the thread until an absolute epoch-millisecond
+timestamp, allowing the JVM to unpark it early if a tempo change requires rescheduling.
+Under Link, `time_at(beat)` always returns the correct wall-clock time for the current
+timeline, accounting for all tempo changes that have occurred.
+
+This redesign is the primary Phase 1 scheduler task on the Clojure side.
+
+### 29.8 Audio Sample Clock and Word Clock
+
+The cljseq-audio sidecar processes audio at a **sample rate** (typically 44100 or
+48000 Hz). In a studio context, the audio interface is clocked by an external **word
+clock** signal — a square wave at the sample rate, distributed via BNC cable to all
+digital audio devices. All devices on the same word clock will have sample-synchronous
+audio; devices on different clocks will drift and produce clicks at the sample-rate
+difference.
+
+#### Beat-to-sample conversion
+
+```
+samples_per_beat = sample_rate × 60 / BPM
+```
+
+Reference table at 48000 Hz:
+
+| BPM | Samples per beat | Samples per bar (4/4) |
+|-----|-----------------|----------------------|
+| 60  | 48,000 | 192,000 |
+| 90  | 32,000 | 128,000 |
+| 120 | 24,000 | 96,000  |
+| 140 | 20,571 | 82,286  |
+| 180 | 16,000 | 64,000  |
+
+At 120 BPM and 48 kHz, one MIDI Clock pulse (1/24 beat) = `24,000/24 = 1,000 samples`
+exactly. One tick at 96 PPQN = 250 samples. One tick at 960 PPQN = 25 samples ≈ 0.52 ms.
+
+#### Sample-accurate MIDI scheduling
+
+For plugin parameter automation and sample-accurate note delivery to CLAP plugins, the
+cljseq-audio sidecar must deliver MIDI events at a specific **sample offset within the
+current audio buffer**. The DAW/host calls the plugin's `process()` function with a
+buffer of N samples (typically 64–512 samples); events within that buffer are tagged
+with their sample offset [0, N).
+
+```
+sample_offset = round((event_beat - buffer_start_beat) × samples_per_beat)
+```
+
+This requires the audio sidecar to know:
+- The beat position at the start of the current audio buffer
+- The BPM at that moment
+- The sample rate
+
+Under Link, the audio sidecar gets `beat_at(buffer_start_time_ns)` from the Link
+library to compute `buffer_start_beat` with sub-sample accuracy.
+
+#### Word clock and sample rate mismatch
+
+If the studio master clock is at 48000 Hz and cljseq's audio interface is at 44100 Hz
+(different projects, different hardware), the audio interface's clock will drift from
+the master at a rate of `(48000 − 44100) / 48000 ≈ 8%` — a severe and immediately
+audible pitch shift.
+
+Sample rate mismatches must be resolved at the hardware level (change the interface
+setting, or use a sample rate converter). cljseq logs a warning if the audio interface
+reports a sample rate inconsistent with the system configuration but cannot fix the
+underlying hardware clock mismatch.
+
+### 29.9 The cljseq Master Timeline
+
+#### System-state time configuration
+
+```clojure
+{:config
+ {:bpm       120               ; quarter notes per minute
+  :time-sig  {:n 4 :d 4        ; 4/4 time
+              :groups nil}      ; optional grouping for 5/8, 7/8 etc.
+  :ppqn      960               ; for MIDI file export / DAW interchange
+  :sample-rate 48000           ; audio interface sample rate
+  :link {:enabled false}       ; Ableton Link
+  :midi-clock {:out false      ; generate MIDI Clock on output
+               :in  false}     ; slave to external MIDI Clock
+  :mtc {:out false             ; generate MTC on output
+        :in  false             ; slave to external MTC
+        :frame-rate 25         ; SMPTE frame rate for MTC
+        :origin 0}}}           ; wall-clock ns at beat 0
+```
+
+#### The unified conversion map
+
+All time representations derive from two values: **beat position** and **BPM**.
+Given these, every other representation is derivable:
+
+```clojure
+(defn time-map
+  "Return a map of all time representations at the given beat position."
+  [beat bpm {:keys [time-sig sample-rate mtc]}]
+  (let [bpb        (beats-per-bar time-sig)
+        wall-sec   (/ (* (double beat) 60.0) (double bpm))
+        wall-ns    (long (* wall-sec 1e9))
+        samples    (long (* wall-sec (double sample-rate)))
+        smpte      (beat->smpte beat bpm (:frame-rate mtc 25))]
+    {:beat          beat
+     :bar           (long (/ beat bpb))
+     :beat-in-bar   (mod beat bpb)
+     :wall-ns       wall-ns
+     :wall-sec      wall-sec
+     :samples       samples
+     :tick-96ppqn   (beat->tick beat 96)
+     :tick-960ppqn  (beat->tick beat 960)
+     :midi-clock-pulse (beat->tick beat 24)
+     :smpte         smpte}))
+```
+
+#### Authority hierarchy under different sync modes
+
+| Mode | Beat authority | BPM authority | Wall-clock authority |
+|------|---------------|---------------|---------------------|
+| Standalone | local counter | `(set-bpm!)` | System clock |
+| MIDI Clock slave | external clock pulses | derived from pulse interval | System clock |
+| MTC slave | derived from SMPTE | externally fixed | MTC timecode |
+| Link peer | Link timeline | Link negotiated | Link (`time_at`) |
+| Link + MTC out | Link timeline | Link negotiated | MTC generated from Link |
+
+When Link is active, `time_at(beat)` from the Link library is the single source of
+truth for wall-clock time. All other calculations derive from it. The local BPM value
+in system-state is kept in sync with Link's tempo as a read-only display value.
+
+### 29.10 Design Decisions and Open Questions
+
+#### Resolved in this section
+
+| Decision | Resolution |
+|----------|-----------|
+| BPM unit | Always quarter notes per minute, matching MIDI convention |
+| Internal time representation | Exact Clojure rationals — PPQN is an output format |
+| Compound time | Bar length computed as N×(4/D) quarter notes; felt beats are a display annotation |
+| MIDI Clock PPQN | 24 PPQN for hardware output (MIDI spec); internal positions remain rational |
+| `sleep!` correctness | Phase 0 implementation is tempo-constant only; Phase 1 must use `time_at(beat)` |
+
+#### New open questions
+
+**Q56 — Time signature in system-state: where does it affect the API?**
+
+Does the active time signature affect `sleep! 1` (always = 1 quarter note) or the
+bar-level `sync!`? Recommendation: BPM and `sleep!` are always quarter-note relative
+(MIDI convention). Time signature affects only bar boundaries, bar-level `sync!`, and
+display. Needs explicit API decision before `sync!` Phase 1 implementation.
+
+**Q57 — PPQN for MIDI Clock output: 24 only, or configurable?**
+
+24 PPQN is required for hardware MIDI Clock compatibility. Some devices also accept
+96 PPQN (for higher resolution sync). Should cljseq allow the output PPQN to be
+configured, or always emit at 24? Recommendation: always 24 PPQN for MIDI Clock
+output (matches the MIDI standard exactly); expose 96/960 PPQN only for SMF export.
+
+**Q58 — MTC frame rate default and drop-frame handling**
+
+25 fps is the most internally consistent choice for 48 kHz audio (1 frame = 1920
+samples exactly). 29.97 drop-frame is required for NTSC video sync. Should cljseq
+implement drop-frame correction? Recommendation: yes, but gated behind explicit
+configuration (`{:frame-rate 29.97 :drop-frame true}`). Default: 25 fps.
+
+**Q59 — `sleep!` redesign for tempo-correctness (Phase 1 blocker)**
+
+The Phase 1 `sleep!` must use `time_at(beat)` from Link (or local BPM) to compute
+an absolute wall-clock target, then use `LockSupport/parkUntil` rather than
+`Thread/sleep`. Loops parked via `parkUntil` can be woken early (unparked) when a
+tempo change requires rescheduling. This is the primary scheduler task for Phase 1.
+
+**Q60 — Tempo change propagation to sleeping loops**
+
+When BPM changes mid-session (Link peer, `set-bpm!`, or tempo automation), loops
+currently sleeping with `Thread/sleep` will wake up at the wrong time. The Phase 1
+redesign (`parkUntil` + reschedule signal) must define: which loops are affected, how
+they are notified, and whether the partial sleep is absorbed or restarted. This
+interacts with the control tree (§Q47) and Link's timeline API.
