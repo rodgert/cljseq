@@ -1325,97 +1325,91 @@ system-state atom alongside the tree, making them queryable via OSC and undoable
 
 ---
 
-## Q49 — Synth-style macros: named input→parameter-set mappings
+## Q49 — Synth-style macros: named input→parameter-set mappings — **RESOLVED**
 
 **R&R reference**: §16 (control tree); inspired by Hydrasynth macro model
 
-**The issue**
+**Resolution** (Sprint 3)
 
-Hardware synthesizers (e.g. Hydrasynth, Waldorf Iridium) expose **macros**: named
-mappings from one or more input values to a set of simultaneous parameter changes
-across the instrument. A single knob or XY pad gesture drives multiple parameters
-through a defined transfer function. This is distinct from a Clojure macro; the
-term is used in its synthesizer sense throughout this question.
+**Name**: `morph` — `defmorph` / `cljseq.morph`. Registers at
+`/cljseq/morphs/<name>/`. No Clojure collision; clear musical connotation.
 
-In cljseq, the control tree already has the machinery: `ctrl/bind!` can route an
-`ITemporalValue` to a parameter, and `ctrl/set!` can update multiple nodes. A
-synthesizer-style macro is a named, reusable, potentially multi-input version of
-this pattern — surfaced as a first-class concept in the DSL.
+**Form**: Clojure macro (not a function). Validates transfer function arity at
+compile time, auto-generates the control tree path, produces better error messages.
+Consistent with `deflive-loop`, `defensemble`, `deffractal`.
 
-**Candidate design**
+**Transfer functions**: pure functions only in the initial design. Transfer
+functions must be serializable into patches (Q48) and transmittable to peers (Q50).
+Arbitrary closures with captured state defeat both. All common cases (linear
+scaling, exponential curves, threshold gates, polarity inversion) are expressible
+as pure functions. Arbitrary code deferred as a `:fn :unsafe` opt-in.
 
+**Single-input morph**:
 ```clojure
-;; Define a macro: one input drives multiple parameters
-(defmacro* :filter-brightness
-  {:input  [:float 0.0 1.0]
-   :targets [{:path [:filter/cutoff]   :fn #(* % 8000)}
+(defmorph :filter-brightness
+  {:inputs  {:value [:float 0.0 1.0]}
+   :targets [{:path [:filter/cutoff]    :fn #(* % 8000)}
              {:path [:filter/resonance] :fn #(* % 0.7)}
              {:path [:amp/brightness]   :fn identity}]})
 
-;; Bind the macro to a TouchOSC fader
-(ctrl/bind! [:macros/filter-brightness] (ctrl/get [:osc/fader-1]))
-
-;; Or drive it algorithmically
-(ctrl/bind! [:macros/filter-brightness] (lfo :rate 0.1 :min 0.0 :max 1.0))
+(ctrl/bind! [:morphs/filter-brightness :value] (ctrl/get [:osc/fader-1]))
+(ctrl/bind! [:morphs/filter-brightness :value] (lfo :rate 0.1 :min 0.0 :max 1.0))
 ```
 
-Macros are nodes in the control tree at `/cljseq/macros/<name>/`. They can be driven
-by hardware input, algorithmic `ITemporalValue` sources, or arbitrary Clojure code.
+**Multi-input morph** (XY pad, joystick):
+```clojure
+(defmorph :xy-filter
+  {:inputs  {:x [:float 0.0 1.0]
+             :y [:float 0.0 1.0]}
+   :targets [{:path [:filter/cutoff]    :fn (fn [{:keys [x]}]   (* x 8000))}
+             {:path [:filter/resonance] :fn (fn [{:keys [y]}]   (* y 0.9))}
+             {:path [:filter/drive]     :fn (fn [{:keys [x y]}] (* x y 4.0))}]})
 
-**Design questions**
+(ctrl/bind! [:morphs/xy-filter :x] (ctrl/get [:osc/xy-pad-x]))
+(ctrl/bind! [:morphs/xy-filter :y] (ctrl/get [:osc/xy-pad-y]))
+```
 
-1. Should `defmacro*` (or whatever the final name is — `defmapping`? `defmod-macro`?)
-   be a macro or a function? A function is simpler; a macro can provide better error
-   messages and DSL sugar.
-2. Should the transfer functions be restricted to pure functions (for
-   serializability in patches), or arbitrary Clojure code?
-3. How are multi-input macros (XY pad → two independent axes → N parameters) expressed?
-4. **Naming**: `macro` is taken by Clojure. Candidates: `mapping`, `performer`,
-   `gesture`, `mod-macro`, `morph` (used by some hardware). Recommendation: `morph`
-   — it has clear musical connotation (parameter morphing) and no Clojure collision.
+Each target function receives the full input map, enabling cross-axis interactions.
+
+**Morph vocabulary library** (future sprint): common pure transfer functions for
+morph targets — rectangular-to-polar conversion, exponential/logarithmic curves,
+S-curves, dead-zone clipping, vector rotation, polarity inversion. Analogous to
+the modulator vocabulary in `cljseq.mod`. Captured as a future design topic in
+`design-sprint-3-summary.md`.
 
 **Connection to existing questions**
 
 - Q44 (`ITemporalValue`) — morph inputs can be any `ITemporalValue`; the morph
-  fans out one value to multiple binding targets
-- Q48 (patches) — morphs can be included in patches; their current input value
-  is part of the patch state
+  fans out the value to multiple binding targets
+- Q48 (patches) — morphs are included in patches; their current input values are
+  part of the patch state
 
 ---
 
-## Q50 — P2P control plane: peer discovery and remote tree composition
+## Q50 — P2P control plane: peer discovery and remote tree composition — **DEFERRED**
 
 **R&R reference**: §15 (Ableton Link), §16 (control tree), §17 (OSC server);
 raised as a future capability in Sprint 3 planning
 
-**The issue**
+**Status**: Acknowledged and deferred. No design decisions required until the core
+control tree implementation is stable. The current design does not close off this
+capability:
 
-Ableton Link provides peer-to-peer *timing* synchronization. A complementary
-capability would be peer-to-peer *control plane* synchronization: discovering other
-cljseq instances on the LAN, querying their control trees via OSC, and composing
-discovered peers as device nodes within the local tree.
+- OSC addresses are stable and navigable (already the design)
+- The tree serial number (Q47) enables peers to detect stale snapshots without
+  diffing the full tree
+- The tree is fully EDN-serializable (data format policy), enabling peer state
+  transmission and merging
+- Discovery can use mDNS/Bonjour (same mechanism as AirPlay and embedded devices)
+  rather than a custom protocol
 
-This would enable:
-- One cljseq instance acting as a conductor, sending patch changes and parameter
-  updates to other instances
-- A "device map" that treats all discovered peers as subtrees at
+**Capability summary** (for a future sprint):
+- Peer discovery via mDNS; discovered instances appear as device subtrees at
   `/cljseq/peers/<peer-id>/`
-- Distributed live coding performances where musicians share control trees
-- A standalone appliance that discovers and controls other cljseq appliances
+- Conductor pattern: one instance sends patch changes and parameter updates to peers
+- Distributed live coding: musicians share control trees across a LAN session
 
-**This is a future capability — not blocking any current phase.** It is captured
-here to ensure the control tree design (§16) does not accidentally close off this
-possibility. Specifically:
-
-- OSC addresses should be stable and navigable (already the design)
-- The tree serial number (Q47) enables peers to detect stale snapshots
-- The tree should be fully serializable to EDN (already the policy) so peer
-  state can be transmitted and merged
-- Discovery could use mDNS/Bonjour (the same mechanism as AirPlay and
-  many embedded devices) rather than inventing a new protocol
-
-**No design decisions are required now.** Flag for a future design sprint once the
-core control tree implementation is stable.
+Flag for design when the control tree (§16) implementation is complete and stable.
 
 ---
 

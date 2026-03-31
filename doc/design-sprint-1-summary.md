@@ -389,6 +389,26 @@ Key sequencing concepts to analyze:
   that allows the mutation function to operate N steps ahead of the current play
   position
 
+### Morph vocabulary library (future sprint)
+
+`cljseq.morph` provides the `defmorph` form and the multi-input binding mechanism.
+A companion vocabulary of common pure transfer functions for morph targets would
+reduce boilerplate and make complex gesture mappings composable. Analogous to the
+modulator vocabulary in `cljseq.mod` and the clock vocabulary in `cljseq.clock`.
+
+Candidate functions to design:
+- **Coordinate transforms**: rectangular→polar, polar→rectangular, vector rotation,
+  normalization
+- **Curve shaping**: linear, exponential, logarithmic, S-curve (sigmoid), power-law
+- **Signal conditioning**: dead-zone clipping, range remapping, polarity inversion,
+  quantization to a grid
+- **Multi-axis combinators**: cross-product, dot-product, max/min of axes,
+  weighted blend
+
+Design questions to address: namespace (`cljseq.morph.vocab`? `cljseq.xform`?);
+whether functions compose as plain Clojure functions or as `ITemporalValue` wrappers;
+relationship to the `cljseq.mod` vocabulary (some transforms may be shared).
+
 ### Arturia KeyStep Pro and BeatStep Pro (future sprint)
 
 The KeyStep Pro and BeatStep Pro are popular polyphonic step/CV sequencers made by
