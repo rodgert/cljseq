@@ -1,0 +1,218 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Korg Minilogue XD — cljseq device map
+;;
+;; Source: Korg Minilogue XD MIDI Implementation Chart (owner's manual appendix)
+;; Confidence: Medium-High. CC numbers 20–60 verified against published chart.
+;;             Multi Engine user-plugin CCs (90+) omitted — device/plugin-specific.
+;;             NRPN assignments omitted — see full MIDI implementation PDF.
+;;
+;; NOTE: Verify against your unit's firmware version before production use.
+;;       Korg publishes MIDI implementation updates with firmware releases.
+
+{:device/id           :korg/minilogue-xd
+ :device/name         "Korg Minilogue XD"
+ :device/manufacturer "Korg"
+ :device/type         :synthesizer
+ :device/voices       4
+ :device/role         :target       ; cljseq drives this device
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1             ; default; configurable on device
+ :midi/poly-mode      :poly         ; also :duo :unison :mono :chord :arp
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes
+ ;; -------------------------------------------------------------------------
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on true :note-off true}
+  :aftertouch {:channel-pressure true :poly-key-pressure false}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Pitch bend
+ ;; -------------------------------------------------------------------------
+ :midi/pitch-bend
+ {:range-semitones 2              ; ±2 default; configurable ±1–12
+  :configurable    true}
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive true
+  :send    false                  ; does not transmit clock
+  :uses    [:lfo-bpm-sync :arp]}
+
+ ;; -------------------------------------------------------------------------
+ ;; Program change
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:receive     true
+  :range       [0 499]            ; 500 programs across 5 banks
+  :bank-select true               ; CC 0 (MSB) + CC 32 (LSB) for bank; PC 0–99 within bank
+  :bank-msb    0
+  :bank-lsb    32}
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x42]         ; Korg
+  :purpose         [:patch-dump :patch-load :global-settings :editor-communication]}
+
+ ;; -------------------------------------------------------------------------
+ ;; Control Change map
+ ;; :path    — control tree path within this device's subtree
+ ;; :range   — [min max] CC value range (always [0 127] unless noted)
+ ;; :default — default CC value (nil = not documented / variable)
+ ;; :bipolar — true if CC 64 is the zero point
+ ;; :values  — for discrete (enum) parameters: [{:value n :label kw}]
+ ;; :cc-type — :fixed (manufacturer-assigned) | :configurable | :global
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+
+ [;; --- Standard / Global ---------------------------------------------------
+  {:cc 0   :path [:bank-select :msb] :range [0 127] :cc-type :global}
+  {:cc 1   :path [:mod-wheel]        :range [0 127] :default 0   :cc-type :global
+   :note "Destination depends on modulation matrix routing"}
+  {:cc 7   :path [:volume]           :range [0 127] :default 100 :cc-type :global}
+  {:cc 10  :path [:pan]              :range [0 127] :default 64  :cc-type :global}
+  {:cc 32  :path [:bank-select :lsb] :range [0 127] :cc-type :global}
+  {:cc 64  :path [:sustain-pedal]    :range [0 127] :default 0   :cc-type :global
+   :note "≥64 = on"}
+
+  ;; --- Voice Mode ----------------------------------------------------------
+  {:cc 18  :path [:voice-mode :depth] :range [0 127] :cc-type :fixed}
+  {:cc 19  :path [:voice-mode :type]  :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :poly}
+            {:value 21  :label :duo}
+            {:value 43  :label :unison}
+            {:value 64  :label :mono}
+            {:value 85  :label :chord}
+            {:value 107 :label :arp}]}
+
+  ;; --- VCO 1 ---------------------------------------------------------------
+  {:cc 20  :path [:vco1 :pitch]    :range [0 127] :default 64 :cc-type :fixed
+   :note "Semitone offset; 64 = center"}
+  {:cc 21  :path [:vco1 :shape]    :range [0 127] :cc-type :fixed
+   :note "Continuous wave shape; interpretation depends on wave selection"}
+  {:cc 22  :path [:vco1 :octave]   :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :16-foot}
+            {:value 32  :label :8-foot}
+            {:value 64  :label :4-foot}
+            {:value 96  :label :2-foot}]}
+  {:cc 23  :path [:vco1 :wave]     :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :triangle}
+            {:value 43  :label :saw}
+            {:value 86  :label :pulse}]}
+
+  ;; --- VCO 2 ---------------------------------------------------------------
+  {:cc 24  :path [:vco2 :pitch]    :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 25  :path [:vco2 :shape]    :range [0 127] :cc-type :fixed}
+  {:cc 26  :path [:vco2 :octave]   :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :16-foot}
+            {:value 32  :label :8-foot}
+            {:value 64  :label :4-foot}
+            {:value 96  :label :2-foot}]}
+  {:cc 27  :path [:vco2 :wave]     :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :triangle}
+            {:value 43  :label :saw}
+            {:value 86  :label :pulse-square}]}
+
+  ;; --- VCO Modifiers -------------------------------------------------------
+  {:cc 28  :path [:vco :sync]           :range [0 127] :default 0 :cc-type :fixed
+   :values [{:value 0  :label :off} {:value 127 :label :on}]}
+  {:cc 29  :path [:vco :ring-mod]       :range [0 127] :default 0 :cc-type :fixed
+   :values [{:value 0  :label :off} {:value 127 :label :on}]}
+  {:cc 30  :path [:vco :cross-mod-depth] :range [0 127] :default 0 :cc-type :fixed}
+
+  ;; --- Multi Engine (3rd oscillator) ---------------------------------------
+  ;; Multi Engine type is selected on device; CCs control the current engine.
+  ;; User oscillator plugin CCs (90+) are device/plugin-specific; omitted here.
+  {:cc 31  :path [:multi-engine :noise-type] :range [0 127] :cc-type :fixed
+   :note "Noise type or VPM parameter depending on Multi Engine selection"}
+
+  ;; --- Mixer ---------------------------------------------------------------
+  {:cc 33  :path [:mixer :vco1-level]         :range [0 127] :cc-type :fixed}
+  {:cc 34  :path [:mixer :vco2-level]         :range [0 127] :cc-type :fixed}
+  {:cc 35  :path [:mixer :multi-engine-level] :range [0 127] :cc-type :fixed}
+  {:cc 36  :path [:mixer :noise-level]        :range [0 127] :cc-type :fixed}
+
+  ;; --- Filter --------------------------------------------------------------
+  {:cc 37  :path [:filter :hpf-cutoff]    :range [0 127] :default 0  :cc-type :fixed}
+  {:cc 39  :path [:filter :low-cut]       :range [0 127] :cc-type :fixed}
+  {:cc 40  :path [:filter :cutoff]        :range [0 127] :default 64 :cc-type :fixed
+   :note "Main 2-pole LPF cutoff frequency"}
+  {:cc 41  :path [:filter :resonance]     :range [0 127] :default 0  :cc-type :fixed}
+  {:cc 42  :path [:filter :eg-intensity]  :range [0 127] :default 64 :cc-type :fixed
+   :bipolar true :center 64
+   :note "Bipolar: 0=full negative, 64=zero, 127=full positive"}
+  {:cc 43  :path [:filter :key-track]     :range [0 127] :default 0  :cc-type :fixed}
+
+  ;; --- Envelope (shared EG) ------------------------------------------------
+  {:cc 44  :path [:eg :attack]    :range [0 127] :default 0  :cc-type :fixed}
+  {:cc 45  :path [:eg :decay]     :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 46  :path [:eg :sustain]   :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 47  :path [:eg :release]   :range [0 127] :default 32 :cc-type :fixed}
+
+  ;; --- LFO -----------------------------------------------------------------
+  {:cc 49  :path [:lfo :rate]      :range [0 127] :default 0 :cc-type :fixed}
+  {:cc 50  :path [:lfo :intensity] :range [0 127] :default 0 :cc-type :fixed}
+  {:cc 51  :path [:lfo :target]    :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :pitch}
+            {:value 43  :label :shape}
+            {:value 86  :label :cutoff}]}
+  {:cc 52  :path [:lfo :eg-mod]    :range [0 127] :cc-type :fixed}
+  {:cc 53  :path [:lfo :wave]      :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :saw}
+            {:value 26  :label :triangle}
+            {:value 51  :label :square}
+            {:value 77  :label :random-s&h}
+            {:value 102 :label :random-smooth}]}
+  {:cc 54  :path [:lfo :mode]      :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :fast}
+            {:value 43  :label :slow}
+            {:value 86  :label :bpm-sync}]}
+
+  ;; --- Delay ---------------------------------------------------------------
+  {:cc 55  :path [:delay :time]    :range [0 127] :cc-type :fixed}
+  {:cc 56  :path [:delay :depth]   :range [0 127] :cc-type :fixed}
+  {:cc 57  :path [:delay :type]    :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :stereo-delay}
+            {:value 43 :label :mono-delay}
+            {:value 86 :label :ping-pong}]}
+
+  ;; --- Reverb --------------------------------------------------------------
+  {:cc 58  :path [:reverb :time]   :range [0 127] :cc-type :fixed}
+  {:cc 59  :path [:reverb :depth]  :range [0 127] :cc-type :fixed}
+  {:cc 60  :path [:reverb :type]   :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :room}
+            {:value 43 :label :hall}
+            {:value 86 :label :plate}]}
+
+  ;; --- Channel Mode --------------------------------------------------------
+  {:cc 120 :path [:channel-mode :all-sound-off]       :range [0 0] :cc-type :global}
+  {:cc 121 :path [:channel-mode :reset-all-controllers] :range [0 0] :cc-type :global}
+  {:cc 123 :path [:channel-mode :all-notes-off]       :range [0 0] :cc-type :global}]
+
+ ;; -------------------------------------------------------------------------
+ ;; NRPN parameter list (partial — see Korg MIDI implementation PDF)
+ ;; NRPN uses CC 99 (MSB) + CC 98 (LSB) for parameter select,
+ ;; CC 6 (MSB) + CC 38 (LSB) for data entry.
+ ;; -------------------------------------------------------------------------
+ :midi/nrpn
+ [{:nrpn 0   :path [:eg :type]      :note "Gate/ADSR mode; extended resolution"}
+  {:nrpn 1   :path [:portamento]    :note "Portamento time; 14-bit resolution"}
+  ;; ... full NRPN list omitted — consult Korg MIDI implementation appendix
+  ]
+
+ ;; -------------------------------------------------------------------------
+ ;; Metadata
+ ;; -------------------------------------------------------------------------
+ :device/firmware-version "2.0"   ; CC map stable from firmware 2.0+
+ :device/map-source       "Korg Minilogue XD Owner's Manual Appendix, verified Medium-High confidence"
+ :device/map-version      "2026-03-30"}

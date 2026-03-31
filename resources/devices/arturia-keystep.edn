@@ -1,0 +1,134 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Arturia KeyStep (original) — cljseq device map
+;;
+;; The KeyStep is a controller (send-only role). This map describes what it
+;; *transmits*; cljseq uses this to configure ctrl/bind! source mappings.
+;;
+;; Confidence: Medium-High for note/velocity/AT/clock.
+;;             Strip CC assignment is user-configurable via MIDI Control Center.
+;;
+;; NOTE: The original KeyStep has no DIN MIDI input — it cannot be a target.
+;;       Use :role :controller to reflect this.
+
+{:device/id           :arturia/keystep
+ :device/name         "Arturia KeyStep"
+ :device/manufacturer "Arturia"
+ :device/type         :controller
+ :device/role         :controller   ; transmits to cljseq; is not a target
+ :device/connectivity [:usb-midi    ; USB-B, class-compliant, also bus-powered
+                        :din-midi-out ; 5-pin DIN out only — no DIN input
+                        :cv-gate     ; 1V/oct + gate + mod CV outputs
+                        :cv-clock]   ; clock output
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1             ; default; configurable via MIDI Control Center
+ :midi/poly-mode      :mono         ; monophonic keyboard (one note at a time)
+                                    ; chord mode sends up to 8 simultaneous notes
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes transmitted
+ ;; -------------------------------------------------------------------------
+ :midi/notes
+ {:range      [0 127]              ; physical keys C3–G5 (MIDI 48–79); octave shift extends
+  :velocity   {:note-on true :note-off false}  ; note-off velocity is typically fixed at 64
+  :aftertouch {:channel-pressure true          ; touch strip transmits channel pressure
+               :poly-key-pressure false}}      ; per-key aftertouch not available
+
+ ;; -------------------------------------------------------------------------
+ ;; Touch strip
+ ;; The strip is dual-function: switches between AT / PB / CC mode.
+ ;; Default mode and CC assignment are set in MIDI Control Center.
+ ;; -------------------------------------------------------------------------
+ :midi/touch-strip
+ {:modes       [:aftertouch :pitch-bend :cc]
+  :default-mode :aftertouch
+  :cc-when-in-cc-mode {:number :configurable    ; any CC 0–127; default often CC 1
+                        :range  [0 127]}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Pitch bend
+ ;; -------------------------------------------------------------------------
+ :midi/pitch-bend
+ {:range-semitones 2               ; configurable in MIDI Control Center
+  :configurable    true
+  :source          :touch-strip}   ; strip when in PB mode
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:send    true                    ; KeyStep can be MIDI clock master
+  :receive true                    ; can slave to external MIDI clock or CV clock in
+  :transport-messages [:start :stop :continue]}
+
+ ;; -------------------------------------------------------------------------
+ ;; CC transmitted
+ ;; Most CCs are fixed (standard) or configurable via MIDI Control Center.
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+
+ [;; Sustain pedal (1/4" TRS input jack)
+  {:cc 64  :path [:sustain]     :range [0 127] :default 0 :cc-type :fixed
+   :source :sustain-jack
+   :note "Receives 1/4\" TRS pedal; transmits CC 64"}
+
+  ;; Touch strip in CC mode (configurable; CC 1 is the common default)
+  {:cc :configurable
+   :path [:touch-strip]
+   :range [0 127]
+   :cc-type :configurable
+   :configured-via :midi-control-center
+   :default-cc 1
+   :note "Strip CC number set in MIDI Control Center; commonly CC 1 (mod wheel)"}]
+
+ ;; -------------------------------------------------------------------------
+ ;; Sequencer transmit capabilities
+ ;; -------------------------------------------------------------------------
+ :sequencer
+ {:steps     8                     ; 8 steps max per sequence
+  :sequences 8                     ; 8 sequences storable
+  :transmits [:note :velocity :gate-length]
+  :note "Sequencer does not record or transmit CC data"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Chord memory
+ ;; -------------------------------------------------------------------------
+ :chord-memory
+ {:max-notes 8
+  :note "Chord notes transmitted simultaneously on single keypress"}
+
+ ;; -------------------------------------------------------------------------
+ ;; CV/Gate outputs (for Eurorack integration)
+ ;; -------------------------------------------------------------------------
+ :cv-outputs
+ {:pitch {:type :v/oct  :range-v [-5 5]   :note "1V/oct pitch from keyboard"}
+  :gate  {:type :gate   :levels-v [0 5]   :note "0V/+5V gate from key press"}
+  :mod   {:type :cv     :assignable true  :note "Touch strip, velocity, or LFO; set in MIDI Control Center"}
+  :clock {:type :clock  :configurable true :note "Clock out; division configurable on device"}}
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x6B]   ; Arturia
+  :purpose         [:midi-control-center-communication :configuration-dump]}
+
+ ;; -------------------------------------------------------------------------
+ ;; cljseq binding hints
+ ;; ctrl/bind! sources for incoming KeyStep data:
+ ;;   (ctrl/bind! [:some/param] {:device :arturia/keystep :source :touch-strip})
+ ;; -------------------------------------------------------------------------
+ :cljseq/bind-sources
+ {:notes       {:source :note-on    :yields :pitch-midi}
+  :velocity    {:source :note-on    :yields :velocity-0-127}
+  :touch-strip {:source :channel-pressure :yields :pressure-0-127}
+  :sustain     {:source :cc-64      :yields :boolean}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Metadata
+ ;; -------------------------------------------------------------------------
+ :device/map-source   "Arturia KeyStep User Manual + MIDI Control Center documentation"
+ :device/map-version  "2026-03-30"}
