@@ -5987,3 +5987,291 @@ Dynamic vars used by the sugar layer:
 - `*default-synth*` — overridden by `use-synth!` / `with-synth`
 
 Both are registered in the Configuration Registry (§25).
+
+---
+
+## 28. Phasor Signal Architecture
+
+Established during Sprint 7 research. This section documents the foundational signal
+model that underlies clocks, LFOs, envelopes, rhythm, and `defflux` head relationships.
+It supersedes the `MasterClock` and `ClockDiv` record types from the `ITemporalValue`
+spike (Q44).
+
+### 28.1 Motivation
+
+The original `ITemporalValue` spike introduced `MasterClock`, `ClockDiv`, `Lfo`, and
+`Swing` as separate record types. Two problems emerged on review:
+
+1. **Gate semantics vs. signal semantics.** `MasterClock.sample` always returns 1.0;
+   `ClockDiv.sample` returns 0.0 or 1.0 at beat boundaries. These are gate signals —
+   suitable for trigger detection but incompatible with shape functions that expect
+   values in [0.0, 1.0). Passing a gate signal to `fold` or `sine-uni` silently
+   produces wrong results at the shape function endpoints.
+
+2. **Vestigial `source` field.** `ClockDiv` carries a `source` field expressing
+   "this clock derives from source," but neither `sample` nor `next-edge` uses it.
+   The field is a structural lie about a dependency that doesn't exist in the
+   implementation.
+
+Both problems disappear when clocks are expressed as **unipolar phasors** — linear
+ramps in [0.0, 1.0) cycling at a given rate. The phasor is the correct primitive: it
+is compatible with shape functions, it has no hidden state dependencies, and trigger
+detection falls out explicitly via `delta`.
+
+### 28.2 The Phasor type
+
+A phasor is parameterised by `rate` (cycles per beat, rational) and `phase-offset`
+(initial phase shift, [0.0, 1.0)). Its value at beat `b` is:
+
+```
+p = frac(b × rate + offset)
+```
+
+where `frac(x) = x − floor(x)`, always in [0.0, 1.0).
+
+As an `ITemporalValue` (defined in `cljseq.clock`):
+
+```clojure
+(defrecord Phasor [rate phase-offset]
+  ITemporalValue
+  (sample [_ beat]
+    (phasor/wrap (+ (* (double rate) (double beat))
+                    (double phase-offset))))
+  (next-edge [_ beat]
+    (let [accumulated (+ (* (double rate) (double beat))
+                         (double phase-offset))
+          next-n      (+ (Math/floor accumulated) 1.0)]
+      (/ (- next-n (double phase-offset)) (double rate)))))
+```
+
+`next-edge` returns the exact beat at which the phasor next wraps to 0 — the
+rising edge, the scheduling event. For integer-rate cases this is numerically
+identical to the old `MasterClock`/`ClockDiv` results. For fractional rates
+(e.g., `(->Phasor 3/7 0)`) the result is exact with no ClockDiv equivalent.
+
+### 28.3 Core operation vocabulary (`cljseq.phasor`)
+
+All operations are pure functions over doubles. No dependencies.
+
+```clojure
+;; Fundamental
+(defn wrap  [x]      (- x (Math/floor x)))              ; → [0.0, 1.0)
+(defn fold  [p]      (- 1.0 (Math/abs (- (* 2.0 p) 1.0)))) ; → [0.0, 1.0], triangle
+(defn scale [p lo hi] (+ lo (* p (- hi lo))))            ; → [lo, hi]
+
+;; Step / rhythm
+(defn index [p n]    (int (Math/floor (* p (double n)))) ; → integer [0, n)
+(defn step  [p n]    (/ (Math/floor (* p (double n))) (double n))) ; staircase [0,1)
+
+;; Trigger / sync
+(defn delta [p p-prev] (if (< p p-prev) 1 0))           ; 1 at wrap, 0 otherwise
+(defn sync  [p trigger] (if (pos? trigger) 0.0 p))       ; reset phase on trigger
+```
+
+`delta` is the only operation that requires the previous sample. This is correct:
+trigger detection is inherently stateful, and the phasor model makes that explicit
+at the call site rather than hiding it inside a record.
+
+### 28.4 Shape functions (`cljseq.phasor`)
+
+Shape functions map a phasor value in [0.0, 1.0) to an output value. They are plain
+functions — not records, not protocols — and compose freely with each other and with
+`scale`.
+
+```clojure
+(defn sine-uni  [p] (/ (+ 1.0 (Math/sin (* 2.0 Math/PI p))) 2.0))  ; [0.0, 1.0]
+(defn sine-bi   [p] (Math/sin (* 2.0 Math/PI p)))                    ; [-1.0, 1.0]
+(defn triangle  [p] (fold p))                                         ; [0.0, 1.0]
+(defn saw-up    [p] p)                                                ; [0.0, 1.0) = phasor
+(defn saw-down  [p] (- 1.0 p))                                        ; (0.0, 1.0]
+(defn square    [pw] (fn [p] (if (< p (double pw)) 1.0 0.0)))        ; {0.0, 1.0}
+```
+
+`square` returns a function parameterised by pulse width `pw` ∈ [0.0, 1.0). This
+is the only shape function that is not a direct mapping — the pulse width is the
+configurable parameter, not a sample-time input.
+
+### 28.5 Namespace layering
+
+```
+cljseq.phasor   — pure math, no dependencies
+                  wrap, fold, scale, index, step, delta, sync
+                  sine-uni, sine-bi, triangle, saw-up, saw-down, square
+       ↑
+cljseq.clock    — requires cljseq.phasor
+                  ITemporalValue protocol
+                  Phasor record (implements ITemporalValue)
+                  BPM utilities: beats->ms, bpm->ms-per-beat, now-ns
+                  Named constructors: master-clock, clock-div, clock-mul, clock-shift
+       ↑
+cljseq.mod      — requires cljseq.clock + cljseq.phasor
+                  lfo      — Phasor + shape fn → ITemporalValue
+                  envelope — breakpoint list → shape fn → ITemporalValue
+                  one-shot — ITemporalValue that clamps after first cycle
+                  (Q30 — LFO rate: empirical during implementation)
+
+cljseq.timing   — requires cljseq.clock + cljseq.phasor
+                  swing, humanize, groove templates
+                  All return Long nanosecond offsets (Q35, Q46)
+```
+
+`cljseq.phasor` has no Clojure protocol or record dependencies — it is pure
+arithmetic and can be used independently. `cljseq.clock` builds the protocol layer
+on top, keeping `ITemporalValue` and `Phasor` co-located so that implementors of
+the protocol do not need a separate protocol-namespace import.
+
+### 28.6 Named clock constructors (replacing MasterClock and ClockDiv)
+
+`MasterClock` and `ClockDiv` are removed. Their functionality is subsumed by `Phasor`
+with named constructors that preserve the musical vocabulary:
+
+```clojure
+;; cljseq.clock
+(def master-clock     (->Phasor 1   0))         ; one cycle per beat
+(defn clock-div   [n] (->Phasor (/ 1.0 n) 0))  ; one cycle per n beats
+(defn clock-mul   [n] (->Phasor (double n) 0))  ; n cycles per beat
+(defn clock-shift [n offset]                     ; clock-div with phase offset
+  (->Phasor (/ 1.0 n) offset))
+```
+
+`master-clock` as a named var retains its role as the canonical reference phasor.
+The BPM field that `MasterClock` carried is removed — BPM belongs exclusively to
+the scheduling layer (system-state `:config :bpm`), not to the clock signal.
+
+**`next-edge` equivalence for integer-rate cases** (verified):
+
+| beat | old ClockDiv(4) | new Phasor(1/4,0) |
+|------|----------------|-------------------|
+| 0 | 4 | 4.0 |
+| 1 | 4 | 4.0 |
+| 4 | 8 | 8.0 |
+| 5 | 8 | 8.0 |
+
+Scheduling contracts are preserved.
+
+### 28.7 LFOs and envelopes (`cljseq.mod`)
+
+An LFO is a `Phasor` composed with a shape function:
+
+```clojure
+;; cljseq.mod
+(defrecord Lfo [ph shape-fn]
+  ITemporalValue
+  (sample    [_ beat] (shape-fn (clock/sample ph beat)))
+  (next-edge [_ beat] (clock/next-edge ph beat)))
+
+(defn lfo
+  "Construct an LFO from a Phasor and a shape function.
+  shape-fn: [0.0, 1.0) → number"
+  [phasor shape-fn]
+  (->Lfo phasor shape-fn))
+```
+
+Usage:
+
+```clojure
+(def filter-mod
+  (lfo (->Phasor 1/16 0) phasor/sine-uni))   ; slow sine, unipolar
+
+(def pan-mod
+  (lfo (->Phasor 1/16 0) phasor/triangle))   ; same rate, different shape, phase-locked
+```
+
+The same `Phasor` instance can be shared between multiple `lfo` calls. Phase-locking
+is free — they share the same rate and offset.
+
+An **envelope** is a shape function defined by piecewise-linear breakpoints over
+[0.0, 1.0]:
+
+```clojure
+(def adsr
+  (envelope [[0.00 0.0]    ; silence
+             [0.10 1.0]    ; attack peak
+             [0.30 0.7]    ; decay to sustain
+             [0.80 0.7]    ; sustain hold
+             [1.00 0.0]])) ; release
+
+(def voice-env (lfo (->Phasor 1/4 0) adsr))  ; 4-beat envelope cycle
+```
+
+A **one-shot** envelope runs once and clamps. It wraps any `ITemporalValue` (typically
+an `lfo` with an envelope shape) and returns the clamped value after the first cycle:
+
+```clojure
+(def attack-env (one-shot (->Phasor 1/4 0) adsr start-beat))
+```
+
+`one-shot` makes `next-edge` return `##Inf` after the first cycle completes,
+signalling to the scheduler that no further wakeup is needed.
+
+### 28.8 Rhythm and step sequences as phasor derivations
+
+A step sequence of N steps over L beats:
+
+```clojure
+(def seq-ph (->Phasor (/ 1.0 L) 0))           ; one cycle per L beats
+
+;; Current step index at beat b:
+(phasor/index (clock/sample seq-ph b) N)       ; → [0, N)
+
+;; Trigger at each step boundary:
+(phasor/delta (clock/sample seq-ph b)
+              (clock/sample seq-ph b-prev))    ; → 1 at boundary, 0 otherwise
+
+;; Read a pattern at the current step:
+(def pattern [60 62 64 65 67 65 64 62])
+(nth pattern (phasor/index (clock/sample seq-ph b) (count pattern)))
+```
+
+The pattern is data. The phasor is the read head. Nothing else is needed.
+
+**Polyrhythm** is two phasors at incommensurate rates. Their coincidence period
+is `lcm(1/r₁, 1/r₂)` beats — the phasor model expresses the relationship directly
+without additional bookkeeping.
+
+**Clock multiplication / subdivision** falls out from the phasor rate:
+
+```clojure
+(->Phasor 4   0)   ; 4 triggers per beat (sixteenth notes at 4/4)
+(->Phasor 3/4 0)   ; 3 triggers per 4 beats — triplet quarter notes
+(->Phasor 3/2 0)   ; 3:2 polyrhythm relationship to master-clock
+```
+
+### 28.9 `defflux` head relationships as phasors (§26)
+
+The `defflux` read and write heads, expressed as phasors, make their phase
+relationship first-class:
+
+```clojure
+(def read-ph  (->Phasor r-read  0))
+(def write-ph (->Phasor r-write 0))
+
+;; Phase gap: how far ahead in the cycle the read head is relative to write
+(defn head-gap [beat]
+  (phasor/wrap (- (clock/sample read-ph beat)
+                  (clock/sample write-ph beat))))
+```
+
+`head-gap` is itself a phasor at rate `(r-read − r-write)`. Its value at any
+beat is directly interpretable: 0.0 = heads aligned; 0.5 = read head is halfway
+around the buffer ahead of the write head; the write head is composing notes that
+the read head will reach in `N/2` steps.
+
+This is a musically meaningful parameter — the "lookahead distance" — that the
+original `defflux` design had no direct expression for. With phasors it is a
+first-class derived value, exposable in the control tree and bindable via
+`ctrl/bind!`.
+
+`defflux` implementation (Phase 6+) will use `Phasor` for both heads, `phasor/index`
+for step position, and `phasor/delta` for step boundary triggers.
+
+### 28.10 Design decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| Replace `MasterClock`/`ClockDiv` with `Phasor` | Gate semantics incompatible with shape functions; `source` field vestigial |
+| `cljseq.phasor` as a no-dependency namespace | Pure math; usable independently; shapes compose cleanly |
+| `ITemporalValue` and `Phasor` co-located in `cljseq.clock` | Avoids circular dep between protocol and implementation namespaces |
+| `Lfo` moves from `cljseq.clock` to `cljseq.mod` | `cljseq.clock` is clock infrastructure; LFOs are modulation signals |
+| `Swing` moves from `cljseq.clock` to `cljseq.timing` | Timing modulators have their own namespace (Q46) |
+| BPM removed from clock record | BPM is a scheduling concern; phasors are beat-relative, BPM-agnostic |
