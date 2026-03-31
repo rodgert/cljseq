@@ -13,8 +13,7 @@
   :profiles {:uberjar {:aot :all
                        :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}
              :dev {:dependencies []}}
-  :plugins [[lein-mcp "0.1.0-SNAPSHOT"]
-            [lein-codox "0.10.8"]]
+  :plugins [[lein-codox "0.10.8"]]
   :codox {:output-path "target/codox"
           :namespaces [cljseq.clock
                        cljseq.ctrl
