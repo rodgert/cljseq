@@ -11,32 +11,24 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest master-clock-test
-  (testing "MasterClock always returns 1.0"
-    (let [mc (clock/master-clock 120)]
-      (is (= 1.0 (clock/sample mc 0)))
-      (is (= 1.0 (clock/sample mc 1/2)))
-      (is (= 1.0 (clock/sample mc 7)))))
-  (testing "MasterClock next-edge on integer beats"
-    (let [mc (clock/master-clock 120)]
-      (is (= 1 (clock/next-edge mc 0)))
-      (is (= 2 (clock/next-edge mc 1)))
-      (is (= 5 (clock/next-edge mc 4)))))
-  (testing "MasterClock next-edge mid-beat advances to next integer"
-    (let [mc (clock/master-clock 120)]
-      (is (= 3 (clock/next-edge mc 2.3))))))
+  (testing "master-clock sample"
+    (is (= 0.0 (clock/sample clock/master-clock 0)))
+    (is (= 0.5 (clock/sample clock/master-clock 0.5)))
+    (is (= 0.0 (clock/sample clock/master-clock 1.0))))
+  (testing "master-clock next-edge"
+    (is (= 1.0 (clock/next-edge clock/master-clock 0)))
+    (is (= 1.0 (clock/next-edge clock/master-clock 0.3)))
+    (is (= 2.0 (clock/next-edge clock/master-clock 1.0)))))
 
 (deftest clock-div-test
-  (testing "ClockDiv/4 fires on multiples of 4"
-    (let [cd (clock/clock-div 4 (clock/master-clock 120))]
-      (is (= 1.0 (clock/sample cd 0)))
-      (is (= 0.0 (clock/sample cd 1)))
-      (is (= 0.0 (clock/sample cd 2)))
-      (is (= 1.0 (clock/sample cd 4)))
-      (is (= 1.0 (clock/sample cd 8)))))
-  (testing "ClockDiv next-edge"
-    (let [cd (clock/clock-div 4 (clock/master-clock 120))]
-      (is (= 4 (clock/next-edge cd 1)))
-      (is (= 8 (clock/next-edge cd 4))))))
+  (testing "clock-div/4 sample"
+    (is (= 0.0   (clock/sample (clock/clock-div 4) 0)))
+    (is (= 0.25  (clock/sample (clock/clock-div 4) 1)))
+    (is (= 0.0   (clock/sample (clock/clock-div 4) 4))))
+  (testing "clock-div/4 next-edge"
+    (is (= 4.0 (clock/next-edge (clock/clock-div 4) 0)))
+    (is (= 4.0 (clock/next-edge (clock/clock-div 4) 1)))
+    (is (= 8.0 (clock/next-edge (clock/clock-div 4) 4)))))
 
 (deftest beats->ms-test
   (testing "120 BPM: 1 beat = 500ms"

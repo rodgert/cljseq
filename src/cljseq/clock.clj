@@ -1,17 +1,24 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.clock
-  "cljseq clock subsystem — ITemporalValue protocol and BPM utilities.
+  "cljseq clock subsystem — ITemporalValue protocol, Phasor record, BPM utilities.
 
-  Promoted from cljseq.spike.temporal (Q44 spike verified).
+  `ITemporalValue` is the single protocol for all time-varying values in cljseq:
+  phasors, LFOs, envelopes, swing modulators, and any user-defined signal.
 
-  `ITemporalValue` is the single protocol for all time-varying values:
-  clocks, LFOs, envelopes, swing modulators. See doc/spike-itemporalvalue.md.
+  `Phasor` is the canonical implementation: a unipolar ramp in [0.0, 1.0) at a
+  given rate in cycles per beat. All clock and modulation signals are Phasors or
+  transformations of Phasors.
 
-  Key design decisions: Q44 (ITemporalValue protocol), Q1 (virtual time),
-  Q35 (timing returns Long nanoseconds).")
+  MasterClock and ClockDiv from the ITemporalValue spike (Q44) are superseded by
+  `master-clock`, `clock-div`, `clock-mul`, and `clock-shift` — all of which
+  return Phasor instances.
+
+  Key design decisions: R&R §28 (Phasor Signal Architecture), Q44 (ITemporalValue),
+  Q1 (virtual time), Q35 (timing returns Long nanoseconds)."
+  (:require [cljseq.phasor :as phasor]))
 
 ;; ---------------------------------------------------------------------------
-;; Protocol (promoted from spike)
+;; Protocol
 ;; ---------------------------------------------------------------------------
 
 (defprotocol ITemporalValue
@@ -25,75 +32,57 @@
   (next-edge [v beat] "Return the beat of the next 0→1 rising edge after `beat`."))
 
 ;; ---------------------------------------------------------------------------
-;; Master clock
+;; Phasor record
 ;; ---------------------------------------------------------------------------
 
-(defrecord MasterClock [bpm]
+(defrecord Phasor [rate phase-offset]
   ITemporalValue
-  (sample    [_ _beat] 1.0)
-  (next-edge [_ beat]  (inc (long beat))))
-
-(defn master-clock
-  "Construct a master clock at `bpm` beats per minute.
-  Ticks on every integer beat boundary."
-  [bpm]
-  (->MasterClock bpm))
-
-;; ---------------------------------------------------------------------------
-;; Clock divider
-;; ---------------------------------------------------------------------------
-
-(defrecord ClockDiv [divisor source]
-  ITemporalValue
-  (sample    [_ beat]
-    (if (zero? (mod (long beat) divisor)) 1.0 0.0))
+  (sample [_ beat]
+    (phasor/wrap (+ (* (double rate) (double beat))
+                    (double phase-offset))))
   (next-edge [_ beat]
-    (* divisor (inc (long (/ beat divisor))))))
+    ;; Edge occurs when beat×rate + offset crosses an integer.
+    ;; Next integer above current accumulated phase:
+    (let [accumulated (+ (* (double rate) (double beat))
+                         (double phase-offset))
+          next-n      (+ (Math/floor accumulated) 1.0)]
+      (/ (- next-n (double phase-offset)) (double rate)))))
+
+;; ---------------------------------------------------------------------------
+;; Named clock constructors
+;; ---------------------------------------------------------------------------
+
+(def master-clock
+  "The reference phasor: one cycle per beat.
+  Equivalent to the former MasterClock record."
+  (->Phasor 1 0))
 
 (defn clock-div
-  "Divide `source` clock by `divisor`.
-  Returns high (1.0) only on beats that are multiples of divisor."
-  [divisor source]
-  (->ClockDiv divisor source))
+  "Return a Phasor that completes one cycle every `n` beats.
+  Equivalent to the former ClockDiv record.
 
-;; ---------------------------------------------------------------------------
-;; LFO
-;; ---------------------------------------------------------------------------
+  Examples:
+    (clock-div 4)   ; one cycle per 4 beats (bar-rate at 4/4)
+    (clock-div 16)  ; one cycle per 16 beats (phrase-rate)"
+  [n]
+  (->Phasor (/ 1.0 (double n)) 0))
 
-(defrecord Lfo [rate shape]
-  ITemporalValue
-  (sample    [_ beat]
-    (Math/sin (* 2.0 Math/PI (double rate) (double beat))))
-  (next-edge [_ beat]
-    (let [cycle   (/ 1.0 (double rate))
-          current (mod (double beat) cycle)]
-      (+ (double beat) (- cycle current)))))
+(defn clock-mul
+  "Return a Phasor that completes `n` cycles per beat.
 
-(defn lfo
-  "Construct a sine LFO. :rate = cycles per beat (default 1.0)."
-  [& {:keys [rate shape] :or {rate 1.0 shape :sine}}]
-  (->Lfo rate shape))
+  Examples:
+    (clock-mul 4)   ; four triggers per beat (sixteenth notes)
+    (clock-mul 3/2) ; 3:2 polyrhythm against master-clock"
+  [n]
+  (->Phasor (double n) 0))
 
-;; ---------------------------------------------------------------------------
-;; Swing timing modulator
-;; ---------------------------------------------------------------------------
+(defn clock-shift
+  "Return a Phasor at the same rate as (clock-div n) but shifted by phase-offset.
+  phase-offset is in [0.0, 1.0): 0.5 shifts the clock by half a cycle.
 
-(defrecord Swing [amount]
-  ITemporalValue
-  (sample    [_ beat]
-    (let [phase (mod (double beat) 1.0)]
-      (if (> phase 0.4)
-        (long (* (double amount) 20000000))
-        0)))
-  (next-edge [_ beat]
-    (inc (long beat))))
-
-(defn swing
-  "Construct a swing timing modulator.
-  :amount [0.0 1.0] — proportion of off-beat interval to delay.
-  Returns Long nanosecond offsets (Q35)."
-  [& {:keys [amount] :or {amount 0.5}}]
-  (->Swing amount))
+  Useful for offsetting two voices that share a clock rate."
+  [n phase-offset]
+  (->Phasor (/ 1.0 (double n)) (double phase-offset)))
 
 ;; ---------------------------------------------------------------------------
 ;; BPM / time conversion utilities
@@ -101,12 +90,12 @@
 
 (defn bpm->ms-per-beat
   "Return wall-clock milliseconds per beat at `bpm`."
-  [bpm]
+  ^double [bpm]
   (/ 60000.0 (double bpm)))
 
 (defn beats->ms
-  "Convert `beats` (rational) to milliseconds at `bpm`."
-  [beats bpm]
+  "Convert `beats` (rational or double) to milliseconds at `bpm`."
+  ^double [beats bpm]
   (* (double beats) (bpm->ms-per-beat bpm)))
 
 (defn now-ns

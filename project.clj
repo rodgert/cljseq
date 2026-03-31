@@ -26,6 +26,7 @@
                        cljseq.stochastic
                        cljseq.mod
                        cljseq.morph
+                       cljseq.phasor
                        cljseq.random
                        cljseq.sidecar
                        cljseq.timing]
