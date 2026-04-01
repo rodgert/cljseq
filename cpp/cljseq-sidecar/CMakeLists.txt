@@ -22,6 +22,12 @@ target_link_libraries(cljseq-sidecar
           rtmidi
 )
 
+# When Link is enabled, link against cljseq-link (GPL-2.0-or-later).
+# The resulting binary is GPL-2.0-or-later; sidecar source remains LGPL.
+if(CLJSEQ_ENABLE_LINK)
+  target_link_libraries(cljseq-sidecar PRIVATE cljseq-link)
+endif()
+
 target_include_directories(cljseq-sidecar
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src
 )

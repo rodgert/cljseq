@@ -1,12 +1,19 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 //
-// IPC — TCP localhost frame receiver for cljseq-sidecar
+// IPC — bidirectional TCP localhost frame receiver/sender for cljseq-sidecar
 //
 // Wire format (little-endian throughout):
 //   [uint32 payload_len][uint8 msg_type][uint8 reserved×3][uint8[] payload]
 //
 // NoteOn / NoteOff / CC payload (12 bytes):
 //   [int64 time_ns][uint8 channel][uint8 note_or_cc][uint8 vel_or_val][uint8 reserved]
+//
+// LinkEnable payload (1 byte):  [uint8 quantum]  (0 → use default 4)
+// LinkDisable: no payload.
+// LinkSetBpm payload (8 bytes): [double bpm LE]
+//
+// 0x80 LinkState push payload (37 bytes):
+//   [double bpm][double anchor_beat][int64 anchor_us][uint32 peers][uint8 playing][uint8 reserved×3]
 //
 // Ping has no payload (payload_len == 0).
 // Shutdown has no payload; receipt causes ipc_serve() to return.
@@ -15,19 +22,21 @@
 
 #include "ipc.h"
 
+#include <cljseq/link_bridge.h>
 #include <cljseq/scheduler.h>
 
 #include <asio.hpp>
 #include <array>
 #include <vector>
 #include <memory>
+#include <mutex>
 #include <cstdio>
 #include <cstring>
 
 using asio::ip::tcp;
 
 // ---------------------------------------------------------------------------
-// Little-endian read helpers
+// Little-endian helpers
 // ---------------------------------------------------------------------------
 
 namespace {
@@ -50,24 +59,81 @@ int64_t read_le64(const uint8_t* p) noexcept {
          | static_cast<int64_t>(p[7]) << 56;
 }
 
+double read_le_double(const uint8_t* p) noexcept {
+    int64_t bits = read_le64(p);
+    double v;
+    std::memcpy(&v, &bits, sizeof(v));
+    return v;
+}
+
+// Write helpers (little-endian)
+
+void write_le32(uint8_t* p, uint32_t v) noexcept {
+    p[0] = static_cast<uint8_t>(v);
+    p[1] = static_cast<uint8_t>(v >> 8);
+    p[2] = static_cast<uint8_t>(v >> 16);
+    p[3] = static_cast<uint8_t>(v >> 24);
+}
+
+void write_le64(uint8_t* p, int64_t v) noexcept {
+    for (int i = 0; i < 8; ++i)
+        p[i] = static_cast<uint8_t>(v >> (8 * i));
+}
+
+void write_le_double(uint8_t* p, double v) noexcept {
+    int64_t bits;
+    std::memcpy(&bits, &v, sizeof(bits));
+    write_le64(p, bits);
+}
+
 // ---------------------------------------------------------------------------
-// IpcSession — owns one socket, drives the async read state machine
+// MsgType enum — must match cljseq.sidecar Clojure constants
+// ---------------------------------------------------------------------------
+
+enum class MsgType : uint8_t {
+    NoteOn      = 0x01,
+    NoteOff     = 0x02,
+    CC          = 0x03,
+    LinkEnable  = 0x10,
+    LinkDisable = 0x11,
+    LinkSetBpm  = 0x12,
+    LinkState   = 0x80,
+    Ping        = 0xF0,
+    Shutdown    = 0xFF,
+};
+
+// ---------------------------------------------------------------------------
+// IpcSession — owns one socket, drives bidirectional async I/O
 // ---------------------------------------------------------------------------
 
 class IpcSession : public std::enable_shared_from_this<IpcSession> {
 public:
-    IpcSession(tcp::socket socket, asio::io_context& io)
-        : socket_(std::move(socket)), io_(io) {}
+    IpcSession(tcp::socket socket, asio::io_context& io, cljseq::LinkBridge& link)
+        : socket_(std::move(socket)), io_(io), link_(link) {}
 
-    void start() { read_header(); }
+    void start() {
+        // Register Link state callback: when Link fires, push 0x80 to JVM.
+        link_.set_state_callback([this](const cljseq::LinkState& ls) {
+            push_link_state(ls);
+        });
+        read_header();
+    }
 
 private:
-    static constexpr std::size_t kHeaderLen = 8; // uint32 + uint8 + uint8×3
+    static constexpr std::size_t kHeaderLen = 8;
 
     tcp::socket              socket_;
     asio::io_context&        io_;
+    cljseq::LinkBridge&      link_;
     std::array<uint8_t, kHeaderLen> header_buf_;
     std::vector<uint8_t>     payload_buf_;
+
+    // Serialise concurrent writes (Link callback vs. potential future senders).
+    std::mutex               write_mutex_;
+
+    // ---------------------------------------------------------------------------
+    // Inbound: read → dispatch
+    // ---------------------------------------------------------------------------
 
     void read_header() {
         auto self = shared_from_this();
@@ -82,7 +148,6 @@ private:
 
                 uint32_t payload_len = read_le32(header_buf_.data());
                 uint8_t  msg_type    = header_buf_[4];
-                // bytes [5..7] are reserved
 
                 if (payload_len == 0) {
                     handle_message(msg_type, nullptr, 0);
@@ -107,13 +172,13 @@ private:
     }
 
     void handle_message(uint8_t msg_type_byte, const uint8_t* payload, std::size_t len) {
-        using MT = cljseq::MsgType;
-        auto msg_type = static_cast<MT>(msg_type_byte);
+        auto msg_type = static_cast<MsgType>(msg_type_byte);
 
         switch (msg_type) {
-        case MT::NoteOn:
-        case MT::NoteOff:
-        case MT::CC:
+
+        case MsgType::NoteOn:
+        case MsgType::NoteOff:
+        case MsgType::CC:
             if (len < 12) {
                 std::fprintf(stderr, "[ipc] short payload for type 0x%02x (%zu bytes)\n",
                              msg_type_byte, len);
@@ -122,11 +187,10 @@ private:
             {
                 cljseq::ScheduledEvent ev;
                 ev.time_ns           = read_le64(payload);
-                ev.type              = msg_type;
+                ev.type              = static_cast<cljseq::MsgType>(msg_type_byte);
                 ev.channel           = payload[8];
                 ev.note_or_cc        = payload[9];
                 ev.velocity_or_value = payload[10];
-                // payload[11] is reserved
                 std::fprintf(stderr, "[ipc] enqueue type=0x%02x ch=%u note=%u vel=%u time_ns=%lld\n",
                              msg_type_byte, ev.channel, ev.note_or_cc,
                              ev.velocity_or_value, (long long)ev.time_ns);
@@ -134,11 +198,29 @@ private:
             }
             break;
 
-        case MT::Ping:
-            // No-op keepalive; log at trace level only if needed
+        case MsgType::LinkEnable: {
+            double quantum = (len >= 1 && payload[0] != 0)
+                             ? static_cast<double>(payload[0])
+                             : 4.0;
+            link_.enable(quantum);
+            break;
+        }
+
+        case MsgType::LinkDisable:
+            link_.disable();
             break;
 
-        case MT::Shutdown:
+        case MsgType::LinkSetBpm:
+            if (len >= 8) {
+                double bpm = read_le_double(payload);
+                link_.set_bpm(bpm);
+            }
+            break;
+
+        case MsgType::Ping:
+            break;
+
+        case MsgType::Shutdown:
             std::fprintf(stderr, "[ipc] Shutdown received — stopping\n");
             io_.stop();
             return; // do not chain read_header
@@ -149,31 +231,73 @@ private:
             break;
         }
 
-        // Chain next read
         read_header();
+    }
+
+    // ---------------------------------------------------------------------------
+    // Outbound: push LinkState (0x80) to JVM
+    //
+    // Wire payload (37 bytes):
+    //   [double bpm(8)][double anchor_beat(8)][int64 anchor_us(8)]
+    //   [uint32 peers(4)][uint8 playing(1)][uint8 reserved×3(3)]
+    // ---------------------------------------------------------------------------
+
+    void push_link_state(const cljseq::LinkState& ls) {
+        static constexpr std::size_t kPayloadLen = 37;
+        static constexpr std::size_t kFrameLen   = 8 + kPayloadLen; // header + payload
+
+        auto frame = std::make_shared<std::vector<uint8_t>>(kFrameLen, uint8_t{0});
+        uint8_t* p = frame->data();
+
+        // Header: [uint32 payload_len][uint8 msg_type][uint8 reserved×3]
+        write_le32(p,     static_cast<uint32_t>(kPayloadLen));
+        p[4] = static_cast<uint8_t>(MsgType::LinkState);
+        // p[5..7] reserved, zeroed
+
+        // Payload
+        uint8_t* d = p + 8;
+        write_le_double(d,      ls.bpm);          d += 8;
+        write_le_double(d,      ls.anchor_beat);  d += 8;
+        write_le64(d,           ls.anchor_us);    d += 8;
+        write_le32(d,           ls.peers);        d += 4;
+        d[0] = ls.playing ? 1u : 0u;
+        // d[1..3] reserved, zeroed
+
+        std::fprintf(stderr,
+            "[ipc] push LinkState bpm=%.2f anchor_beat=%.3f peers=%u playing=%d\n",
+            ls.bpm, ls.anchor_beat, ls.peers, ls.playing ? 1 : 0);
+
+        // Serialise writes: Link callbacks may fire from any thread.
+        std::lock_guard<std::mutex> lk(write_mutex_);
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(*frame),
+            [self, frame](asio::error_code ec, std::size_t) {
+                if (ec)
+                    std::fprintf(stderr, "[ipc] push write error: %s\n",
+                                 ec.message().c_str());
+            });
     }
 };
 
 } // anonymous namespace
 
 // ---------------------------------------------------------------------------
-// ipc_serve — accept one connection and run the event loop
+// ipc_serve — entry point
 // ---------------------------------------------------------------------------
 
-void ipc_serve(unsigned short port) {
+void ipc_serve(unsigned short port, cljseq::LinkBridge& link) {
     asio::io_context io;
-    tcp::acceptor acceptor{io, tcp::endpoint{tcp::v4(), port}};
-
+    tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), port));
     std::fprintf(stderr, "[ipc] listening on port %u\n", port);
 
-    // Accept a single connection (Phase 1: one JVM peer)
-    tcp::socket socket{io};
+    // Accept exactly one connection.
+    tcp::socket socket(io);
     acceptor.accept(socket);
     std::fprintf(stderr, "[ipc] JVM connected\n");
 
-    // Kick off the async read loop; io.run() drives it until Shutdown or error
-    std::make_shared<IpcSession>(std::move(socket), io)->start();
-    io.run();
+    auto session = std::make_shared<IpcSession>(std::move(socket), io, link);
+    session->start();
 
+    io.run();
     std::fprintf(stderr, "[ipc] event loop exited\n");
 }

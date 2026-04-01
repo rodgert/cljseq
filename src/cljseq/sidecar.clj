@@ -23,7 +23,7 @@
   (:require [clojure.java.io     :as io]
             [clojure.string      :as str])
   (:import  [java.net        Socket ServerSocket]
-            [java.io         OutputStream BufferedReader InputStreamReader]
+            [java.io         InputStream OutputStream BufferedReader InputStreamReader]
             [java.lang       ProcessBuilder ProcessBuilder$Redirect]
             [java.nio        ByteBuffer ByteOrder]))
 
@@ -32,12 +32,14 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:private sidecar-state
-  (atom {:process      nil    ; java.lang.Process
-         :socket       nil    ; java.net.Socket
-         :out          nil    ; java.io.OutputStream (synchronized on send)
-         :port         nil    ; long — TCP port the sidecar listens on
-         :running?     false
-         :stderr-lines []}))  ; lines captured from sidecar stderr
+  (atom {:process       nil    ; java.lang.Process
+         :socket        nil    ; java.net.Socket
+         :out           nil    ; java.io.OutputStream (synchronized on send)
+         :in            nil    ; java.io.InputStream (reader thread)
+         :port          nil    ; long — TCP port the sidecar listens on
+         :running?      false
+         :stderr-lines  []
+         :push-handlers {}}))  ; lines captured from sidecar stderr
 
 (defn connected?
   "Return true if a sidecar connection is active."
@@ -84,14 +86,18 @@
           (recur))))))
 
 ;; ---------------------------------------------------------------------------
-;; Message type constants
+;; Message type constants (must match C++ MsgType enum in ipc.cpp)
 ;; ---------------------------------------------------------------------------
 
-(def ^:private MSG-NOTE-ON  (unchecked-byte 0x01))
-(def ^:private MSG-NOTE-OFF (unchecked-byte 0x02))
-(def ^:private MSG-CC       (unchecked-byte 0x03))
-(def ^:private MSG-PING     (unchecked-byte 0xF0))
-(def ^:private MSG-SHUTDOWN (unchecked-byte 0xFF))
+(def ^:private MSG-NOTE-ON      (unchecked-byte 0x01))
+(def ^:private MSG-NOTE-OFF     (unchecked-byte 0x02))
+(def ^:private MSG-CC           (unchecked-byte 0x03))
+(def ^:private MSG-LINK-ENABLE  (unchecked-byte 0x10))
+(def ^:private MSG-LINK-DISABLE (unchecked-byte 0x11))
+(def ^:private MSG-LINK-SET-BPM (unchecked-byte 0x12))
+(def ^:private MSG-LINK-STATE   (unchecked-byte 0x80))
+(def ^:private MSG-PING         (unchecked-byte 0xF0))
+(def ^:private MSG-SHUTDOWN     (unchecked-byte 0xFF))
 
 ;; ---------------------------------------------------------------------------
 ;; Frame serialization
@@ -177,6 +183,81 @@
   []
   (send-frame! (make-frame MSG-SHUTDOWN (byte-array 0))))
 
+(defn send-link-enable!
+  "Ask the sidecar to join a Link session.
+  quantum — phrase length in beats (default 4). The sidecar responds with an
+  immediate 0x80 LinkState push carrying the initial session tempo."
+  [& {:keys [quantum] :or {quantum 4}}]
+  (let [payload (byte-array [(unchecked-byte (int quantum))])]
+    (send-frame! (make-frame MSG-LINK-ENABLE payload))))
+
+(defn send-link-disable!
+  "Ask the sidecar to leave the Link session."
+  []
+  (send-frame! (make-frame MSG-LINK-DISABLE (byte-array 0))))
+
+(defn send-link-set-bpm!
+  "Propose a tempo change to the Link session.
+  bpm — new BPM as a double."
+  [^double bpm]
+  (let [buf (ByteBuffer/allocate 8)]
+    (.order buf ByteOrder/LITTLE_ENDIAN)
+    (.putDouble buf bpm)
+    (send-frame! (make-frame MSG-LINK-SET-BPM (.array buf)))))
+
+;; ---------------------------------------------------------------------------
+;; Inbound frame reader (sidecar → JVM)
+;; ---------------------------------------------------------------------------
+
+(defn register-push-handler!
+  "Register a handler for inbound push frames from the sidecar.
+  `msg-type-byte` — the raw uint8 message type (e.g. 0x80 for LinkState).
+  `handler`       — (fn [^bytes payload]) called on the reader thread.
+
+  Registrations survive stop!/start! cycles. Called by cljseq.link at load time."
+  [msg-type-byte handler]
+  (swap! sidecar-state assoc-in [:push-handlers msg-type-byte] handler))
+
+(defn- read-fully!
+  "Read exactly n bytes from in into buf starting at offset. Returns false on EOF."
+  [^InputStream in ^bytes buf ^long offset ^long n]
+  (loop [remaining n pos offset]
+    (if (zero? remaining)
+      true
+      (let [read (.read in buf (int pos) (int remaining))]
+        (if (neg? read)
+          false
+          (recur (- remaining read) (+ pos read)))))))
+
+(defn- start-reader!
+  "Start a daemon thread that reads inbound IPC frames from the sidecar socket
+  and dispatches them to registered push handlers.
+
+  The reader runs until the socket is closed (stop-sidecar! closes it)."
+  [^InputStream in]
+  (let [t (Thread.
+            (fn []
+              (let [header (byte-array 8)]
+                (try
+                  (loop []
+                    (when (read-fully! in header 0 8)
+                      (let [buf      (doto (ByteBuffer/wrap header)
+                                       (.order ByteOrder/LITTLE_ENDIAN))
+                            plen     (.getInt buf)
+                            msg-type (bit-and (.get buf) 0xFF)
+                            payload  (byte-array plen)]
+                        (when (or (zero? plen) (read-fully! in payload 0 plen))
+                          (when-let [h (get (:push-handlers @sidecar-state) msg-type)]
+                            (try (h payload)
+                                 (catch Exception e
+                                   (binding [*out* *err*]
+                                     (println "[cljseq.sidecar] push handler error:" e))))))
+                        (recur))))
+                  (catch Exception _)))))]
+    (.setDaemon t true)
+    (.setName t "cljseq-sidecar-reader")
+    (.start t)))
+
 ;; ---------------------------------------------------------------------------
 ;; Process management
 ;; ---------------------------------------------------------------------------
@@ -206,9 +287,12 @@
                       {:port port})))
     (if-let [result (try
                       (let [sock (Socket. "127.0.0.1" (int port))]
-                        {:socket sock :out (.getOutputStream sock)})
+                        {:socket sock
+                         :out (.getOutputStream sock)
+                         :in  (.getInputStream  sock)})
                       (catch java.net.ConnectException _ nil))]
-      (swap! sidecar-state merge result)
+      (do (swap! sidecar-state merge result)
+          (start-reader! (:in @sidecar-state)))
       (do (Thread/sleep delay-ms)
           (recur (inc attempt) (min 500 (* 2 delay-ms)))))))
 
@@ -261,6 +345,6 @@
     (try (.close sock) (catch Exception _)))
   (when-let [^Process proc (:process @sidecar-state)]
     (.destroyForcibly proc))
-  (swap! sidecar-state assoc :running? false :socket nil :out nil :process nil :port nil)
+  (swap! sidecar-state assoc :running? false :socket nil :out nil :in nil :process nil :port nil)
   (println "[cljseq.sidecar] stopped")
   nil)

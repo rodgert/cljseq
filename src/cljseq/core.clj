@@ -17,6 +17,7 @@
   Q11 (live-loop alias), Q1 (virtual time), phase0-readiness.md."
   (:require [cljseq.clock    :as clock]
             [cljseq.ctrl     :as ctrl]
+            [cljseq.link     :as link]
             [cljseq.loop     :as loop-ns]
             [cljseq.sidecar  :as sidecar])
   (:import  [java.util.concurrent.locks LockSupport])
@@ -109,6 +110,7 @@
                                    :beat0-beat     0.0}))))
     (loop-ns/-register-system! system-state)
     (ctrl/-register-system! system-state)
+    (link/-register-system! system-state)
     (println (str "cljseq started at " bpm " BPM"))
     nil))
 

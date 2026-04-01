@@ -55,7 +55,8 @@ option(CLJSEQ_BUILD_TESTS "Build C++ unit tests" OFF)
 
 if(CLJSEQ_ENABLE_LINK)
   message(STATUS "Ableton Link support enabled — combined binary is GPL-2.0-or-later")
-  add_compile_definitions(CLJSEQ_WITH_LINK)
+  # libcljseq-link is GPL-2.0-or-later; must be added AFTER libcljseq-rt
+  # so that its FetchContent for the Link SDK runs after our own dependencies.
 endif()
 
 # ---------------------------------------------------------------------------
@@ -63,6 +64,10 @@ endif()
 # ---------------------------------------------------------------------------
 
 add_subdirectory(cpp/libcljseq-rt)
+
+if(CLJSEQ_ENABLE_LINK)
+  add_subdirectory(cpp/libcljseq-link)
+endif()
 
 if(CLJSEQ_BUILD_SIDECAR)
   add_subdirectory(cpp/cljseq-sidecar)

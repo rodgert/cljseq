@@ -16,7 +16,8 @@
 
   Key design decisions: Q11 (live-loop alias), Q1 (virtual time), Q59
   (LockSupport/parkUntil for drift-free sleep), Q2–Q3 (sync! stub Phase 0)."
-  (:require [cljseq.clock :as clock])
+  (:require [cljseq.clock :as clock]
+            [cljseq.link  :as link])
   (:import  [java.util.concurrent.locks LockSupport]))
 
 ;; ---------------------------------------------------------------------------
@@ -52,6 +53,13 @@
   (when-let [s @system-ref]
     (:timeline @s)))
 
+(defn- effective-timeline
+  "Return the timeline to use for beat→epoch-ms conversion.
+  When Link is active, returns the Link-sourced anchor; otherwise
+  the local BPM timeline."
+  []
+  (or (link/link-timeline) (get-timeline)))
+
 ;; ---------------------------------------------------------------------------
 ;; Virtual time
 ;; ---------------------------------------------------------------------------
@@ -69,28 +77,48 @@
   *virtual-time*)
 
 (defn -current-beat
-  "Return the current beat position from the master timeline.
+  "Return the current beat position from the effective timeline (Link or local).
   Used by deflive-loop to initialise *virtual-time* on thread start.
   Returns 0.0 if the system is not yet started."
   ^double []
-  (if-let [tl (get-timeline)]
+  (if-let [tl (effective-timeline)]
     (clock/epoch-ms->beat (System/currentTimeMillis) tl)
     0.0))
 
+(defn -start-beat
+  "Return the beat at which a new live-loop should begin.
+  When Link is active, snaps to the next quantum boundary (default 4 beats)
+  so the loop joins the session in phase (§15.4).
+  When Link is inactive, returns the current beat immediately."
+  ^double []
+  (let [current (-current-beat)]
+    (if (link/active?)
+      (link/next-quantum-beat current 4)
+      current)))
+
 (defn- park-until-beat!
-  "Park the current thread until `target-beat` on the master timeline (Q60).
+  "Park the current thread until `target-beat` on the effective timeline (Q60).
 
   Re-evaluates `beat->epoch-ms` on every wakeup — whether spurious or triggered
-  by `LockSupport/unpark` from `set-bpm!`. This means a BPM change immediately
-  causes the thread to recompute its wall-clock deadline against the new tempo,
-  rather than sleeping to the old deadline and only correcting on the next sleep."
+  by `LockSupport/unpark` from `set-bpm!` or a Link state push. This means any
+  tempo change (local or from a Link peer) immediately causes the thread to
+  recompute its wall-clock deadline, rather than sleeping to the old deadline.
+
+  When Link is active, `effective-timeline` returns the Link-sourced anchor, so
+  `sleep!` is automatically phase-locked to the Link session."
   [^double target-beat]
   (loop []
-    (when-let [tl (get-timeline)]
+    (when-let [tl (effective-timeline)]
       (let [epoch-ms (clock/beat->epoch-ms target-beat tl)]
         (when (< (System/currentTimeMillis) epoch-ms)
           (LockSupport/parkUntil epoch-ms)
           (recur))))))
+
+(defn -park-until-beat!
+  "Public facade for macro expansions in other namespaces (e.g. deflive-loop).
+  Not part of the user-facing API."
+  [target-beat]
+  (park-until-beat! target-beat))
 
 (defn sleep!
   "Advance virtual time by `beats` and park until the corresponding
@@ -106,7 +134,7 @@
   [beats]
   (let [target-beat (+ (double *virtual-time*) (double beats))]
     (set! *virtual-time* target-beat)
-    (if (get-timeline)
+    (if (effective-timeline)
       (park-until-beat! target-beat)
       (Thread/sleep (long (clock/beats->ms beats (get-bpm)))))))
 
@@ -126,7 +154,7 @@
          vt   (double *virtual-time*)
          next (+ (* (Math/floor (/ vt d)) d) d)]
      (set! *virtual-time* next)
-     (if (get-timeline)
+     (if (effective-timeline)
        (park-until-beat! next)
        (Thread/sleep (long (clock/beats->ms (- next vt) (get-bpm)))))
      *virtual-time*)))
@@ -175,8 +203,13 @@
                  :thread     nil})
          (let [t# (Thread.
                    (fn []
-                     (binding [cljseq.loop/*virtual-time* (cljseq.loop/-current-beat)]
-                       (loop []
+                     (let [start-beat# (cljseq.loop/-start-beat)]
+                       (binding [cljseq.loop/*virtual-time* start-beat#]
+                         ;; When Link is active, park until the quantum boundary
+                         ;; so the loop enters the session in phase (§15.4).
+                         (when (cljseq.link/active?)
+                           (cljseq.loop/-park-until-beat! start-beat#))
+                         (loop []
                          (when @running?#
                            (let [f# (get-in @@sref#
                                             [:loops ~loop-name :fn])]
@@ -184,7 +217,7 @@
                              (swap! @sref#
                                     update-in [:loops ~loop-name :tick-count]
                                     inc))
-                           (recur))))))]
+                           (recur)))))))]
            (.setDaemon t# true)
            (.setName t# (str "cljseq-loop-" (name ~loop-name)))
            (swap! @sref# assoc-in [:loops ~loop-name :thread] t#)

@@ -28,10 +28,5 @@ set_target_properties(cljseq-rt PROPERTIES
   CXX_STANDARD 17
 )
 
-if(CLJSEQ_ENABLE_LINK)
-  # Link against Ableton Link when opt-in flag is set.
-  # Combined binary becomes GPL-2.0-or-later.
-  # find_package(AbletonLink REQUIRED)
-  # target_link_libraries(cljseq-rt PRIVATE AbletonLink::AbletonLink)
-  message(STATUS "libcljseq-rt: Ableton Link integration stub (not yet implemented)")
-endif()
+# link_bridge.h is header-only (NullLinkBridge + abstract interface).
+# No sources added here; libcljseq-link (GPL) provides the implementation.
