@@ -23,6 +23,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(FetchContent)
 
+# Once a dependency has been fetched and the build tree is populated,
+# do not hit the network again on subsequent cmake invocations.
+# Developers can explicitly re-run with -DFETCHCONTENT_UPDATES_DISCONNECTED=OFF
+# to check for upstream updates at a pinned tag.
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON CACHE BOOL "Skip network fetch if already populated")
+
 # Standalone Asio — async I/O for OSC server (Q12, Q51)
 # BSL-1.0; header-only; same API as Boost.Asio without the Boost dependency.
 # Pin: asio-1-30-2 — update deliberately and document the reason.
