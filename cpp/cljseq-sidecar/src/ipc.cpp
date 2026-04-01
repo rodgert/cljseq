@@ -127,6 +127,9 @@ private:
                 ev.note_or_cc        = payload[9];
                 ev.velocity_or_value = payload[10];
                 // payload[11] is reserved
+                std::fprintf(stderr, "[ipc] enqueue type=0x%02x ch=%u note=%u vel=%u time_ns=%lld\n",
+                             msg_type_byte, ev.channel, ev.note_or_cc,
+                             ev.velocity_or_value, (long long)ev.time_ns);
                 cljseq::scheduler_enqueue(ev);
             }
             break;

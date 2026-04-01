@@ -20,9 +20,11 @@
 
   Key design decisions: Q16 (direct JVM-to-process IPC, Option A),
   Q51 (native dependency policy), §3.5 (process topology), §29."
-  (:require [clojure.java.io :as io])
+  (:require [clojure.java.io     :as io]
+            [clojure.string      :as str])
   (:import  [java.net        Socket ServerSocket]
-            [java.io         OutputStream]
+            [java.io         OutputStream BufferedReader InputStreamReader]
+            [java.lang       ProcessBuilder ProcessBuilder$Redirect]
             [java.nio        ByteBuffer ByteOrder]))
 
 ;; ---------------------------------------------------------------------------
@@ -30,16 +32,56 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:private sidecar-state
-  (atom {:process  nil    ; java.lang.Process
-         :socket   nil    ; java.net.Socket
-         :out      nil    ; java.io.OutputStream (synchronized on send)
-         :port     nil    ; long — TCP port the sidecar listens on
-         :running? false}))
+  (atom {:process      nil    ; java.lang.Process
+         :socket       nil    ; java.net.Socket
+         :out          nil    ; java.io.OutputStream (synchronized on send)
+         :port         nil    ; long — TCP port the sidecar listens on
+         :running?     false
+         :stderr-lines []}))  ; lines captured from sidecar stderr
 
 (defn connected?
   "Return true if a sidecar connection is active."
   []
   (boolean (:out @sidecar-state)))
+
+(defn- capture-stderr!
+  "Start a daemon thread that reads proc's stderr, prints each line to *err*,
+   and appends it to :stderr-lines in sidecar-state."
+  [^Process proc]
+  (let [t (Thread.
+            (fn []
+              (try
+                (let [rdr (BufferedReader. (InputStreamReader. (.getErrorStream proc)))]
+                  (loop []
+                    (when-let [line (.readLine rdr)]
+                      (binding [*out* *err*]
+                        (println line))
+                      (swap! sidecar-state update :stderr-lines conj line)
+                      (recur))))
+                (catch Exception _))))]
+    (.setDaemon t true)
+    (.start t)))
+
+(defn await-dispatch
+  "Poll sidecar stderr lines until `pred` matches a line or `timeout-ms` elapses.
+  Returns the matching line string, or nil on timeout.
+
+  Useful in tests to verify the scheduler dispatched an event without relying on
+  a MIDI loopback device.
+
+  Example — wait for a NoteOn of note 60:
+    (sidecar/await-dispatch
+      #(and (clojure.string/includes? % \"type=0x01\")
+            (clojure.string/includes? % \"note=60 \"))
+      2000)"
+  [pred timeout-ms]
+  (let [deadline (+ (System/currentTimeMillis) (long timeout-ms))]
+    (loop []
+      (if-let [line (first (filter pred (:stderr-lines @sidecar-state)))]
+        line
+        (when (< (System/currentTimeMillis) deadline)
+          (Thread/sleep 10)
+          (recur))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Message type constants
@@ -197,9 +239,14 @@
     (throw (ex-info "Sidecar already running; call stop-sidecar! first" {})))
   (let [port   (long (or port (find-free-port)))
         binary (or binary (find-binary))]
-    (let [proc (.start (doto (ProcessBuilder. [binary "--port" (str port)])
-                         (.inheritIO)))]
-      (swap! sidecar-state assoc :process proc :port port :running? true)
+    (let [pb   (doto (ProcessBuilder. [binary "--port" (str port)])
+                 ;; Inherit stdin and stdout; pipe stderr for capture+tee
+                 (.redirectInput  ProcessBuilder$Redirect/INHERIT)
+                 (.redirectOutput ProcessBuilder$Redirect/INHERIT))
+          proc (.start pb)]
+      (swap! sidecar-state assoc :process proc :port port :running? true
+                                 :stderr-lines [])
+      (capture-stderr! proc)
       (connect-with-retry! port)
       (monitor-process! proc port)
       (println (str "[cljseq.sidecar] connected to " binary " on port " port))
