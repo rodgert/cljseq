@@ -77,21 +77,27 @@
     (clock/epoch-ms->beat (System/currentTimeMillis) tl)
     0.0))
 
-(defn- park-until!
-  "Park the current thread until the epoch-ms wall-clock deadline.
-  Loops to handle spurious wakeups (LockSupport/parkUntil contract)."
-  [^long epoch-ms]
+(defn- park-until-beat!
+  "Park the current thread until `target-beat` on the master timeline (Q60).
+
+  Re-evaluates `beat->epoch-ms` on every wakeup — whether spurious or triggered
+  by `LockSupport/unpark` from `set-bpm!`. This means a BPM change immediately
+  causes the thread to recompute its wall-clock deadline against the new tempo,
+  rather than sleeping to the old deadline and only correcting on the next sleep."
+  [^double target-beat]
   (loop []
-    (when (< (System/currentTimeMillis) epoch-ms)
-      (LockSupport/parkUntil epoch-ms)
-      (recur))))
+    (when-let [tl (get-timeline)]
+      (let [epoch-ms (clock/beat->epoch-ms target-beat tl)]
+        (when (< (System/currentTimeMillis) epoch-ms)
+          (LockSupport/parkUntil epoch-ms)
+          (recur))))))
 
 (defn sleep!
   "Advance virtual time by `beats` and park until the corresponding
   wall-clock deadline (absolute, drift-free).
 
   Uses LockSupport/parkUntil against the master timeline for correct
-  scheduling across BPM changes (Q59). Falls back to Thread/sleep if
+  scheduling across BPM changes (Q59, Q60). Falls back to Thread/sleep if
   the system is not started.
 
   `beats` may be any number (integer, ratio, float). *virtual-time*
@@ -100,8 +106,8 @@
   [beats]
   (let [target-beat (+ (double *virtual-time*) (double beats))]
     (set! *virtual-time* target-beat)
-    (if-let [tl (get-timeline)]
-      (park-until! (clock/beat->epoch-ms target-beat tl))
+    (if (get-timeline)
+      (park-until-beat! target-beat)
       (Thread/sleep (long (clock/beats->ms beats (get-bpm)))))))
 
 (defn sync!
@@ -120,8 +126,8 @@
          vt   (double *virtual-time*)
          next (+ (* (Math/floor (/ vt d)) d) d)]
      (set! *virtual-time* next)
-     (if-let [tl (get-timeline)]
-       (park-until! (clock/beat->epoch-ms next tl))
+     (if (get-timeline)
+       (park-until-beat! next)
        (Thread/sleep (long (clock/beats->ms (- next vt) (get-bpm)))))
      *virtual-time*)))
 

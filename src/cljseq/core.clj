@@ -19,6 +19,7 @@
             [cljseq.ctrl     :as ctrl]
             [cljseq.loop     :as loop-ns]
             [cljseq.sidecar  :as sidecar])
+  (:import  [java.util.concurrent.locks LockSupport])
   (:gen-class))
 
 ;; ---------------------------------------------------------------------------
@@ -60,15 +61,17 @@
   "Set the master BPM.
 
   Rolls the timeline anchor to the current wall-clock instant so that
-  in-flight sleep! calls remain accurate across tempo changes.
-  Any loops parked via LockSupport/parkUntil will wake at the wrong
-  time for the one sleep that straddles the change; subsequent sleeps
-  are correct (Q59)."
+  beat->epoch-ms is always valid relative to the new tempo (Q59).
+
+  After rolling the anchor, unparks all sleeping loop threads (Q60) so that
+  each recomputes its wall-clock deadline via park-until-beat! against the
+  new timeline. The loops' virtual-time beat positions are unaffected —
+  they continue from the same beat, arriving at the correct wall-clock time."
   [bpm]
   (swap! system-state
          (fn [s]
-           (let [tl      (:timeline s)
-                 now-ms  (System/currentTimeMillis)
+           (let [tl       (:timeline s)
+                 now-ms   (System/currentTimeMillis)
                  cur-beat (if tl
                             (clock/epoch-ms->beat now-ms tl)
                             0.0)]
@@ -77,6 +80,10 @@
                  (assoc :timeline {:bpm            bpm
                                    :beat0-epoch-ms now-ms
                                    :beat0-beat     cur-beat})))))
+  ;; Unpark all sleeping loop threads so they recompute their deadline (Q60)
+  (doseq [[_ entry] (:loops @system-state)]
+    (when-let [^Thread t (:thread entry)]
+      (LockSupport/unpark t)))
   nil)
 
 ;; ---------------------------------------------------------------------------

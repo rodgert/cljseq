@@ -1684,43 +1684,50 @@ Link, `beat->epoch-ms` will delegate to `link.time_at(beat)` — the
 
 ---
 
-## Q60 — Tempo change propagation to sleeping loops
+## Q60 — Tempo change propagation to sleeping loops — **RESOLVED**
 
 **R&R reference**: §29.7, §29.9, §29.10
 
-**Status**: Partially resolved — Sprint 8; remainder Phase 1 Link sprint
+**Resolution** (Sprint 9)
 
-**Question**: When BPM changes (Link peer suggestion, `set-bpm!`, tempo automation),
-what happens to loops currently parked in `sleep!`?
+Three sub-questions, all answered:
 
-Three sub-questions:
-1. **Detection**: how does the scheduler learn a tempo change occurred?
-2. **Notification**: how are sleeping loop threads unparked so they can recompute
-   their target `time_ns`?
-3. **Partial sleep semantics**: does the loop replay from the beat where it was, or
-   from where wall-clock time says it should be?
+1. **Detection**: `set-bpm!` in `cljseq.core` is the mutation point; it atomically
+   rolls the timeline anchor and then iterates `[:loops * :thread]`.
 
-**Recommendation**: Add a watch on the `:config :bpm` system-state key; on change,
-call `LockSupport/unpark` on all sleeping loop threads. Each thread wakes, recomputes
-`time_at(*virtual-time* + remaining-beats)`, and parks again at the new target. The
-beat position of the loop's virtual clock is unaffected — it continues from the same
-beat position, just arriving there at the correct (revised) wall-clock time.
+2. **Notification**: `set-bpm!` calls `LockSupport/unpark` on every registered loop
+   thread immediately after the CAS, waking any thread sleeping in `park-until-beat!`.
 
-**Partial resolution (Sprint 8)**: `set-bpm!` rolls the timeline anchor atomically
-so that the sleep *following* a BPM change computes the correct deadline. The sleep
-*straddling* the change fires at the old deadline (one-iteration error, acceptable
-for Phase 1 without Link).
-
-Sub-question answers for the Link sprint:
-1. **Detection**: watch on `:timeline` key in system-state atom (already atomic).
-2. **Notification**: `set-bpm!` collects all loop threads from `[:loops * :thread]`
-   and calls `LockSupport/unpark` on each after rolling the anchor.
 3. **Partial sleep semantics**: the loop continues from `*virtual-time*` unchanged —
-   same beat position, new wall-clock mapping. The `park-until!` loop re-evaluates
-   `beat->epoch-ms(*virtual-time*, new-tl)` after wakeup and parks again if still
-   in the future. No change to `park-until!` required.
+   same beat position, new wall-clock mapping. `park-until-beat!` re-evaluates
+   `beat->epoch-ms(target-beat, new-tl)` after each wakeup and re-parks at the
+   revised deadline if still in the future. Virtual time is never rewound.
 
-**Blocking**: Phase 1 Link integration (the unpark notification step).
+**Key implementation change** (Sprint 9): `park-until!` was refactored into
+`park-until-beat!` which takes a `target-beat` (not a fixed `epoch-ms`) and
+recomputes the deadline on every wakeup from the current timeline. This makes BPM
+changes instantaneously effective — the sleeping thread does not wait until the old
+deadline before noticing the change.
+
+```clojure
+;; cljseq.loop/park-until-beat!
+(defn- park-until-beat! [^double target-beat]
+  (loop []
+    (when-let [tl (get-timeline)]
+      (let [epoch-ms (clock/beat->epoch-ms target-beat tl)]
+        (when (< (System/currentTimeMillis) epoch-ms)
+          (LockSupport/parkUntil epoch-ms)
+          (recur))))))
+
+;; cljseq.core/set-bpm! — after CAS:
+(doseq [[_ entry] (:loops @system-state)]
+  (when-let [^Thread t (:thread entry)]
+    (LockSupport/unpark t)))
+```
+
+Compatible with the Ableton Link sprint: when Link is active, `get-timeline` returns
+a Link-backed timeline; `park-until-beat!` will recompute via `link/time-at-beat`
+without further changes to the loop structure.
 
 ---
 

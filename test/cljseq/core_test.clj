@@ -119,6 +119,35 @@
       (finally
         (core/stop!)))))
 
+;; ---------------------------------------------------------------------------
+;; set-bpm! Q60 — unpark sleeping loops on tempo change
+;; ---------------------------------------------------------------------------
+
+(deftest set-bpm-unparks-test
+  (testing "set-bpm! wakes sleeping loop threads so they recompute deadline"
+    ;; Strategy: start at a slow BPM so sleep! parks for a long time,
+    ;; then call set-bpm! at a much faster tempo and verify the loop
+    ;; completes its sleep quickly rather than waiting the full old deadline.
+    (core/start! :bpm 10)   ; 10 BPM → 1 beat = 6000ms
+    (try
+      (let [done? (promise)]
+        ;; Loop sleeps for 1 beat at 10 BPM (= 6000ms).
+        ;; If Q60 works, set-bpm! will unpark it and it will recompute
+        ;; the deadline at 6000 BPM (= 10ms/beat), finishing almost instantly.
+        (core/deflive-loop :q60-test {}
+          (loop-ns/sleep! 1)
+          (deliver done? true)
+          ;; Stop after one iteration
+          (core/stop-loop! :q60-test))
+        ;; Give the loop 50ms to start and park in sleep!
+        (Thread/sleep 50)
+        ;; Raise BPM to 6000 — the sleeping loop should wake and recompute
+        (core/set-bpm! 6000)
+        ;; The loop should complete well within 500ms (generous headroom)
+        (is (deref done? 500 false)
+            "Loop should wake and finish within 500ms after set-bpm!"))
+      (finally (core/stop!)))))
+
 (deftest deflive-loop-hotswap-test
   (testing "re-evaluating deflive-loop replaces fn on next iteration"
     (core/start! :bpm 6000)
