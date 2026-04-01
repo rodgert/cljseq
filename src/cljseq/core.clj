@@ -16,6 +16,7 @@
   Key design decisions: Q47 (single system-state atom), Q48 (patch system),
   Q11 (live-loop alias), Q1 (virtual time), phase0-readiness.md."
   (:require [cljseq.clock    :as clock]
+            [cljseq.ctrl     :as ctrl]
             [cljseq.loop     :as loop-ns]
             [cljseq.sidecar  :as sidecar])
   (:gen-class))
@@ -100,6 +101,7 @@
                                    :beat0-epoch-ms now-ms
                                    :beat0-beat     0.0}))))
     (loop-ns/-register-system! system-state)
+    (ctrl/-register-system! system-state)
     (println (str "cljseq started at " bpm " BPM"))
     nil))
 
