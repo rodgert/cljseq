@@ -42,6 +42,11 @@
 
 (defonce ^:private registry (atom {}))
 
+(defn ^:no-doc register!
+  "Register a stochastic context under the given name keyword. Used by defstochastic macro."
+  [k ctx]
+  (swap! registry assoc k ctx))
+
 ;; ---------------------------------------------------------------------------
 ;; DEJA VU ring buffer (§23.6)
 ;; ---------------------------------------------------------------------------
@@ -261,6 +266,7 @@
   (let [opts-map (apply hash-map opts)]
     `(do
        (def ~gen-name (make-stochastic-context ~opts-map))
+       (register! ~(keyword (name gen-name)) ~gen-name)
        (ctrl/defnode! [:stochastic ~(keyword (name gen-name))]
                       :type :data :value ~gen-name)
        ~gen-name)))

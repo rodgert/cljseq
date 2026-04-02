@@ -212,3 +212,8 @@
 (deftest stochastic-names-returns-seq-test
   (testing "stochastic-names returns a seq (possibly empty)"
     (is (sequential? (stochastic/stochastic-names)))))
+
+(deftest defstochastic-registers-in-stochastic-names-test
+  (testing "defstochastic registers name so stochastic-names includes it"
+    (stochastic/defstochastic test-reg-a :channels 1)
+    (is (some #{:test-reg-a} (stochastic/stochastic-names)))))
