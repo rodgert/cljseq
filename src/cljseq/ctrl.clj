@@ -142,15 +142,18 @@
 (defn send!
   "Physical write: update `path` to `value` and dispatch to all physical bindings.
 
-  For each binding on the node:
-    :midi-cc — sends MIDI CC via the sidecar at the current wall-clock instant
-    others   — logged; dispatch support deferred to future sprint
+  Binding types dispatched:
 
-  The value is scaled to [0, 127] using the binding's :range [lo hi]
-  (default [0 127]). Values outside :range are clamped.
+    :midi-cc   — single CC message; value scaled to [0,127] via binding :range.
+                 Example: (ctrl/send! [:filter/cutoff] 0.7) ; CC 74 = 89
 
-  Example:
-    (ctrl/send! [:filter/cutoff] 0.7)  ; MIDI CC 74 = 89 (if range [0.0 1.0])"
+    :midi-nrpn — NRPN parameter; emits CC 99/98 (parameter select) then CC 6/38
+                 (data entry). Supports 7-bit (CC6 only) and 14-bit (CC6 + CC38)
+                 resolution controlled by :bits in the binding (default 14).
+                 Value is scaled from binding :range to [0,127] or [0,16383].
+                 Example: (ctrl/send! [:portamento] 1000) ; NRPN 1, 14-bit
+
+    others     — logged; dispatch deferred to future sprint."
   [path value]
   (swap! @system-ref
          (fn [s]
@@ -161,16 +164,43 @@
     (doseq [binding (:bindings node)]
       (case (:type binding)
         :midi-cc
-        (let [ch     (int (or (:channel binding) 1))
-              cc-num (int (:cc-num binding))
+        (let [ch      (int (or (:channel binding) 1))
+              cc-num  (int (:cc-num binding))
               [lo hi] (or (:range binding) [0 127])
-              lo     (double lo)
-              hi     (double hi)
-              raw    (double value)
-              pct    (/ (- raw lo) (- hi lo))
-              scaled (long (Math/round (* pct 127.0)))]
+              lo      (double lo)
+              hi      (double hi)
+              raw     (double value)
+              pct     (/ (- raw lo) (- hi lo))
+              scaled  (long (Math/round (* pct 127.0)))]
           (when (sidecar/connected?)
             (sidecar/send-cc! now-ns ch cc-num (max 0 (min 127 scaled)))))
+
+        :midi-nrpn
+        (let [ch        (int (or (:channel binding) 1))
+              nrpn      (int (:nrpn binding))
+              bits      (int (or (:bits binding) 14))
+              max-val   (if (= 14 bits) 16383 127)
+              [lo hi]   (or (:range binding) [0 max-val])
+              lo        (double lo)
+              hi        (double hi)
+              raw       (double value)
+              pct       (/ (- raw lo) (- hi lo))
+              clamped   (max 0 (min max-val (long (Math/round (* pct (double max-val))))))
+              param-msb (bit-and (bit-shift-right nrpn 7) 0x7F)
+              param-lsb (bit-and nrpn 0x7F)
+              ;; 14-bit: CC6 = value >> 7, CC38 = value & 0x7F
+              ;; 7-bit:  CC6 = value (0–127), CC38 omitted
+              data-msb  (if (= 14 bits)
+                          (bit-and (bit-shift-right clamped 7) 0x7F)
+                          clamped)
+              data-lsb  (bit-and clamped 0x7F)]
+          (when (sidecar/connected?)
+            (sidecar/send-cc! now-ns ch 99 param-msb)
+            (sidecar/send-cc! now-ns ch 98 param-lsb)
+            (sidecar/send-cc! now-ns ch  6 data-msb)
+            (when (= 14 bits)
+              (sidecar/send-cc! now-ns ch 38 data-lsb))))
+
         ;; Other binding types: log and skip
         (binding [*out* *err*]
           (println (str "[ctrl] send! binding type " (:type binding)

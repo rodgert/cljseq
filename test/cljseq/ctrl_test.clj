@@ -211,3 +211,90 @@
     (ctrl/undo! :now)
     ;; After undo!, tree is restored to the state before :a — which is nil
     (is (nil? (ctrl/get [:timing/p])) "undo! :now restores the full tree snapshot")))
+
+;; ---------------------------------------------------------------------------
+;; send! — :midi-nrpn dispatch
+;; ---------------------------------------------------------------------------
+
+(deftest nrpn-14bit-dispatch-test
+  (testing "14-bit NRPN emits CC 99/98/6/38 with correct parameter and value encoding"
+    ;; NRPN 1 (portamento), value 500 on channel 2:
+    ;;   param-msb = 1 >> 7 = 0,  param-lsb = 1 & 0x7F = 1
+    ;;   data-msb  = 500 >> 7 = 3, data-lsb = 500 & 0x7F = 116
+    (ctrl/defnode! [:nrpn/portamento] :type :int :node-meta {:range [0 16383]})
+    (ctrl/bind! [:nrpn/portamento]
+                {:type :midi-nrpn :channel 2 :nrpn 1 :bits 14 :range [0 16383]})
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send! [:nrpn/portamento] 500))
+      (is (= 4 (count @calls)) "exactly 4 CC messages for 14-bit NRPN")
+      (let [[m99 m98 m6 m38] @calls]
+        (is (= {:ch 2 :cc 99 :val 0}   m99) "CC 99 = param MSB (0)")
+        (is (= {:ch 2 :cc 98 :val 1}   m98) "CC 98 = param LSB (1)")
+        (is (= {:ch 2 :cc  6 :val 3}   m6)  "CC 6 = data MSB (500 >> 7 = 3)")
+        (is (= {:ch 2 :cc 38 :val 116} m38) "CC 38 = data LSB (500 & 0x7F = 116)")))))
+
+(deftest nrpn-7bit-dispatch-test
+  (testing "7-bit NRPN emits only CC 99/98/6 — no CC 38"
+    ;; NRPN 0 (eg type), value 64 on channel 1:
+    ;;   param-msb = 0, param-lsb = 0
+    ;;   data-msb  = 64 (7-bit passthrough), CC38 omitted
+    (ctrl/defnode! [:nrpn/eg-type] :type :int :node-meta {:range [0 127]})
+    (ctrl/bind! [:nrpn/eg-type]
+                {:type :midi-nrpn :channel 1 :nrpn 0 :bits 7 :range [0 127]})
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send! [:nrpn/eg-type] 64))
+      (is (= 3 (count @calls)) "exactly 3 CC messages for 7-bit NRPN (no CC 38)")
+      (let [[m99 m98 m6] @calls]
+        (is (= {:ch 1 :cc 99 :val 0}  m99) "CC 99 = param MSB")
+        (is (= {:ch 1 :cc 98 :val 0}  m98) "CC 98 = param LSB")
+        (is (= {:ch 1 :cc  6 :val 64} m6)  "CC 6 = value (7-bit passthrough)")))))
+
+(deftest nrpn-high-param-number-test
+  (testing "NRPN parameter > 127 splits correctly across CC 99/98"
+    ;; NRPN 200 = 0x00C8: param-msb = 200 >> 7 = 1, param-lsb = 200 & 0x7F = 72
+    (ctrl/defnode! [:nrpn/high] :type :int :node-meta {:range [0 16383]})
+    (ctrl/bind! [:nrpn/high]
+                {:type :midi-nrpn :channel 1 :nrpn 200 :bits 14 :range [0 16383]})
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send! [:nrpn/high] 0))
+      (let [[m99 m98 _ _] @calls]
+        (is (= 1  (:val m99)) "CC 99 param MSB = 200 >> 7 = 1")
+        (is (= 72 (:val m98)) "CC 98 param LSB = 200 & 0x7F = 72")))))
+
+(deftest nrpn-value-scaling-test
+  (testing "NRPN value is scaled from binding :range to [0 16383]"
+    ;; range [0 100], value 50 → pct 0.5 → scaled 8191
+    (ctrl/defnode! [:nrpn/scaled] :type :int :node-meta {:range [0 100]})
+    (ctrl/bind! [:nrpn/scaled]
+                {:type :midi-nrpn :channel 1 :nrpn 5 :bits 14 :range [0 100]})
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send! [:nrpn/scaled] 50))
+      (let [[_ _ m6 m38] @calls
+            reconstructed (+ (* (:val m6) 128) (:val m38))]
+        (is (= 8192 reconstructed) "50% of 16383 ≈ 8192 (rounded)"))))    )
+
+(deftest nrpn-value-clamping-test
+  (testing "NRPN value is clamped to [0 16383] when outside range"
+    (ctrl/defnode! [:nrpn/clamp] :type :int :node-meta {:range [0 16383]})
+    (ctrl/bind! [:nrpn/clamp]
+                {:type :midi-nrpn :channel 1 :nrpn 3 :bits 14 :range [0 16383]})
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send! [:nrpn/clamp] 99999))
+      (let [[_ _ m6 m38] @calls]
+        (is (= 127 (:val m6))  "data MSB clamped to max")
+        (is (= 127 (:val m38)) "data LSB clamped to max")))))

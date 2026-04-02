@@ -5,10 +5,23 @@
   All forms expand to the core protocol-level API (cljseq.core).
   Designed for live-coding ergonomics at the nREPL.
 
+  ## Synth context
+    Synth context is a plain map describing the MIDI routing for a scope:
+      {:midi/channel 2 :mod/velocity 80}
+
+    Three entry points, in increasing locality:
+      (use-synth! ctx)            ; REPL default (root binding, not thread-safe)
+      (with-synth ctx (play! …))  ; explicit scope
+      (deflive-loop :foo {:synth ctx} …)  ; per-loop (in cljseq.loop opts)
+
+    Priority (lowest → highest): use-synth! < with-synth < per-note step map keys.
+    Bare (play! :C4) with no context uses channel 1, velocity 64.
+
   ## Note playback
     (play! :C4)                          ; uses *default-dur*
     (play! :C4 1/2)                      ; explicit duration
     (play! 60)                           ; MIDI integer
+    (play! {:pitch/midi 60 :dur/beats 1/2})  ; step map
     (phrase! [:C4 :E4 :G4] :dur 1/4)    ; melodic phrase
 
   ## Structural / conditional
@@ -19,12 +32,10 @@
     (def r (ring :C4 :E4 :G4))
     (tick! r)                            ; returns next element, advances ring
 
-  ## Synth context
-    (use-synth! :piano)
-    (with-synth :piano (play! :C4))
-
   Key design decisions: §27 (DSL Sugar Layer), R&R usability corpus."
-  (:require [cljseq.core :as core]))
+  (:require [cljseq.core :as core]
+            [cljseq.loop :as loop-ns]
+            [cljseq.mod  :as mod-ns]))
 
 ;; ---------------------------------------------------------------------------
 ;; Dynamic configuration vars (Configuration Registry, R&R §25)
@@ -35,27 +46,106 @@
   Registered in Configuration Registry (R&R §25)."
   1/4)
 
-(def ^:dynamic *default-synth*
-  "Default synth/target for play! calls. Set with use-synth! or with-synth."
+;; ---------------------------------------------------------------------------
+;; Synth context management
+;; *synth-ctx* is defined in cljseq.loop to avoid circular dependencies.
+;; dsl provides the user-facing API for setting and scoping it.
+;; ---------------------------------------------------------------------------
+
+(defn use-synth!
+  "Set the default synth context for subsequent play! calls at the REPL.
+
+  `ctx` should be a map with at minimum :midi/channel (1–16) and optionally
+  :mod/velocity (0–127), or nil to clear.
+
+  Example:
+    (def bass {:midi/channel 2 :mod/velocity 80})
+    (use-synth! bass)
+    (use-synth! nil)   ; clear
+
+  Not thread-safe — intended for interactive REPL use only.
+  Inside live loops, use the :synth key in deflive-loop opts instead."
+  [ctx]
+  (alter-var-root #'loop-ns/*synth-ctx* (constantly ctx))
   nil)
 
+(defmacro with-synth
+  "Execute `body` with `ctx` as the active synth context.
+
+  `ctx` is a map with :midi/channel and optionally :mod/velocity, or nil.
+
+  Usage:
+    (def bass {:midi/channel 2 :mod/velocity 80})
+    (with-synth bass
+      (play! :C3)
+      (phrase! [:C3 :E3 :G3] :dur 1/4))"
+  [ctx & body]
+  `(binding [loop-ns/*synth-ctx* ~ctx]
+     ~@body))
+
 ;; ---------------------------------------------------------------------------
-;; play! — multi-arity shorthand (delegates to cljseq.core/play!)
+;; Timing context management
+;; *timing-ctx* is defined in cljseq.loop; dsl provides the user-facing API.
+;; ---------------------------------------------------------------------------
+
+(defn use-timing!
+  "Set the default timing modulator for subsequent play! calls at the REPL.
+
+  `mod` should be a timing modulator (from cljseq.timing), or nil to clear.
+
+  Example:
+    (use-timing! (timing/swing :amount 0.6))
+    (use-timing! nil)   ; clear
+
+  Not thread-safe — intended for interactive REPL use only.
+  Inside live loops, use the :timing key in deflive-loop opts instead."
+  [mod]
+  (alter-var-root #'loop-ns/*timing-ctx* (constantly mod))
+  nil)
+
+(defmacro with-timing
+  "Execute `body` with `mod` as the active timing modulator.
+
+  Usage:
+    (with-timing (timing/swing :amount 0.55)
+      (phrase! [:C4 :E4 :G4] :dur 1/4))"
+  [mod & body]
+  `(binding [loop-ns/*timing-ctx* ~mod]
+     ~@body))
+
+;; ---------------------------------------------------------------------------
+;; play! — normalises all note forms to a step map, merges synth context
 ;; ---------------------------------------------------------------------------
 
 (defn play!
-  "Play a note. Concise shorthand wrapping cljseq.core/play!.
+  "Play a note. Routes to the sidecar for MIDI output when connected;
+  falls back to stdout when running without a sidecar (Phase 0 mode).
 
   Accepts:
     (play! :C4)          ; keyword note, *default-dur*
     (play! :C4 1/2)      ; keyword + explicit duration
     (play! 60)           ; MIDI integer, *default-dur*
     (play! 60 1/4)       ; MIDI integer + explicit duration
-    (play! {:pitch/midi 60 :dur/beats 1/2})  ; step map (passthrough)"
+    (play! {:pitch/midi 60 :dur/beats 1/2})  ; step map (passthrough)
+
+  Synth context (*synth-ctx*) provides :midi/channel and :mod/velocity
+  defaults. Per-note step map keys override context; context overrides the
+  channel-1/velocity-64 fallback in cljseq.core/play!."
   ([note]
-   (core/play! note *default-dur*))
+   (play! note nil))
   ([note dur]
-   (core/play! note dur)))
+   (let [ctx  loop-ns/*synth-ctx*
+         step (cond
+                (map? note)     note
+                (keyword? note) {:pitch/midi (core/keyword->midi note)}
+                (integer? note) {:pitch/midi (long note)}
+                :else (throw (ex-info "play!: unrecognised note form" {:note note})))
+         ;; Context is lowest priority; per-note step map keys override it.
+         step (if ctx
+                (merge (select-keys ctx [:midi/channel :mod/velocity]) step)
+                step)
+         d    (or (:dur/beats step) dur *default-dur*)]
+     (core/play! (assoc step :dur/beats d)))))
 
 ;; ---------------------------------------------------------------------------
 ;; phrase! — play a sequence of notes
@@ -68,21 +158,19 @@
     (phrase! [:C4 :E4 :G4] :dur 1/4)       ; all notes same duration
     (phrase! [:C4 1/4 :E4 1/8 :G4 1/4])    ; alternating pitch/duration pairs
 
-  Notes play sequentially; each sleeps for its own duration."
+  Notes play sequentially; each sleeps for its own duration.
+  Inherits the active synth context (*synth-ctx*)."
   [notes & {:keys [dur] :or {dur nil}}]
   (let [d (or dur `*default-dur*)]
-    ;; Detect paired form: [:C4 1/4 :E4 1/8 ...]
-    ;; If all even-indexed elements are keywords and odd are numbers, treat as pairs.
-    ;; For the macro, we expand to sequential play!+sleep! forms at runtime.
     `(let [notes#  ~notes
            paired# (and (even? (count notes#))
                         (every? keyword? (take-nth 2 notes#)))]
        (if paired#
          (doseq [[n# d#] (partition 2 notes#)]
-           (core/play! n# d#)
+           (play! n# d#)
            (core/sleep! d#))
          (doseq [n# notes#]
-           (core/play! n# ~d)
+           (play! n# ~d)
            (core/sleep! ~d))))))
 
 ;; ---------------------------------------------------------------------------
@@ -138,16 +226,16 @@
     current))
 
 ;; ---------------------------------------------------------------------------
-;; play-chord! — absolute chord playback (stub; Phase 1)
+;; play-chord! — absolute chord playback
 ;; ---------------------------------------------------------------------------
 
 (defn play-chord!
   "Play all notes of a chord simultaneously.
-  Phase 0 stub — prints each note.
 
-  Usage: (play-chord! :C4 :major)"
+  Usage: (play-chord! :C4 :major)
+
+  Inherits the active synth context (*synth-ctx*)."
   [root quality]
-  ;; Chord intervals: root + offsets; Phase 0: stdout only
   (let [intervals (case quality
                     :major [0 4 7]
                     :minor [0 3 7]
@@ -156,7 +244,7 @@
                     [0 4 7])
         root-midi (core/keyword->midi root)]
     (doseq [offset intervals]
-      (core/play! (+ root-midi offset) *default-dur*))))
+      (play! (+ root-midi offset) *default-dur*))))
 
 ;; ---------------------------------------------------------------------------
 ;; choose-from-scale — random scale degree
@@ -187,7 +275,8 @@
   Usage: (arp! :C4 :major :up 1/16)
 
   Plays all chord tones in sequence, each separated by `step-dur` beats.
-  Direction: :up (default), :down, :up-down."
+  Direction: :up (default), :down, :up-down.
+  Inherits the active synth context (*synth-ctx*)."
   [root quality direction step-dur]
   (let [intervals (get {:major [0 4 7] :minor [0 3 7]} quality [0 4 7])
         root-midi (core/keyword->midi root)
@@ -197,25 +286,5 @@
                     :up-down (concat notes (rest (reverse notes)))
                     notes)]
     (doseq [n ordered]
-      (core/play! n step-dur)
+      (play! n step-dur)
       (core/sleep! step-dur))))
-
-;; ---------------------------------------------------------------------------
-;; use-synth! / with-synth — synth routing context (stubs; Phase 1)
-;; ---------------------------------------------------------------------------
-
-(defn use-synth!
-  "Set the default synth for subsequent play! calls.
-  Phase 0 stub — stores in *default-synth*."
-  [synth]
-  ;; Full implementation in Phase 1 when sidecar routing is available.
-  (alter-var-root #'*default-synth* (constantly synth))
-  nil)
-
-(defmacro with-synth
-  "Execute `body` with the given synth as the default.
-
-  Usage: (with-synth :piano (play! :C4) (play! :E4))"
-  [synth & body]
-  `(binding [*default-synth* ~synth]
-     ~@body))
