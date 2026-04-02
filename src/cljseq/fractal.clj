@@ -453,3 +453,220 @@
   "Return a seq of registered fractal context names."
   []
   (or (keys @registry) '()))
+
+;; ---------------------------------------------------------------------------
+;; Ornamentation — scale-aware step expansion (§24.5)
+;; ---------------------------------------------------------------------------
+
+(def ^:private chromatic-intervals [0 1 2 3 4 5 6 7 8 9 10 11])
+
+(defn- scale-notes-in-range
+  "Sorted vec of all MIDI note numbers in the scale rooted at `root` within [lo hi]."
+  [intervals root lo hi]
+  (let [r (int root)]
+    (vec (sort (for [oct (range -2 11)
+                     iv  intervals
+                     :let [n (+ (* 12 oct) r iv)]
+                     :when (<= (int lo) n (int hi))]
+                 n)))))
+
+(defn- degree-above
+  "First scale note strictly above `midi`."
+  [midi intervals root]
+  (let [notes (scale-notes-in-range intervals root 0 127)]
+    (first (filter #(> % (int midi)) notes))))
+
+(defn- degree-below
+  "First scale note strictly below `midi`."
+  [midi intervals root]
+  (let [notes (scale-notes-in-range intervals root 0 127)]
+    (last (filter #(< % (int midi)) notes))))
+
+(defn- n-degrees-toward
+  "Up to `n` consecutive scale degrees from `from-midi` toward `to-midi`.
+  Returns a vec of MIDI notes; may be shorter than n if range exhausted."
+  [from-midi to-midi n intervals root]
+  (let [notes (scale-notes-in-range intervals root 0 127)
+        up?   (> (int to-midi) (int from-midi))
+        pool  (if up?
+                (filter #(> % (int from-midi)) notes)
+                (reverse (filter #(< % (int from-midi)) notes)))]
+    (vec (take n pool))))
+
+(defn- n-degrees-away
+  "Up to `n` consecutive scale degrees from `from-midi` away from `to-midi`."
+  [from-midi to-midi n intervals root]
+  (n-degrees-toward from-midi (+ (int from-midi) (- (int from-midi) (int to-midi)))
+                    n intervals root))
+
+(defn- sub-step
+  "Build a sub-step map inheriting gate-len from parent."
+  [pitch dur parent]
+  {:pitch/midi (max 0 (min 127 (int pitch)))
+   :dur/beats  dur
+   :gate/on?   true
+   :gate/len   (:gate/len parent 0.5)})
+
+(defn- rest-step
+  "Build a silent sub-step."
+  [dur parent]
+  {:pitch/midi (:pitch/midi parent 60)
+   :dur/beats  dur
+   :gate/on?   false
+   :gate/len   0.0})
+
+(defn ornament
+  "Expand `step` into a vec of sub-step maps according to `ornament-type`.
+
+  `context` map:
+    :scale     — weighted-scale map from cljseq.random (nil = chromatic)
+    :root      — root MIDI note for scale navigation (default 60)
+    :next-step — following step map (for :anticipation, :run-toward, etc.)
+    :prev-step — preceding step map (for :suspension)
+
+  Sub-step durations sum to the parent step's :dur/beats. If :scale is nil,
+  degree-navigation falls back to chromatic semitones.
+
+  Ornament types:
+    Two-event:   :anticipation :suspension :syncopation :octave-up :fifth-up
+                 :half-turn-toward :half-turn-away
+    Three-event: :mordent-up :mordent-down
+    Four-event:  :run-toward :run-away :turn :arp-toward :arp-away
+    Eight-event: :trill"
+  [step ornament-type {:keys [scale root next-step prev-step]
+                        :or   {root 60}}]
+  (let [d    (:dur/beats step 1/4)
+        p    (int (:pitch/midi step 60))
+        ivs  (if scale (:intervals scale) chromatic-intervals)
+        r    (int root)
+        abv  (or (degree-above p ivs r) (+ p 2))
+        blw  (or (degree-below p ivs r) (- p 2))
+        np   (int (:pitch/midi next-step p))
+        pp   (int (:pitch/midi prev-step p))]
+    (case ornament-type
+      ;; --- Two-event ornaments ---
+      :anticipation
+      [(sub-step np (/ d 4) step)
+       (sub-step p  (* d 3/4) step)]
+
+      :suspension
+      [(sub-step pp (/ d 4) step)
+       (sub-step p  (* d 3/4) step)]
+
+      :syncopation
+      [(rest-step (/ d 4) step)
+       (sub-step p (* d 3/4) step)]
+
+      :octave-up
+      [(sub-step p        (/ d 2) step)
+       (sub-step (+ p 12) (/ d 2) step)]
+
+      :fifth-up
+      (let [fifth (or (degree-above p ivs r)
+                      (+ p 7))]
+        [(sub-step p     (/ d 2) step)
+         (sub-step fifth (/ d 2) step)])
+
+      :half-turn-toward
+      (let [beyond (n-degrees-toward p np 2 ivs r)
+            grace  (or (second beyond) (first beyond) abv)]
+        [(sub-step grace (/ d 4) step)
+         (sub-step p     (* d 3/4) step)])
+
+      :half-turn-away
+      (let [away (n-degrees-away p np 1 ivs r)
+            grace (or (first away) blw)]
+        [(sub-step grace (/ d 4) step)
+         (sub-step p     (* d 3/4) step)])
+
+      ;; --- Three-event ornaments ---
+      :mordent-up
+      [(sub-step p   (/ d 4) step)
+       (sub-step abv (/ d 4) step)
+       (sub-step p   (/ d 2) step)]
+
+      :mordent-down
+      [(sub-step p   (/ d 4) step)
+       (sub-step blw (/ d 4) step)
+       (sub-step p   (/ d 2) step)]
+
+      ;; --- Four-event ornaments ---
+      :run-toward
+      (let [run (n-degrees-toward p np 4 ivs r)
+            run (if (< (count run) 4)
+                  (vec (take 4 (cycle (conj run np))))
+                  run)]
+        (mapv #(sub-step % (/ d 4) step) run))
+
+      :run-away
+      (let [run (n-degrees-away p np 4 ivs r)
+            run (if (< (count run) 4)
+                  (vec (take 4 (cycle (conj run blw))))
+                  run)]
+        (mapv #(sub-step % (/ d 4) step) run))
+
+      :turn
+      [(sub-step p   (/ d 4) step)
+       (sub-step abv (/ d 4) step)
+       (sub-step blw (/ d 4) step)
+       (sub-step p   (/ d 4) step)]
+
+      :arp-toward
+      (let [run (n-degrees-toward p np 3 ivs r)
+            run (conj (vec run) np)]
+        (mapv #(sub-step % (/ d 4) step) (take 4 (cycle run))))
+
+      :arp-away
+      (let [run (n-degrees-away p np 3 ivs r)
+            run (if (seq run) run [blw])]
+        (mapv #(sub-step % (/ d 4) step) (take 4 (cycle run))))
+
+      ;; --- Eight-event ornament ---
+      :trill
+      (vec (mapcat (fn [i] [(sub-step (if (even? i) p abv) (/ d 8) step)])
+                   (range 8)))
+
+      ;; Default: return step unchanged as single sub-step
+      [(sub-step p d step)])))
+
+(defn ornament-seq
+  "Apply ornaments probabilistically to a sequence of steps.
+
+  For each step, with probability `prob`, replaces it with an ornamented
+  expansion using a randomly selected ornament type from `types`. Sub-steps
+  replace the original step in the output seq. Steps without :pitch/midi
+  are passed through unchanged.
+
+  Options:
+    :scale     — weighted-scale map (nil = chromatic)
+    :root      — root MIDI note (default 60)
+    :prob      — probability a step is ornamented [0.0-1.0] (default 0.3)
+    :types     — seq of ornament type keywords to choose from
+                 (default [:mordent-up :mordent-down :anticipation :turn])
+    :max-steps — :two, :four, or :eight — cap ornament expansion size
+                 (default :eight = no cap)"
+  [steps & {:keys [scale root prob types max-steps]
+            :or   {root 60 prob 0.3
+                   types [:mordent-up :mordent-down :anticipation :turn]
+                   max-steps :eight}}]
+  (let [allowed (case max-steps
+                  :two  #{:anticipation :suspension :syncopation :octave-up
+                          :fifth-up :half-turn-toward :half-turn-away}
+                  :four #{:anticipation :suspension :syncopation :octave-up
+                          :fifth-up :half-turn-toward :half-turn-away
+                          :run-toward :run-away :turn :arp-toward :arp-away
+                          :mordent-up :mordent-down}
+                  nil)
+        eligible (if allowed (filter allowed types) types)
+        n (count steps)]
+    (vec (mapcat (fn [i]
+                   (let [step (nth steps i)]
+                     (if (and (:pitch/midi step) (< (rand) (double prob)) (seq eligible))
+                       (let [t    (rand-nth eligible)
+                             ctx  {:scale     scale
+                                   :root      root
+                                   :next-step (when (< (inc i) n) (nth steps (inc i)))
+                                   :prev-step (when (pos? i) (nth steps (dec i)))}]
+                         (ornament step t ctx))
+                       [step])))
+                 (range n)))))

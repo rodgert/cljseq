@@ -426,3 +426,190 @@
   (testing "fractal-names includes registered contexts"
     (fractal/deffractal test-fn-a :trunk trunk)
     (is (some #{:test-fn-a} (fractal/fractal-names)))))
+
+;; ---------------------------------------------------------------------------
+;; Ornamentation — ornament (§24.5)
+;; ---------------------------------------------------------------------------
+
+(def ^:private ctx-major
+  {:scale (random/weighted-scale :major) :root 60
+   :next-step {:pitch/midi 64 :dur/beats 1/4 :gate/on? true :gate/len 0.5}
+   :prev-step {:pitch/midi 57 :dur/beats 1/4 :gate/on? true :gate/len 0.5}})
+
+(def ^:private step-c4
+  {:pitch/midi 60 :dur/beats 1/4 :gate/on? true :gate/len 0.7})
+
+(defn- dur-sum [sub-steps]
+  (apply + (map :dur/beats sub-steps)))
+
+;; --- duration invariant ---
+
+(deftest ornament-dur-sums-to-parent-test
+  (testing "all ornament types sum sub-step durs to parent :dur/beats"
+    (doseq [t [:anticipation :suspension :syncopation :octave-up :fifth-up
+               :half-turn-toward :half-turn-away
+               :mordent-up :mordent-down
+               :run-toward :run-away :turn :arp-toward :arp-away
+               :trill]]
+      (let [subs (fractal/ornament step-c4 t ctx-major)]
+        (is (= (:dur/beats step-c4) (dur-sum subs))
+            (str t " dur mismatch: " (dur-sum subs)))))))
+
+;; --- event counts ---
+
+(deftest ornament-two-step-count-test
+  (testing "two-step ornaments return exactly 2 sub-steps"
+    (doseq [t [:anticipation :suspension :syncopation :octave-up
+               :fifth-up :half-turn-toward :half-turn-away]]
+      (is (= 2 (count (fractal/ornament step-c4 t ctx-major)))
+          (str t " should have 2 sub-steps")))))
+
+(deftest ornament-mordent-count-test
+  (testing "mordent ornaments return exactly 3 sub-steps"
+    (is (= 3 (count (fractal/ornament step-c4 :mordent-up   ctx-major))))
+    (is (= 3 (count (fractal/ornament step-c4 :mordent-down ctx-major))))))
+
+(deftest ornament-four-step-count-test
+  (testing "four-step ornaments return exactly 4 sub-steps"
+    (doseq [t [:run-toward :run-away :turn :arp-toward :arp-away]]
+      (is (= 4 (count (fractal/ornament step-c4 t ctx-major)))
+          (str t " should have 4 sub-steps")))))
+
+(deftest ornament-trill-count-test
+  (testing "trill returns exactly 8 sub-steps"
+    (is (= 8 (count (fractal/ornament step-c4 :trill ctx-major))))))
+
+;; --- midi range invariant ---
+
+(deftest ornament-midi-range-test
+  (testing "all ornament sub-steps have :pitch/midi in [0,127]"
+    (doseq [t [:anticipation :suspension :syncopation :octave-up :fifth-up
+               :half-turn-toward :half-turn-away :mordent-up :mordent-down
+               :run-toward :run-away :turn :arp-toward :arp-away :trill]]
+      (let [subs (fractal/ornament step-c4 t ctx-major)]
+        (doseq [s subs]
+          (is (<= 0 (:pitch/midi s) 127)
+              (str t " sub-step out of range: " (:pitch/midi s))))))))
+
+;; --- specific ornament semantics ---
+
+(deftest ornament-anticipation-uses-next-pitch-test
+  (testing ":anticipation first sub-step uses next-step pitch"
+    (let [subs (fractal/ornament step-c4 :anticipation ctx-major)]
+      (is (= 64 (:pitch/midi (first subs))) "first event = next note (E4)")
+      (is (= 60 (:pitch/midi (second subs))) "second event = current note (C4)"))))
+
+(deftest ornament-suspension-uses-prev-pitch-test
+  (testing ":suspension first sub-step uses prev-step pitch"
+    (let [subs (fractal/ornament step-c4 :suspension ctx-major)]
+      (is (= 57 (:pitch/midi (first subs))) "first event = prev note (A3)")
+      (is (= 60 (:pitch/midi (second subs))) "second event = current note"))))
+
+(deftest ornament-syncopation-first-is-rest-test
+  (testing ":syncopation first sub-step is a rest"
+    (let [subs (fractal/ornament step-c4 :syncopation ctx-major)]
+      (is (false? (:gate/on? (first subs))) "first event is rest")
+      (is (true? (:gate/on? (second subs))) "second event is active"))))
+
+(deftest ornament-octave-up-second-is-octave-higher-test
+  (testing ":octave-up second sub-step is current + 12"
+    (let [subs (fractal/ornament step-c4 :octave-up ctx-major)]
+      (is (= 60 (:pitch/midi (first subs))))
+      (is (= 72 (:pitch/midi (second subs)))))))
+
+(deftest ornament-mordent-up-middle-above-test
+  (testing ":mordent-up middle note is above current"
+    (let [subs (fractal/ornament step-c4 :mordent-up ctx-major)]
+      (is (= 60 (:pitch/midi (first subs))) "start on current")
+      (is (> (:pitch/midi (second subs)) 60) "middle note above")
+      (is (= 60 (:pitch/midi (last subs))) "return to current"))))
+
+(deftest ornament-mordent-down-middle-below-test
+  (testing ":mordent-down middle note is below current"
+    (let [subs (fractal/ornament step-c4 :mordent-down ctx-major)]
+      (is (= 60 (:pitch/midi (first subs))) "start on current")
+      (is (< (:pitch/midi (second subs)) 60) "middle note below")
+      (is (= 60 (:pitch/midi (last subs))) "return to current"))))
+
+(deftest ornament-turn-shape-test
+  (testing ":turn goes current → up → down → current"
+    (let [subs (fractal/ornament step-c4 :turn ctx-major)]
+      (is (= 60 (:pitch/midi (nth subs 0))) "start on current")
+      (is (> (:pitch/midi (nth subs 1)) 60) "step up")
+      (is (< (:pitch/midi (nth subs 2)) 60) "step down")
+      (is (= 60 (:pitch/midi (nth subs 3))) "return to current"))))
+
+(deftest ornament-trill-alternates-test
+  (testing ":trill alternates between current and above"
+    (let [subs   (fractal/ornament step-c4 :trill ctx-major)
+          pitches (map :pitch/midi subs)]
+      (is (= 60 (first pitches)) "starts on current")
+      (is (> (second pitches) 60) "second is above")
+      (is (= 60 (nth pitches 2)) "third back to current")
+      (is (= #{(first pitches) (second pitches)} (set pitches))
+          "only two distinct pitches"))))
+
+(deftest ornament-run-toward-ascending-test
+  (testing ":run-toward from C4 toward E4 produces ascending scale steps"
+    (let [subs (fractal/ornament step-c4 :run-toward ctx-major)
+          ps   (map :pitch/midi subs)]
+      ;; All steps should be > 60 (moving toward 64)
+      (is (every? #(>= % 60) ps) "steps move toward target"))))
+
+(deftest ornament-gate-len-inherited-test
+  (testing "ornament sub-steps inherit :gate/len from parent step"
+    (let [subs (fractal/ornament step-c4 :mordent-up ctx-major)]
+      ;; step-c4 has :gate/len 0.7; active sub-steps should inherit it
+      (doseq [s (filter :gate/on? subs)]
+        (is (= 0.7 (:gate/len s)) "gate/len inherited")))))
+
+(deftest ornament-chromatic-fallback-test
+  (testing "ornament works without a scale (chromatic fallback)"
+    (let [ctx  {:root 60 :next-step {:pitch/midi 65} :prev-step {:pitch/midi 55}}
+          subs (fractal/ornament step-c4 :mordent-up ctx)]
+      (is (= 3 (count subs)))
+      (is (= 1/4 (dur-sum subs))))))
+
+;; ---------------------------------------------------------------------------
+;; ornament-seq
+;; ---------------------------------------------------------------------------
+
+(deftest ornament-seq-preserves-dur-budget-test
+  (testing "ornament-seq total dur equals sum of original step durs"
+    (let [ws       (random/weighted-scale :major)
+          expanded (fractal/ornament-seq trunk
+                                         :scale ws :root 60
+                                         :prob 1.0
+                                         :types [:mordent-up])]
+      (is (= (apply + (map :dur/beats trunk))
+             (apply + (map :dur/beats expanded)))
+          "total duration preserved"))))
+
+(deftest ornament-seq-zero-prob-unchanged-test
+  (testing "ornament-seq at prob=0 returns seq identical to input"
+    (let [result (fractal/ornament-seq trunk :prob 0.0)]
+      (is (= (count trunk) (count result)))
+      (is (= (map :pitch/midi trunk) (map :pitch/midi result))))))
+
+(deftest ornament-seq-full-prob-expands-test
+  (testing "ornament-seq at prob=1.0 expands every step"
+    (let [result (fractal/ornament-seq trunk
+                                       :scale (random/weighted-scale :major)
+                                       :root 60
+                                       :prob 1.0
+                                       :types [:mordent-up])]
+      ;; mordent-up = 3 sub-steps per step; 4 steps × 3 = 12
+      (is (= (* 3 (count trunk)) (count result))))))
+
+(deftest ornament-seq-max-steps-two-test
+  (testing ":max-steps :two excludes four-step ornament types"
+    ;; With max-steps :two and only :run-toward in types, no step is ornamented
+    ;; because :run-toward is excluded. Falls back to types list which yields no eligible.
+    ;; Actually with max-steps :two and types [:mordent-up], mordent-up IS in the
+    ;; four-step set, so eligible will be empty and no ornament applied.
+    (let [result (fractal/ornament-seq trunk
+                                       :prob 1.0
+                                       :types [:mordent-up]
+                                       :max-steps :two)]
+      ;; mordent-up filtered out by max-steps :two → eligible empty → no expansion
+      (is (= (count trunk) (count result)) "no expansion when all types filtered"))))
