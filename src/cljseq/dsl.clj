@@ -24,6 +24,10 @@
     (play! {:pitch/midi 60 :dur/beats 1/2})  ; step map
     (phrase! [:C4 :E4 :G4] :dur 1/4)    ; melodic phrase
 
+  ## Default duration
+    (set-default-dur! 1/8)              ; global default
+    (with-dur 1/16 (play! :C4))         ; scoped override
+
   ## Structural / conditional
     (every 4 :beats (play! :C4))         ; fires every 4 beats
     (one-in 4 (play! :C4))               ; fires with probability 1/4
@@ -31,9 +35,19 @@
   ## Cycling sequences
     (def r (ring :C4 :E4 :G4))
     (tick! r)                            ; returns next element, advances ring
+    (ring-reset! r)                      ; reset to first element
+    (ring-len r)                         ; => 3
+    (defring my-ring :C4 :E4 :G4)       ; named ring, registered in ctrl tree
+
+  ## Mod routing context
+    (use-mod! {[:filter/cutoff] my-lfo}) ; REPL default
+    (with-mod {[:filter/cutoff] my-lfo} …) ; scoped
+    (tick-mods!)                         ; sample all *mod-ctx* mods → ctrl/send!
 
   Key design decisions: §27 (DSL Sugar Layer), R&R usability corpus."
-  (:require [cljseq.core :as core]
+  (:require [cljseq.clock :as clock]
+            [cljseq.core :as core]
+            [cljseq.ctrl :as ctrl]
             [cljseq.loop :as loop-ns]
             [cljseq.mod  :as mod-ns]))
 
@@ -42,9 +56,34 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:dynamic *default-dur*
-  "Default note duration in beats. Override with binding or set-default-dur!.
+  "Default note duration in beats. Override with set-default-dur! or with-dur.
   Registered in Configuration Registry (R&R §25)."
   1/4)
+
+(defn set-default-dur!
+  "Set the default note duration globally (root binding).
+
+  `dur` — duration in beats (rational or double).
+
+  Not thread-safe — intended for interactive REPL use only.
+  Inside live loops, pass :dur to phrase! or use with-dur.
+
+  Example:
+    (set-default-dur! 1/8)   ; all play!/phrase! use 1/8 until changed"
+  [dur]
+  (alter-var-root #'*default-dur* (constantly dur))
+  nil)
+
+(defmacro with-dur
+  "Execute `body` with `dur` as the active default note duration.
+
+  Example:
+    (with-dur 1/8
+      (play! :C4)
+      (play! :E4))"
+  [dur & body]
+  `(binding [*default-dur* ~dur]
+     ~@body))
 
 ;; ---------------------------------------------------------------------------
 ;; Synth context management
@@ -112,6 +151,60 @@
   [mod & body]
   `(binding [loop-ns/*timing-ctx* ~mod]
      ~@body))
+
+;; ---------------------------------------------------------------------------
+;; Mod context management
+;; *mod-ctx* is defined in cljseq.loop; dsl provides the user-facing API.
+;; ---------------------------------------------------------------------------
+
+(defn use-mod!
+  "Set the default mod routing context for subsequent tick-mods! calls at the REPL.
+
+  `ctx` should be a map from ctrl-path (vector) to ITemporalValue (LFO/envelope),
+  or nil to clear.
+
+  Not thread-safe — intended for interactive REPL use only.
+  Inside live loops, use the :mod key in deflive-loop opts instead.
+
+  Example:
+    (use-mod! {[:filter/cutoff] (mod/lfo (->Phasor 1/4 0) phasor/sine-uni)})
+    (use-mod! nil)   ; clear"
+  [ctx]
+  (alter-var-root #'loop-ns/*mod-ctx* (constantly ctx))
+  nil)
+
+(defmacro with-mod
+  "Execute `body` with `ctx` as the active mod routing context.
+
+  `ctx` is a map from ctrl-path (vector) to ITemporalValue, or nil.
+
+  Example:
+    (with-mod {[:filter/cutoff] my-lfo}
+      (phrase! [:C4 :E4 :G4] :dur 1/4))"
+  [ctx & body]
+  `(binding [loop-ns/*mod-ctx* ~ctx]
+     ~@body))
+
+(defn tick-mods!
+  "Sample all modulators in *mod-ctx* at the current virtual time and route
+  each sampled value to ctrl/send!.
+
+  Intended to be called once per loop iteration, typically at the top of a
+  deflive-loop body. Each entry in *mod-ctx* is {path -> ITemporalValue};
+  tick-mods! calls (ctrl/send! path (clock/sample mod beat)) for each.
+
+  No-op if *mod-ctx* is nil.
+
+  Example:
+    (deflive-loop :bass {:mod {[:filter/cutoff] my-lfo}}
+      (tick-mods!)
+      (play! :C2)
+      (sleep! 1/4))"
+  []
+  (when-let [ctx loop-ns/*mod-ctx*]
+    (let [beat (double loop-ns/*virtual-time*)]
+      (doseq [[path mod] ctx]
+        (ctrl/send! path (clock/sample mod beat))))))
 
 ;; ---------------------------------------------------------------------------
 ;; play! — normalises all note forms to a step map, merges synth context
@@ -224,6 +317,41 @@
         current (elements pos)]
     (swap! ring-atom update :pos #(mod (inc %) (count elements)))
     current))
+
+(defn ring-reset!
+  "Reset a ring to its first element.
+
+  Usage: (ring-reset! r)  ; next (tick! r) returns first element"
+  [ring-atom]
+  (swap! ring-atom assoc :pos 0)
+  nil)
+
+(defn ring-len
+  "Return the number of elements in a ring.
+
+  Usage: (ring-len r)  ; => 4 for (ring :C4 :E4 :G4 :B4)"
+  [ring-atom]
+  (count (:elements @ring-atom)))
+
+(defmacro defring
+  "Create a named cycling sequence and register it in the ctrl tree.
+
+  Defines a var with the given name and registers it as a :data node at
+  [:rings/<name>] in the ctrl tree. Requires the system to be started.
+
+  Usage:
+    (defring my-melody :C4 :E4 :G4 :B4)
+    (tick! my-melody)   ; => :C4
+    (ctrl/get [:rings/my-melody])    ; => the ring atom
+
+  The ring can be reset via (ring-reset! my-melody) or by re-evaluating
+  the defring form."
+  [name & elements]
+  `(do
+     (def ~name (ring ~@elements))
+     (ctrl/defnode! [~(keyword "rings" (clojure.core/name name))]
+                    :type :data :value ~name)
+     ~name))
 
 ;; ---------------------------------------------------------------------------
 ;; play-chord! — absolute chord playback

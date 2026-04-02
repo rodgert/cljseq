@@ -2,9 +2,12 @@
 (ns cljseq.dsl-test
   "Unit tests for cljseq.dsl — synth context, play!, phrase!, arp!, ring/tick!."
   (:require [clojure.test :refer [deftest is testing]]
+            [cljseq.clock :as clock]
             [cljseq.core  :as core]
+            [cljseq.ctrl  :as ctrl]
             [cljseq.dsl   :as dsl]
-            [cljseq.loop  :as loop-ns]))
+            [cljseq.loop  :as loop-ns]
+            [cljseq.phasor :as phasor]))
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers
@@ -199,6 +202,119 @@
         (binding [loop-ns/*synth-ctx* {:midi/channel 10}]
           (dsl/arp! :C4 :major :up 1/16)))
       (is (every? #(= 10 (:midi/channel %)) @calls)))))
+
+;; ---------------------------------------------------------------------------
+;; set-default-dur! / with-dur
+;; ---------------------------------------------------------------------------
+
+(deftest set-default-dur-test
+  (testing "set-default-dur! changes root *default-dur*"
+    (let [original dsl/*default-dur*]
+      (try
+        (dsl/set-default-dur! 1/8)
+        (is (= 1/8 dsl/*default-dur*))
+        (finally
+          (dsl/set-default-dur! original))))))
+
+(deftest with-dur-scopes-default-dur-test
+  (testing "with-dur binds *default-dur* only within the block"
+    (let [original dsl/*default-dur*]
+      (dsl/with-dur 1/16
+        (is (= 1/16 dsl/*default-dur*) "within block"))
+      (is (= original dsl/*default-dur*) "restored after block")))
+  (testing "play! inside with-dur uses the scoped duration"
+    (let [[step] (capture-play!
+                  #(dsl/with-dur 1/2
+                     (dsl/play! :C4)))]
+      (is (= 1/2 (:dur/beats step))))))
+
+;; ---------------------------------------------------------------------------
+;; ring-reset! / ring-len
+;; ---------------------------------------------------------------------------
+
+(deftest ring-reset-test
+  (testing "ring-reset! returns ring to first element"
+    (let [r (dsl/ring :A :B :C)]
+      (dsl/tick! r)
+      (dsl/tick! r)
+      (dsl/ring-reset! r)
+      (is (= :A (dsl/tick! r)) "back to first element after reset"))))
+
+(deftest ring-len-test
+  (testing "ring-len returns number of elements"
+    (is (= 3 (dsl/ring-len (dsl/ring :A :B :C))))
+    (is (= 1 (dsl/ring-len (dsl/ring :solo))))
+    (is (= 0 (dsl/ring-len (dsl/ring))))))
+
+;; ---------------------------------------------------------------------------
+;; defring
+;; ---------------------------------------------------------------------------
+
+(deftest defring-creates-var-test
+  (testing "defring creates a cycling ring"
+    (core/start! :bpm 120)
+    (try
+      (dsl/defring test-defring-a :X :Y :Z)
+      (is (= :X (dsl/tick! test-defring-a)))
+      (is (= :Y (dsl/tick! test-defring-a)))
+      (finally (core/stop!)))))
+
+(deftest defring-registers-ctrl-node-test
+  (testing "defring registers the ring in the ctrl tree at [:rings/<name>]"
+    (core/start! :bpm 120)
+    (try
+      (dsl/defring test-defring-b :P :Q)
+      (is (some? (ctrl/get [:rings/test-defring-b])) "ctrl node exists")
+      (is (= test-defring-b (ctrl/get [:rings/test-defring-b])) "ctrl value is the ring atom")
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; use-mod! / with-mod
+;; ---------------------------------------------------------------------------
+
+(deftest use-mod-sets-root-test
+  (testing "use-mod! sets the root binding of *mod-ctx*"
+    (let [original loop-ns/*mod-ctx*
+          ctx      {[:filter/cutoff] :placeholder}]
+      (try
+        (dsl/use-mod! ctx)
+        (is (= ctx loop-ns/*mod-ctx*))
+        (finally
+          (dsl/use-mod! original))))))
+
+(deftest with-mod-scopes-mod-ctx-test
+  (testing "with-mod binds *mod-ctx* only within the block"
+    (let [original loop-ns/*mod-ctx*
+          ctx      {[:resonance] :placeholder}]
+      (dsl/with-mod ctx
+        (is (= ctx loop-ns/*mod-ctx*) "within block"))
+      (is (= original loop-ns/*mod-ctx*) "restored after block"))))
+
+;; ---------------------------------------------------------------------------
+;; tick-mods!
+;; ---------------------------------------------------------------------------
+
+(deftest tick-mods-routes-to-ctrl-test
+  (testing "tick-mods! samples each mod in *mod-ctx* at *virtual-time* and calls ctrl/send!"
+    (core/start! :bpm 120)
+    (try
+      (ctrl/defnode! [:test/tmod-cutoff] :type :float :value 0.0)
+      (let [ph  (clock/->Phasor 1 0)
+            lfo (dsl/ring 0.5)]          ; use a simple value; any ITemporalValue works
+        ;; Use a constant ITemporalValue (just a record that returns 0.75)
+        (let [const-mod (reify clock/ITemporalValue
+                          (sample    [_ _beat] 0.75)
+                          (next-edge [_ beat]  (+ beat 1.0)))]
+          (binding [loop-ns/*mod-ctx*    {[:test/tmod-cutoff] const-mod}
+                    loop-ns/*virtual-time* 0.0]
+            (dsl/tick-mods!))
+          (is (= 0.75 (ctrl/get [:test/tmod-cutoff])) "ctrl node updated with sampled value")))
+      (finally (core/stop!)))))
+
+(deftest tick-mods-noop-when-nil-test
+  (testing "tick-mods! is a no-op when *mod-ctx* is nil"
+    (binding [loop-ns/*mod-ctx* nil]
+      (is (nil? (dsl/tick-mods!))))))
 
 ;; ---------------------------------------------------------------------------
 ;; deflive-loop :synth opts — integration check
