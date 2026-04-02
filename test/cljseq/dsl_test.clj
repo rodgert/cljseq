@@ -336,3 +336,113 @@
             (is (some? step) "play! should have been called")
             (is (= 8 (:midi/channel step))))))
       (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; §24.6 per-step mod routing — apply-step-mods / use-step-mods! / with-step-mods
+;; ---------------------------------------------------------------------------
+
+(deftest apply-step-mods-with-itv-test
+  (testing "ITemporalValue in *step-mod-ctx* is sampled at *virtual-time*"
+    (let [const-mod (reify clock/ITemporalValue
+                      (sample    [_ _] 99)
+                      (next-edge [_ b] (+ b 1.0)))
+          step {:pitch/midi 60 :dur/beats 1/4}]
+      (binding [loop-ns/*step-mod-ctx*    {:mod/velocity const-mod}
+                loop-ns/*virtual-time*    0.0]
+        (let [result (dsl/apply-step-mods step)]
+          (is (= 99 (:mod/velocity result)) "ITV sampled and merged"))))))
+
+(deftest apply-step-mods-with-constant-test
+  (testing "Non-ITemporalValue constant in *step-mod-ctx* is used directly"
+    (let [step {:pitch/midi 60 :dur/beats 1/4}]
+      (binding [loop-ns/*step-mod-ctx*    {:gate/len 0.8}
+                loop-ns/*virtual-time*    0.0]
+        (let [result (dsl/apply-step-mods step)]
+          (is (= 0.8 (:gate/len result)) "constant merged into step"))))))
+
+(deftest apply-step-mods-noop-when-nil-test
+  (testing "apply-step-mods returns step unchanged when *step-mod-ctx* is nil"
+    (let [step {:pitch/midi 60 :dur/beats 1/4}]
+      (binding [loop-ns/*step-mod-ctx* nil]
+        (is (= step (dsl/apply-step-mods step)))))))
+
+(deftest apply-step-mods-overrides-step-values-test
+  (testing "step-mods override explicit step map values"
+    (let [const-mod (reify clock/ITemporalValue
+                      (sample    [_ _] 42)
+                      (next-edge [_ b] (+ b 1.0)))
+          step {:pitch/midi 60 :dur/beats 1/4 :mod/velocity 80}]
+      (binding [loop-ns/*step-mod-ctx*    {:mod/velocity const-mod}
+                loop-ns/*virtual-time*    0.0]
+        (let [result (dsl/apply-step-mods step)]
+          (is (= 42 (:mod/velocity result))
+              "step-mod overrides explicit step value"))))))
+
+(deftest play-applies-step-mods-test
+  (testing "play! automatically applies *step-mod-ctx* to the step"
+    (let [const-mod (reify clock/ITemporalValue
+                      (sample    [_ _] 77)
+                      (next-edge [_ b] (+ b 1.0)))
+          captured  (atom nil)]
+      (with-redefs [core/play! (fn [step] (reset! captured step))]
+        (binding [loop-ns/*step-mod-ctx*    {:mod/velocity const-mod}
+                  loop-ns/*virtual-time*    0.0]
+          (dsl/play! {:pitch/midi 60 :dur/beats 1/4})))
+      (is (= 77 (:mod/velocity @captured)) "step-mod value reached core/play!"))))
+
+(deftest play-step-mod-overrides-synth-ctx-test
+  (testing "step-mods have higher priority than *synth-ctx*"
+    (let [const-mod (reify clock/ITemporalValue
+                      (sample    [_ _] 55)
+                      (next-edge [_ b] (+ b 1.0)))
+          captured  (atom nil)]
+      (with-redefs [core/play! (fn [step] (reset! captured step))]
+        (binding [loop-ns/*synth-ctx*       {:mod/velocity 90}
+                  loop-ns/*step-mod-ctx*    {:mod/velocity const-mod}
+                  loop-ns/*virtual-time*    0.0]
+          (dsl/play! :C4 1/4)))
+      (is (= 55 (:mod/velocity @captured)) "step-mod wins over synth ctx"))))
+
+(deftest with-step-mods-scopes-context-test
+  (testing "with-step-mods binds *step-mod-ctx* only within the block"
+    (let [original loop-ns/*step-mod-ctx*
+          ctx      {:gate/len 0.9}]
+      (dsl/with-step-mods ctx
+        (is (= ctx loop-ns/*step-mod-ctx*) "within block"))
+      (is (= original loop-ns/*step-mod-ctx*) "restored after block"))))
+
+(deftest use-step-mods-sets-root-test
+  (testing "use-step-mods! sets the root binding of *step-mod-ctx*"
+    (let [original loop-ns/*step-mod-ctx*
+          ctx      {:mod/velocity 64}]
+      (try
+        (dsl/use-step-mods! ctx)
+        (is (= ctx loop-ns/*step-mod-ctx*))
+        (finally
+          (dsl/use-step-mods! original)))))
+  (testing "use-step-mods! nil clears context"
+    (let [original loop-ns/*step-mod-ctx*]
+      (try
+        (dsl/use-step-mods! {:gate/len 0.5})
+        (dsl/use-step-mods! nil)
+        (is (nil? loop-ns/*step-mod-ctx*))
+        (finally
+          (dsl/use-step-mods! original))))))
+
+(deftest deflive-loop-binds-step-mods-test
+  (testing ":step-mods in deflive-loop opts binds *step-mod-ctx* for the loop body"
+    (core/start! :bpm 6000)
+    (try
+      (let [const-mod (reify clock/ITemporalValue
+                        (sample    [_ _] 33)
+                        (next-edge [_ b] (+ b 1.0)))
+            ctx      {:mod/velocity const-mod}
+            observed (promise)]
+        (with-redefs [core/play! (fn [step] (deliver observed step))]
+          (core/deflive-loop :step-mod-loop-test {:step-mods ctx}
+            (dsl/play! :C4 1/4)
+            (core/stop-loop! :step-mod-loop-test))
+          (let [step (deref observed 500 nil)]
+            (is (some? step) "play! should have been called")
+            (is (= 33 (:mod/velocity step)) "step-mod applied in loop"))))
+      (finally (core/stop!)))))

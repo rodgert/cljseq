@@ -101,6 +101,23 @@
      [:resonance]     (mod/lfo (->Phasor 1/8 0) phasor/triangle)}"
   nil)
 
+(def ^:dynamic *step-mod-ctx*
+  "Active per-step mod routing context for the current thread (§24.6).
+  A map from step-key keyword to ITemporalValue (or a constant number), or nil.
+
+  At each dsl/play! call, each entry is sampled at *virtual-time* and merged
+  into the step map AFTER the synth context — step-mods override everything.
+  Use this to apply LFOs or envelopes to note properties such as velocity,
+  gate length, or pitch.
+
+  Bound per-thread by deflive-loop (from the :step-mods key in opts) and by
+  cljseq.dsl/with-step-mods. Set at the REPL root with cljseq.dsl/use-step-mods!.
+
+  Example:
+    {[:mod/velocity] (mod/lfo (->Phasor 1/4 0) phasor/triangle)
+     :gate/len       (mod/lfo (->Phasor 1/8 0) phasor/sine-uni)}"
+  nil)
+
 (def ^:dynamic *virtual-time*
   "Current beat position, anchored to the master timeline.
   Advanced by sleep!. Bound per-thread by deflive-loop.
@@ -224,14 +241,16 @@
       (play! {:pitch/midi 37 :dur/beats 1/8})
       (sleep! 1/2))"
   [loop-name opts & body]
-  `(let [synth-ctx#  (:synth ~opts)
-         timing-ctx# (:timing ~opts)
-         mod-ctx#    (:mod ~opts)
-         loop-fn#    (fn []
-                       (binding [cljseq.loop/*synth-ctx*  synth-ctx#
-                                 cljseq.loop/*timing-ctx* timing-ctx#
-                                 cljseq.loop/*mod-ctx*    mod-ctx#]
-                         ~@body))
+  `(let [synth-ctx#     (:synth ~opts)
+         timing-ctx#    (:timing ~opts)
+         mod-ctx#       (:mod ~opts)
+         step-mod-ctx#  (:step-mods ~opts)
+         loop-fn#       (fn []
+                          (binding [cljseq.loop/*synth-ctx*     synth-ctx#
+                                    cljseq.loop/*timing-ctx*    timing-ctx#
+                                    cljseq.loop/*mod-ctx*       mod-ctx#
+                                    cljseq.loop/*step-mod-ctx*  step-mod-ctx#]
+                            ~@body))
          sref#       (cljseq.loop/-system-ref)]
      (if (get-in @@sref# [:loops ~loop-name])
        ;; Hot-swap: update fn; thread picks it up next iteration

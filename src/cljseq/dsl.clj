@@ -45,11 +45,11 @@
     (tick-mods!)                         ; sample all *mod-ctx* mods → ctrl/send!
 
   Key design decisions: §27 (DSL Sugar Layer), R&R usability corpus."
-  (:require [cljseq.clock :as clock]
-            [cljseq.core :as core]
-            [cljseq.ctrl :as ctrl]
-            [cljseq.loop :as loop-ns]
-            [cljseq.mod  :as mod-ns]))
+  (:require [cljseq.clock  :as clock]
+            [cljseq.core  :as core]
+            [cljseq.ctrl  :as ctrl]
+            [cljseq.loop  :as loop-ns]
+            [cljseq.mod   :as mod-ns]))
 
 ;; ---------------------------------------------------------------------------
 ;; Dynamic configuration vars (Configuration Registry, R&R §25)
@@ -185,6 +185,74 @@
   `(binding [loop-ns/*mod-ctx* ~ctx]
      ~@body))
 
+;; ---------------------------------------------------------------------------
+;; Per-step mod context management (§24.6)
+;; *step-mod-ctx* is defined in cljseq.loop; dsl provides the user-facing API.
+;; ---------------------------------------------------------------------------
+
+(defn use-step-mods!
+  "Set the default per-step mod context for subsequent play! calls at the REPL.
+
+  `ctx` should be a map from step-key keyword to ITemporalValue or constant number,
+  or nil to clear.
+
+  At each play! call, each entry is sampled at *virtual-time* and merged into
+  the step map with the highest priority (overrides both synth context and
+  explicit step map values).
+
+  Not thread-safe — intended for interactive REPL use only.
+  Inside live loops, use the :step-mods key in deflive-loop opts instead.
+
+  Example:
+    (use-step-mods! {:mod/velocity (mod/lfo (->Phasor 1/4 0) phasor/triangle)
+                     :gate/len     0.8})
+    (use-step-mods! nil)   ; clear"
+  [ctx]
+  (alter-var-root #'loop-ns/*step-mod-ctx* (constantly ctx))
+  nil)
+
+(defmacro with-step-mods
+  "Execute `body` with `ctx` as the active per-step mod context.
+
+  `ctx` is a map from step-key keyword to ITemporalValue or constant number, or nil.
+
+  Example:
+    (with-step-mods {:mod/velocity vel-lfo}
+      (play! :C4)
+      (phrase! [:C4 :E4 :G4] :dur 1/4))"
+  [ctx & body]
+  `(binding [loop-ns/*step-mod-ctx* ~ctx]
+     ~@body))
+
+(defn apply-step-mods
+  "Apply *step-mod-ctx* to a step map, returning a modified step map.
+
+  Each entry in *step-mod-ctx* is sampled at *virtual-time* if it satisfies
+  ITemporalValue; otherwise the value is used directly.  The result is merged
+  into the step map with highest priority — step-mod values override both the
+  synth context and any explicit per-note keys.
+
+  Returns `step` unchanged when *step-mod-ctx* is nil.
+
+  Intended for use outside play! when you need the modified step for other
+  purposes (e.g. passing to a fractal context or stochastic router).
+
+  Example:
+    (let [step (fractal/next-step! melody)
+          step (dsl/apply-step-mods step)]
+      (play! step))"
+  [step]
+  (if-let [ctx loop-ns/*step-mod-ctx*]
+    (let [beat (double loop-ns/*virtual-time*)]
+      (reduce-kv (fn [s k mod]
+                   (assoc s k
+                          (if (satisfies? clock/ITemporalValue mod)
+                            (clock/sample mod beat)
+                            mod)))
+                 step
+                 ctx))
+    step))
+
 (defn tick-mods!
   "Sample all modulators in *mod-ctx* at the current virtual time and route
   each sampled value to ctrl/send!.
@@ -237,6 +305,8 @@
          step (if ctx
                 (merge (select-keys ctx [:midi/channel :mod/velocity]) step)
                 step)
+         ;; Step-mods are highest priority — sample at *virtual-time* and merge.
+         step (apply-step-mods step)
          d    (or (:dur/beats step) dur *default-dur*)]
      (core/play! (assoc step :dur/beats d)))))
 
