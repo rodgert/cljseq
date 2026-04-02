@@ -19,6 +19,7 @@
             [cljseq.ctrl     :as ctrl]
             [cljseq.link     :as link]
             [cljseq.loop     :as loop-ns]
+            [cljseq.midi-in  :as midi-in]
             [cljseq.mod      :as mod]
             [cljseq.sidecar  :as sidecar])
   (:import  [java.util.concurrent.locks LockSupport])
@@ -119,6 +120,7 @@
 (defn stop!
   "Gracefully stop all live loops and shut down the system."
   []
+  (midi-in/close-all-inputs!)
   (mod/mod-unroute-all!)
   (loop-ns/stop-all-loops!)
   ;; Wait briefly for threads to notice the stop signal
