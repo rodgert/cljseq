@@ -340,6 +340,25 @@
             :when       (= binding-type (:type binding))]
         [path binding]))))
 
+(defn all-nodes
+  "Return a seq of {:path [...] :value v :type kw} maps for every ctrl node.
+
+  Walks the entire tree; useful for serialising the tree to external consumers
+  (e.g. the control-plane HTTP server).  Returns an empty seq if the system is
+  not started.
+
+  Example:
+    (ctrl/all-nodes)
+    ;; => ({:path [:filter/cutoff] :value 0.5 :type :float} ...)"
+  []
+  (if-let [s @system-ref]
+    (map (fn [[path node]]
+           {:path  path
+            :value (:value node)
+            :type  (:type node)})
+         (walk-nodes (:tree @s) []))
+    []))
+
 ;; ---------------------------------------------------------------------------
 ;; Checkpoints and panic (Q47)
 ;; ---------------------------------------------------------------------------
