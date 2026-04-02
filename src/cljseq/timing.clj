@@ -2,57 +2,119 @@
 (ns cljseq.timing
   "cljseq timing modulator namespace.
 
-  Timing modulators are `ITemporalValue` instances that return Long nanosecond
-  offsets. They are applied additively to the scheduled event time (`time_ns`)
-  after BPM-based beat-to-wall-clock conversion.
+  Timing modulators are `ITemporalValue` instances that return Double
+  fractional-beat offsets. `cljseq.core/play!` samples the active modulator
+  at the current virtual-beat position and converts to nanoseconds via the
+  running BPM timeline before dispatching to the sidecar.
 
-  All timing modulators use phasor arithmetic internally for beat-phase detection.
+  The two built-in modulators:
 
-  ## Swing
-    (swing :amount 0.55)    ; 55% swing — delays off-beats by 55% of a half-beat
+    swing     — delays notes in the 8th-note upbeat region (second half of
+                each beat) by `amount - 0.5` beats. This shifts off-beat
+                notes later in wall-clock time without changing virtual time,
+                producing the characteristic groove feel. Range: 0.5 (straight)
+                to ~0.667 (triplet swing).
 
-  ## Humanize (Phase 1+)
-    (humanize :amount 0.02) ; random ±2% timing scatter
+    humanize  — adds uniform random scatter of ±amount beats to every note.
+                Reduces machine-like precision.
 
-  Key design decisions: Q35 (timing returns Long ns), Q46 (timing as ITemporalValue),
-  R&R §28 (phasor model for beat-phase detection)."
-  (:require [cljseq.clock  :as clock]
-            [cljseq.phasor :as phasor]))
+  Both can be composed with `combine`:
+    (combine (swing :amount 0.6) (humanize :amount 0.005))
+
+  ## Usage in a live loop
+    (deflive-loop :bass {:synth bass :timing (timing/swing :amount 0.6)}
+      (play! :C3 1/4)
+      (sleep! 1/4)
+      (play! :E3 1/4)   ; upbeat — shifted by 0.1 beats wall-clock
+      (sleep! 1/4))
+
+  ## Ad-hoc at the REPL
+    (dsl/with-timing (timing/swing :amount 0.55)
+      (phrase! [:C4 :E4 :G4] :dur 1/4))
+
+  Key design decisions: Q35 (timing offset applied before sidecar dispatch),
+  Q46 (timing as ITemporalValue), R&R §28.7."
+  (:require [cljseq.clock :as clock]))
 
 ;; ---------------------------------------------------------------------------
 ;; Swing
+;;
+;; 8th-note grid via floor arithmetic:
+;;
+;;   beat:       0    0.25   0.5   0.75   1.0   1.5
+;;   8th index:  0     0      1     1      2     3
+;;   role:      down  down   UP    UP    down    UP
+;;   offset:     0     0    amt    amt    0     amt
+;;
+;; amt = amount - 0.5  (e.g. 0.55 - 0.5 = 0.05 beats)
+;;
+;; Any note with virtual-time in the second half of a beat is considered
+;; an upbeat and receives the delay. Quarter-note patterns are unaffected
+;; (they land on even 8th indices). Eighth-note patterns produce classic
+;; swing feel.
 ;; ---------------------------------------------------------------------------
 
 (defrecord Swing [amount]
   clock/ITemporalValue
   (sample [_ beat]
-    ;; Off-beat detection: phase of the beat phasor > 0.4
-    ;; (phasor/wrap beat) gives position within the current beat [0.0, 1.0)
-    (let [phase (phasor/wrap (double beat))]
-      (if (> phase 0.4)
-        (long (* (double amount) 20000000))   ; up to ~20ms at amount=1.0
-        0)))
+    (let [eighth-idx (long (Math/floor (* 2.0 (double beat))))]
+      (if (even? eighth-idx)
+        0.0
+        (- (double amount) 0.5))))
   (next-edge [_ beat]
-    ;; Next beat boundary
-    (+ (Math/floor (double beat)) 1.0)))
+    ;; Next 8th-note boundary: (floor(beat×2) + 1) / 2
+    (/ (+ (Math/floor (* 2.0 (double beat))) 1.0) 2.0)))
 
 (defn swing
-  "Construct a swing timing modulator.
+  "Return a swing timing modulator.
 
-  :amount  [0.0, 1.0] — proportion of the off-beat interval to delay late.
-  Returns Long nanosecond offsets suitable for the time_ns pipeline (Q35).
+  `:amount` — swing ratio in [0.5, 1.0).
+               0.5   = straight (no effect)
+               0.55  = light swing
+               0.667 ≈ triplet swing (classic jazz)
+  Default: 0.55.
 
-  At amount=0.5 the off-beat is delayed by 50% of the half-beat interval,
-  giving a classic shuffle feel. At amount=0.55–0.67 the feel is closer to
-  a jazz triplet swing."
-  [& {:keys [amount] :or {amount 0.5}}]
-  (->Swing amount))
+  Samples to a Double fractional-beat offset; `core/play!` converts to ns
+  using the running BPM timeline."
+  [& {:keys [amount] :or {amount 0.55}}]
+  (->Swing (double amount)))
 
 ;; ---------------------------------------------------------------------------
-;; Humanize (stub — Phase 1)
-;; ---------------------------------------------------------------------------
-
-;; (defn humanize [& {:keys [amount] :or {amount 0.01}}] ...)
+;; Humanize
 ;;
-;; Returns random nanosecond scatter ± (amount × beat-duration-ns).
-;; Implemented in Phase 1 when the timing pipeline is wired.
+;; Uniform random scatter ±amount beats on every sample call.
+;; next-edge is not meaningful for a stochastic signal; returns beat+1.
+;; ---------------------------------------------------------------------------
+
+(defrecord Humanize [amount]
+  clock/ITemporalValue
+  (sample [_ _beat]
+    (* (- (* 2.0 (Math/random)) 1.0) (double amount)))
+  (next-edge [_ beat]
+    (+ (double beat) 1.0)))
+
+(defn humanize
+  "Return a humanize timing modulator.
+
+  `:amount` — maximum scatter in beats; result is uniformly random in
+               [-amount, +amount]. Default: 0.01 (1% of a beat).
+
+  At 120 BPM, 0.01 beats ≈ 5ms of scatter — subtle but perceptible."
+  [& {:keys [amount] :or {amount 0.01}}]
+  (->Humanize (double amount)))
+
+;; ---------------------------------------------------------------------------
+;; Combine — additive composition
+;; ---------------------------------------------------------------------------
+
+(defn combine
+  "Combine timing modulators by summing their fractional-beat offsets.
+
+  Usage:
+    (combine (swing :amount 0.6) (humanize :amount 0.005))"
+  [& mods]
+  (reify clock/ITemporalValue
+    (sample [_ beat]
+      (reduce + 0.0 (map #(clock/sample % beat) mods)))
+    (next-edge [_ beat]
+      (reduce min Double/MAX_VALUE (map #(clock/next-edge % beat) mods)))))
