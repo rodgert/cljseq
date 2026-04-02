@@ -17,6 +17,7 @@
   Q11 (live-loop alias), Q1 (virtual time), phase0-readiness.md."
   (:require [cljseq.clock    :as clock]
             [cljseq.ctrl     :as ctrl]
+            [cljseq.flux     :as flux]
             [cljseq.link     :as link]
             [cljseq.loop     :as loop-ns]
             [cljseq.midi-in  :as midi-in]
@@ -112,6 +113,7 @@
                                    :beat0-beat     0.0}))))
     (loop-ns/-register-system! system-state)
     (ctrl/-register-system! system-state)
+    (flux/-register-system! system-state)
     (link/-register-system! system-state)
     (mod/-register-system! system-state)
     (println (str "cljseq started at " bpm " BPM"))
@@ -121,6 +123,7 @@
   "Gracefully stop all live loops and shut down the system."
   []
   (midi-in/close-all-inputs!)
+  (flux/stop-all!)
   (mod/mod-unroute-all!)
   (loop-ns/stop-all-loops!)
   ;; Wait briefly for threads to notice the stop signal
