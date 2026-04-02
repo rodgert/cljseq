@@ -61,8 +61,45 @@
   (or (link/link-timeline) (get-timeline)))
 
 ;; ---------------------------------------------------------------------------
-;; Virtual time
+;; Virtual time and synth context
 ;; ---------------------------------------------------------------------------
+
+(def ^:dynamic *synth-ctx*
+  "Active synth-routing context for the current thread.
+  A map with at minimum :midi/channel (1–16) and optionally :mod/velocity (0–127).
+  nil means no context — channel 1, velocity 64 are the fallback defaults.
+
+  Bound per-thread by deflive-loop (from the :synth key in opts) and by
+  cljseq.dsl/with-synth. Set at the REPL root with cljseq.dsl/use-synth!.
+
+  Example context map:
+    {:midi/channel 3 :mod/velocity 100}"
+  nil)
+
+(def ^:dynamic *timing-ctx*
+  "Active timing modulator for the current thread. An ITemporalValue
+  (from cljseq.timing) that returns Double fractional-beat offsets,
+  or nil for no timing modification.
+
+  Bound per-thread by deflive-loop (from the :timing key in opts) and by
+  cljseq.dsl/with-timing. Set at the REPL root with cljseq.dsl/use-timing!."
+  nil)
+
+(def ^:dynamic *mod-ctx*
+  "Active mod routing context for the current thread.
+  A map from ctrl-path (vector) to ITemporalValue (LFO/envelope), or nil.
+
+  Each entry maps a ctrl node path to a modulator. dsl/tick-mods! iterates
+  this map, sampling each modulator at *virtual-time* and routing the result
+  to ctrl/send!.
+
+  Bound per-thread by deflive-loop (from the :mod key in opts) and by
+  cljseq.dsl/with-mod. Set at the REPL root with cljseq.dsl/use-mod!.
+
+  Example context map:
+    {[:filter/cutoff] (mod/lfo (->Phasor 1/4 0) phasor/sine-uni)
+     [:resonance]     (mod/lfo (->Phasor 1/8 0) phasor/triangle)}"
+  nil)
 
 (def ^:dynamic *virtual-time*
   "Current beat position, anchored to the master timeline.
@@ -186,9 +223,16 @@
     (deflive-loop :kick {}
       (play! {:pitch/midi 37 :dur/beats 1/8})
       (sleep! 1/2))"
-  [loop-name _opts & body]
-  `(let [loop-fn#  (fn [] ~@body)
-         sref#     (cljseq.loop/-system-ref)]
+  [loop-name opts & body]
+  `(let [synth-ctx#  (:synth ~opts)
+         timing-ctx# (:timing ~opts)
+         mod-ctx#    (:mod ~opts)
+         loop-fn#    (fn []
+                       (binding [cljseq.loop/*synth-ctx*  synth-ctx#
+                                 cljseq.loop/*timing-ctx* timing-ctx#
+                                 cljseq.loop/*mod-ctx*    mod-ctx#]
+                         ~@body))
+         sref#       (cljseq.loop/-system-ref)]
      (if (get-in @@sref# [:loops ~loop-name])
        ;; Hot-swap: update fn; thread picks it up next iteration
        (do

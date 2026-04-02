@@ -19,6 +19,7 @@
             [cljseq.ctrl     :as ctrl]
             [cljseq.link     :as link]
             [cljseq.loop     :as loop-ns]
+            [cljseq.mod      :as mod]
             [cljseq.sidecar  :as sidecar])
   (:import  [java.util.concurrent.locks LockSupport])
   (:gen-class))
@@ -111,12 +112,14 @@
     (loop-ns/-register-system! system-state)
     (ctrl/-register-system! system-state)
     (link/-register-system! system-state)
+    (mod/-register-system! system-state)
     (println (str "cljseq started at " bpm " BPM"))
     nil))
 
 (defn stop!
   "Gracefully stop all live loops and shut down the system."
   []
+  (mod/mod-unroute-all!)
   (loop-ns/stop-all-loops!)
   ;; Wait briefly for threads to notice the stop signal
   (Thread/sleep 50)
@@ -186,13 +189,19 @@
                       1/4)
          now-beat (double loop-ns/*virtual-time*)]
      (if (sidecar/connected?)
-       (let [tl       (:timeline @system-state)
-             channel  (or (and (map? note) (:midi/channel note)) 1)
-             velocity (or (and (map? note) (:mod/velocity note)) 64)
-             on-ns    (clock/beat->epoch-ns now-beat tl)
-             off-ns   (clock/beat->epoch-ns (+ now-beat (double beats)) tl)]
-         (sidecar/send-note-on!  on-ns channel midi velocity)
-         (sidecar/send-note-off! off-ns channel midi))
+       (let [tl        (:timeline @system-state)
+             channel   (or (and (map? note) (:midi/channel note)) 1)
+             velocity  (or (and (map? note) (:mod/velocity note)) 64)
+             on-ns     (clock/beat->epoch-ns now-beat tl)
+             off-ns    (clock/beat->epoch-ns (+ now-beat (double beats)) tl)
+             timing    loop-ns/*timing-ctx*
+             t-off-ns  (if timing
+                         (long (Math/round (* (clock/sample timing now-beat)
+                                              (clock/beats->ms 1.0 (double (:bpm tl)))
+                                              1000000.0)))
+                         0)]
+         (sidecar/send-note-on!  (+ on-ns t-off-ns) channel midi velocity)
+         (sidecar/send-note-off! (+ off-ns t-off-ns) channel midi))
        (let [ms (long (clock/beats->ms beats (get-bpm)))]
          (println (format "[play!] beat=%-8s midi=%-3d dur=%s beats (%dms)"
                           (str now-beat) midi (str beats) ms)))))))
