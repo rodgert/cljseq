@@ -3,71 +3,178 @@
   "cljseq probability and distribution primitives.
 
   Provides the stochastic building blocks used by `cljseq.stochastic`:
-  probability distributions, weighted scales, corpus-learned weights,
-  and progressive quantization.
+  spread/bias distributions, weighted scales, progressive quantization,
+  and scale-weight learning from note sequences.
 
-  ## Core distribution model
-    (distribution :spread 0.5 :bias 0.6)  ;=> sampler fn (fn [] -> [0,1])
+  ## Distribution sampling
+    (sample-distribution 0.5 0.5)     ; Gaussian, center of range -> value in [0,1]
+    (sample-distribution 0.0 0.7)     ; constant at 0.7
+    (sample-distribution 1.0 0.5)     ; uniform random
 
   ## Weighted scales
-    (weighted-scale :C :major {:C 0.3 :E 0.2 :G 0.2 ...})
-    (learn-scale-weights notes :key :C)
+    (weighted-scale :major)                              ; uniform weights
+    (weighted-scale :major {:tonic 1.0 :seventh 0.1})   ; custom weights
+    (learn-scale-weights [60 62 64 60 62] :scale-kw :major)
 
-  ## Sampling
-    (draw dist)                   ; draw one sample from distribution
-    (progressive-quantize v scale steps)
+  ## Progressive quantization
+    (progressive-quantize 61 (weighted-scale :major) 0.7) ; C# -> C or D
 
-  Key design decisions: R&R §23, Phase 6i implementation prerequisites.")
-
-;; ---------------------------------------------------------------------------
-;; Distribution model
-;;
-;; A distribution is a sampler function (fn [] -> Float [0.0 1.0]).
-;; The :spread parameter controls the shape:
-;;   0.0 = point mass (always returns :bias)
-;;   0.25 = gaussian (tight cluster around :bias)
-;;   0.5–0.75 = uniform (spread across range)
-;;   1.0 = quantized (returns only the 5 canonical scale degree values)
-;; The :bias parameter shifts the center of the distribution.
-;; ---------------------------------------------------------------------------
-
-;; (defn distribution [& {:keys [spread bias] :or {spread 0.5 bias 0.5}}] ...)
+  Key design decisions: R&R §23.4-23.5, Q36 (weighted scale as map extension).")
 
 ;; ---------------------------------------------------------------------------
-;; Weighted scale
-;;
-;; Extends the standard scale map (R&R §4) with :scale/weights — a map from
-;; pitch class keyword to salience weight (0.0–1.0).
-;; Higher weight = more likely to be selected by stochastic-sequence.
-;;
-;; Weights need not sum to 1.0; they are normalised at draw time.
+;; Scale definitions
 ;; ---------------------------------------------------------------------------
 
-;; (defn weighted-scale [scale-type weights] ...)
+(def ^:private scale-intervals
+  "Semitone offsets for each scale degree, root = 0."
+  {:major       [0 2 4 5 7 9 11]
+   :minor        [0 2 3 5 7 8 10]
+   :dorian       [0 2 3 5 7 9 10]
+   :phrygian     [0 1 3 5 7 8 10]
+   :lydian       [0 2 4 6 7 9 11]
+   :mixolydian   [0 2 4 5 7 9 10]
+   :locrian      [0 1 3 5 6 8 10]
+   :pentatonic   [0 2 4 7 9]
+   :minor-pent   [0 3 5 7 10]
+   :chromatic    [0 1 2 3 4 5 6 7 8 9 10 11]})
+
+(def ^:private degree-names
+  "Degree name keyword -> index in scale-intervals vector."
+  {:tonic 0 :second 1 :third 2 :fourth 3 :fifth 4 :sixth 5 :seventh 6})
+
+(def ^:private default-degree-weights
+  "Musically-motivated default weights: root/fifth most stable, seventh least."
+  [1.0 0.6 0.8 0.5 0.9 0.4 0.2])
 
 ;; ---------------------------------------------------------------------------
-;; Scale weight learning
-;;
-;; Builds a weighted scale from a sequence of MIDI notes by computing a
-;; pitch-class histogram and normalising to weights.
+;; Gaussian sampling — Box-Muller transform
 ;; ---------------------------------------------------------------------------
 
-;; (defn learn-scale-weights [notes & {:keys [key]}] ...)
+(defn rand-gaussian
+  "Return a sample from the standard normal distribution N(0,1).
+  Uses the Box-Muller transform."
+  ^double []
+  (* (Math/sqrt (* -2.0 (Math/log (max 1e-10 (rand)))))
+     (Math/cos (* 2.0 Math/PI (rand)))))
 
 ;; ---------------------------------------------------------------------------
-;; Progressive quantization
-;;
-;; Maps a continuous value in [0.0, 1.0] to a scale degree, where the
-;; :steps parameter controls how many degrees survive:
-;;   steps=0.0 -> only the tonic survives (maximum quantization)
-;;   steps=0.5 -> pentatonic subset
-;;   steps=1.0 -> all scale degrees (chromatic, no quantization)
+;; Distribution model (§23.4)
 ;; ---------------------------------------------------------------------------
 
-;; (defn progressive-quantize [value weighted-scale steps] ...)
+(defn sample-distribution
+  "Draw one sample from a spread/bias distribution, returning a value in [0.0, 1.0].
+
+  `spread` — distribution width [0.0=constant, 0.5=Gaussian, 1.0=uniform]
+  `bias`   — center of distribution [0.0-1.0]
+
+  Interpolates between a Gaussian centered at `bias` and a uniform draw
+  as spread approaches 1.0. At spread=0.0 returns `bias` exactly."
+  ^double [spread bias]
+  (let [s (double spread)
+        b (double bias)]
+    (cond
+      (<= s 0.0) b
+      (>= s 1.0) (rand)
+      :else
+      (let [gauss (max 0.0 (min 1.0 (+ b (* s 0.3 (rand-gaussian)))))
+            unif  (rand)]
+        (+ (* (- 1.0 s) gauss) (* s unif))))))
 
 ;; ---------------------------------------------------------------------------
-;; Convenience: draw a single sample
+;; Weighted scale (Q36)
 ;; ---------------------------------------------------------------------------
 
-;; (defn draw [distribution] ((distribution)))
+(defn weighted-scale
+  "Create a weighted scale map for use with progressive-quantize.
+
+  `scale-kw`   — scale type keyword (:major, :minor, :dorian, etc.)
+  `weight-map` — optional map of degree-name keyword -> weight [0.0-1.0].
+                 Degree names: :tonic :second :third :fourth :fifth :sixth :seventh
+                 Missing degrees use musically-motivated defaults.
+
+  Returns {:scale/type kw :intervals [semitones] :weights [floats]}
+
+  Examples:
+    (weighted-scale :major)
+    (weighted-scale :major {:tonic 1.0 :seventh 0.05})
+    (weighted-scale :dorian {:fifth 1.0 :tonic 0.9 :second 0.3})"
+  ([scale-kw]
+   (weighted-scale scale-kw {}))
+  ([scale-kw weight-map]
+   (let [intervals (get scale-intervals scale-kw [0 2 4 5 7 9 11])
+         n         (count intervals)
+         defaults  (vec (take n default-degree-weights))
+         weights   (reduce (fn [ws [degree-name w]]
+                             (if-let [idx (get degree-names degree-name)]
+                               (if (< idx n) (assoc ws idx (double w)) ws)
+                               ws))
+                           defaults
+                           weight-map)]
+     {:scale/type scale-kw
+      :intervals  intervals
+      :weights    weights})))
+
+;; ---------------------------------------------------------------------------
+;; Progressive quantization (§23.4 — steps parameter)
+;; ---------------------------------------------------------------------------
+
+(defn progressive-quantize
+  "Quantize `midi-note` to a weighted scale controlled by `steps`.
+
+  `midi-note`      — integer MIDI note [0-127]
+  `weighted-scale` — map from (weighted-scale ...) with :intervals and :weights
+  `steps`          — quantization depth [0.0-1.0]
+                     <= 0.5: raw (no quantization; slewing deferred to Phase 2)
+                     >  0.5: quantize with threshold = (steps-0.5)*2
+                             degrees with weight < threshold are excluded
+                     =  1.0: only highest-weight degree (tonic) survives
+
+  Returns the quantized MIDI note in the same octave as the input."
+  [midi-note {:keys [intervals weights]} steps]
+  (if (<= (double steps) 0.5)
+    (int midi-note)
+    (let [threshold (* (- (double steps) 0.5) 2.0)
+          eligible  (for [[iv w] (map vector intervals weights)
+                          :when (>= (double w) threshold)]
+                      (int iv))
+          eligible  (if (empty? eligible) [(first intervals)] eligible)
+          pitch     (mod (int midi-note) 12)
+          octave    (* 12 (quot (int midi-note) 12))
+          best      (apply min-key
+                           (fn [iv]
+                             (let [d (Math/abs (- pitch iv))]
+                               (min d (- 12 d))))
+                           eligible)]
+      (+ octave (int best)))))
+
+;; ---------------------------------------------------------------------------
+;; Scale weight learning from a note corpus
+;; ---------------------------------------------------------------------------
+
+(defn learn-scale-weights
+  "Build a weighted-scale from a sequence of MIDI notes.
+
+  Computes a frequency histogram over scale degrees (notes not in the scale
+  are snapped to the nearest degree). Normalises counts so the most frequent
+  degree has weight 1.0.
+
+  Options:
+    :scale-kw — scale type keyword (default :major)
+
+  Example:
+    (learn-scale-weights [60 62 64 60 62 60 67 65])
+    ;=> {:scale/type :major :intervals [0 2 4 5 7 9 11] :weights [1.0 0.5 ...]}"
+  [midi-notes & {:keys [scale-kw] :or {scale-kw :major}}]
+  (let [intervals (get scale-intervals scale-kw [0 2 4 5 7 9 11])
+        snap      (fn [pc]
+                    (apply min-key
+                           (fn [iv] (let [d (Math/abs (- pc iv))]
+                                      (min d (- 12 d))))
+                           intervals))
+        snapped   (map #(snap (mod (int %) 12)) midi-notes)
+        counts    (frequencies snapped)
+        max-count (apply max 1 (vals counts))
+        weights   (mapv #(/ (double (get counts % 0)) max-count) intervals)]
+    {:scale/type scale-kw
+     :intervals  intervals
+     :weights    weights}))
