@@ -133,6 +133,21 @@
     (scale/scale :D 3 :dorian)     ; D dorian, root D3"
   nil)
 
+(def ^:dynamic *chord-ctx*
+  "Active chord context for the current thread (§5.1).
+  A cljseq.chord/Chord record (root + quality + inversion), or nil.
+
+  Used by cljseq.pattern/motif! to resolve chord-relative pattern indices.
+  Index 1 = chord root, 2 = next chord tone, etc.; indices beyond chord size
+  cycle upward by octave.
+
+  Bound per-thread by deflive-loop (from the :chord key in opts) and by
+  cljseq.dsl/with-chord. Set at the REPL root with cljseq.dsl/use-chord!.
+
+  Example:
+    (chord/chord :C 4 :maj7)   ; Cmaj7 as chord context"
+  nil)
+
 (def ^:dynamic *virtual-time*
   "Current beat position, anchored to the master timeline.
   Advanced by sleep!. Bound per-thread by deflive-loop.
@@ -261,12 +276,14 @@
          mod-ctx#       (:mod ~opts)
          step-mod-ctx#  (:step-mods ~opts)
          harmony-ctx#   (:harmony ~opts)
+         chord-ctx#     (:chord ~opts)
          loop-fn#       (fn []
                           (binding [cljseq.loop/*synth-ctx*     synth-ctx#
                                     cljseq.loop/*timing-ctx*    timing-ctx#
                                     cljseq.loop/*mod-ctx*       mod-ctx#
                                     cljseq.loop/*step-mod-ctx*  step-mod-ctx#
-                                    cljseq.loop/*harmony-ctx*   harmony-ctx#]
+                                    cljseq.loop/*harmony-ctx*   harmony-ctx#
+                                    cljseq.loop/*chord-ctx*     chord-ctx#]
                             ~@body))
          sref#       (cljseq.loop/-system-ref)]
      ;; Clear a stale entry (loop was stopped but entry was not removed).

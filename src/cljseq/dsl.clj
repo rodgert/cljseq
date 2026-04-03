@@ -322,6 +322,42 @@
     (scale-ns/in-scale? s (pitch/->pitch p))
     (throw (ex-info "in-key?: no *harmony-ctx* active" {}))))
 
+;; ---------------------------------------------------------------------------
+;; Chord context management (§5.1)
+;; *chord-ctx* is defined in cljseq.loop; dsl provides the user-facing API.
+;; ---------------------------------------------------------------------------
+
+(defn use-chord!
+  "Set the default chord context for the REPL session.
+
+  `c` should be a cljseq.chord/Chord record (e.g. from chord/chord), or nil
+  to clear.
+
+  Used by cljseq.pattern/motif! to resolve chord-relative pattern indices.
+
+  Example:
+    (use-chord! (chord-ns/chord :C 4 :maj7))
+    (use-chord! nil)   ; clear
+
+  Not thread-safe — intended for interactive REPL use only.
+  Inside live loops, use the :chord key in deflive-loop opts instead."
+  [c]
+  (alter-var-root #'loop-ns/*chord-ctx* (constantly c))
+  nil)
+
+(defmacro with-chord
+  "Execute `body` with `c` as the active chord context.
+
+  `c` — a cljseq.chord/Chord record (from cljseq.chord/chord).
+  Used by cljseq.pattern/motif! for chord-relative (:chord) patterns.
+
+  Example:
+    (with-chord (chord-ns/chord :G 3 :dom7)
+      (motif! (pattern [:chord 1 2 3 4]) (rhythm [100 nil 80 nil]) {}))"
+  [c & body]
+  `(binding [loop-ns/*chord-ctx* ~c]
+     ~@body))
+
 (defn tick-mods!
   "Sample all modulators in *mod-ctx* at the current virtual time and route
   each sampled value to ctrl/send!.

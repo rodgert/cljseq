@@ -1,0 +1,291 @@
+; SPDX-License-Identifier: EPL-2.0
+(ns cljseq.pattern-test
+  "Unit tests for cljseq.pattern — Pattern, Rhythm, and motif!."
+  (:require [clojure.test    :refer [deftest is testing]]
+            [cljseq.chord    :as chord-ns]
+            [cljseq.core     :as core]
+            [cljseq.dsl      :as dsl]
+            [cljseq.loop     :as loop-ns]
+            [cljseq.pattern  :as pat]
+            [cljseq.scale    :as scale-ns]))
+
+;; ---------------------------------------------------------------------------
+;; Constructor tests
+;; ---------------------------------------------------------------------------
+
+(deftest pattern-constructor-test
+  (testing "pattern creates Pattern record with correct ptype and data"
+    (let [p (pat/pattern [:chord 1 3 5])]
+      (is (= :chord (:ptype p)))
+      (is (= [1 3 5] (:data p))))
+    (let [p (pat/pattern [:scale 1 3 5 8 5 3])]
+      (is (= :scale (:ptype p)))
+      (is (= [1 3 5 8 5 3] (:data p))))
+    (let [p (pat/pattern [:pitch :C4 :E4 :G4])]
+      (is (= :pitch (:ptype p)))
+      (is (= [:C4 :E4 :G4] (:data p))))
+    (let [p (pat/pattern [:midi 60 64 67])]
+      (is (= :midi (:ptype p)))
+      (is (= [60 64 67] (:data p)))))
+
+  (testing "pattern rejects unknown type tags"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (pat/pattern [:arp 1 2 3]))))
+
+  (testing "pattern rejects empty data"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (pat/pattern [:chord])))))
+
+(deftest rhythm-constructor-test
+  (testing "rhythm creates Rhythm record with correct data"
+    (let [r (pat/rhythm [100 nil 80 nil])]
+      (is (= [100 nil 80 nil] (:data r)))))
+
+  (testing "rhythm accepts :tie entries"
+    (let [r (pat/rhythm [127 :tie :tie nil 90])]
+      (is (= [127 :tie :tie nil 90] (:data r)))))
+
+  (testing "rhythm rejects empty data"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (pat/rhythm [])))))
+
+;; ---------------------------------------------------------------------------
+;; pat-len / rhy-len / cycle-len
+;; ---------------------------------------------------------------------------
+
+(deftest utility-fns-test
+  (testing "pat-len returns count of pattern data"
+    (is (= 5 (pat/pat-len (pat/pattern [:chord 1 3 5 2 4])))))
+
+  (testing "rhy-len returns count of rhythm data"
+    (is (= 4 (pat/rhy-len (pat/rhythm [100 nil 80 nil])))))
+
+  (testing "cycle-len returns lcm of pattern and rhythm lengths"
+    (is (= 15 (pat/cycle-len (pat/pattern [:chord 1 3 5 2 4])
+                              (pat/rhythm  [100 nil 80]))))
+    (is (= 8 (pat/cycle-len (pat/pattern [:midi 60 64])
+                             (pat/rhythm  [100 nil 80 nil 90 nil 70 nil]))))
+    (is (= 4 (pat/cycle-len (pat/pattern [:midi 60 64 67 60])
+                             (pat/rhythm  [100 nil 80 nil]))))))
+
+;; ---------------------------------------------------------------------------
+;; MIDI pattern — direct passthrough
+;; ---------------------------------------------------------------------------
+
+(deftest motif-midi-pattern-test
+  (testing "motif! with :midi pattern sends correct MIDI note numbers"
+    (core/start! :bpm 60000)
+    (try
+      (let [played (atom [])]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [_ _ p _] (swap! played conj p))
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (binding [loop-ns/*virtual-time* 0.0]
+            (pat/motif! (pat/pattern [:midi 60 64 67])
+                        (pat/rhythm  [100 80 70])
+                        {:clock-div 1/16})))
+        (is (= [60 64 67] @played) "all three MIDI notes played"))
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; Pitch pattern — keyword resolution
+;; ---------------------------------------------------------------------------
+
+(deftest motif-pitch-pattern-test
+  (testing "motif! with :pitch pattern resolves keywords to MIDI"
+    (core/start! :bpm 60000)
+    (try
+      (let [played (atom [])]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [_ _ p _] (swap! played conj p))
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (binding [loop-ns/*virtual-time* 0.0]
+            (pat/motif! (pat/pattern [:pitch :C4 :E4 :G4])
+                        (pat/rhythm  [100 90 80])
+                        {:clock-div 1/16})))
+        (is (= [60 64 67] @played)))
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; Scale-relative pattern
+;; ---------------------------------------------------------------------------
+
+(deftest motif-scale-pattern-test
+  (testing "motif! with :scale pattern resolves degrees against *harmony-ctx*"
+    (core/start! :bpm 60000)
+    (try
+      (let [played (atom [])
+            ;; C major, root C4 (MIDI 60): degrees 1,2,3 = C4,D4,E4 = 60,62,64
+            c-major (scale-ns/scale :C 4 :major)]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [_ _ p _] (swap! played conj p))
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (binding [loop-ns/*virtual-time* 0.0
+                    loop-ns/*harmony-ctx*  c-major]
+            (pat/motif! (pat/pattern [:scale 1 2 3])
+                        (pat/rhythm  [100 90 80])
+                        {:clock-div 1/16})))
+        (is (= [60 62 64] @played) "C major degrees 1 2 3 = C4 D4 E4"))
+      (finally (core/stop!)))))
+
+(deftest motif-scale-wrapping-test
+  (testing ":scale indices beyond scale size wrap with octave shift"
+    (core/start! :bpm 60000)
+    (try
+      (let [played (atom [])
+            ;; C major 7 degrees; index 8 = degree 7 (idx 6 in 0-based = 7th degree B4 = 71) + octave? No.
+            ;; pitch-at uses floorDiv: degree 7 (0-based) in 7-note scale → octave 1, idx 0 → C5 = 72
+            c-major (scale-ns/scale :C 4 :major)]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [_ _ p _] (swap! played conj p))
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (binding [loop-ns/*virtual-time* 0.0
+                    loop-ns/*harmony-ctx*  c-major]
+            ;; index 8 (1-based) → 0-based degree 7 → pitch-at wraps: C5 = 72
+            (pat/motif! (pat/pattern [:scale 8])
+                        (pat/rhythm  [100])
+                        {:clock-div 1/16})))
+        (is (= [72] @played) "scale index 8 in 7-note C major = C5 (MIDI 72)"))
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; Chord-relative pattern
+;; ---------------------------------------------------------------------------
+
+(deftest motif-chord-pattern-test
+  (testing "motif! with :chord pattern resolves against *chord-ctx*"
+    (core/start! :bpm 60000)
+    (try
+      (let [played (atom [])
+            ;; C major triad: C4=60, E4=64, G4=67
+            c-major-chord (chord-ns/chord :C 4 :major)]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [_ _ p _] (swap! played conj p))
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (binding [loop-ns/*virtual-time* 0.0
+                    loop-ns/*chord-ctx*    c-major-chord]
+            (pat/motif! (pat/pattern [:chord 1 2 3])
+                        (pat/rhythm  [100 90 80])
+                        {:clock-div 1/16})))
+        (is (= [60 64 67] @played) "chord indices 1 2 3 = C4 E4 G4"))
+      (finally (core/stop!)))))
+
+(deftest motif-chord-octave-cycling-test
+  (testing "chord index beyond chord size cycles upward by octave"
+    (core/start! :bpm 60000)
+    (try
+      (let [played (atom [])
+            ;; C major triad: [60 64 67]. Index 4 → 0-based 3 → floorDiv(3,3)=1 octave, idx=0 → 60+12=72
+            c-major-chord (chord-ns/chord :C 4 :major)]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [_ _ p _] (swap! played conj p))
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (binding [loop-ns/*virtual-time* 0.0
+                    loop-ns/*chord-ctx*    c-major-chord]
+            (pat/motif! (pat/pattern [:chord 4])
+                        (pat/rhythm  [100])
+                        {:clock-div 1/16})))
+        (is (= [72] @played) "chord index 4 in triad = root + octave (C5=72)"))
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; Rests and ties
+;; ---------------------------------------------------------------------------
+
+(deftest motif-rest-test
+  (testing "nil velocity in rhythm causes rest — no note played"
+    (core/start! :bpm 60000)
+    (try
+      (let [played (atom [])]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [_ _ p _] (swap! played conj p))
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (binding [loop-ns/*virtual-time* 0.0]
+            ;; Pattern 3 notes, rhythm: play, rest, play
+            (pat/motif! (pat/pattern [:midi 60 64 67])
+                        (pat/rhythm  [100 nil 80])
+                        {:clock-div 1/16})))
+        (is (= [60 67] @played) "only non-rest steps play notes"))
+      (finally (core/stop!)))))
+
+(deftest motif-tie-test
+  (testing ":tie velocity causes hold — no retrigger"
+    (core/start! :bpm 60000)
+    (try
+      (let [played (atom [])]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [_ _ p _] (swap! played conj p))
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (binding [loop-ns/*virtual-time* 0.0]
+            (pat/motif! (pat/pattern [:midi 60 64])
+                        (pat/rhythm  [100 :tie])
+                        {:clock-div 1/16})))
+        (is (= [60] @played) ":tie step does not trigger a new note"))
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; Independent cycling (the NDLR emergent complexity property)
+;; ---------------------------------------------------------------------------
+
+(deftest motif-lcm-cycling-test
+  (testing "3-note pattern × 2-step rhythm plays lcm(3,2)=6 steps"
+    (core/start! :bpm 60000)
+    (try
+      (let [played (atom [])]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [_ _ p _] (swap! played conj p))
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (binding [loop-ns/*virtual-time* 0.0]
+            (pat/motif! (pat/pattern [:midi 60 64 67])
+                        (pat/rhythm  [100 80])
+                        {:clock-div 1/16})))
+        ;; 6 steps, all notes (no rests): pattern cycles 60,64,67,60,64,67
+        (is (= 6 (count @played)) "lcm(3,2)=6 steps total")
+        (is (= [60 64 67 60 64 67] @played) "pattern cycles twice over rhythm's 3"))
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; Probability option
+;; ---------------------------------------------------------------------------
+
+(deftest motif-probability-zero-test
+  (testing "probability 0.0 → no notes fire, only sleeps"
+    (core/start! :bpm 60000)
+    (try
+      (let [played (atom [])]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [_ _ p _] (swap! played conj p))
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (binding [loop-ns/*virtual-time* 0.0]
+            (pat/motif! (pat/pattern [:midi 60 64 67])
+                        (pat/rhythm  [100 90 80])
+                        {:clock-div 1/16 :probability 0.0})))
+        (is (empty? @played) "no notes at probability 0"))
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; Context management — use-chord! / with-chord
+;; ---------------------------------------------------------------------------
+
+(deftest with-chord-test
+  (testing "with-chord binds *chord-ctx* for the scope"
+    (let [c (chord-ns/chord :G 3 :dom7)]
+      (dsl/with-chord c
+        (is (= c loop-ns/*chord-ctx*) "*chord-ctx* bound inside with-chord")))
+    (is (nil? loop-ns/*chord-ctx*) "restored to nil after with-chord")))
+
+(deftest deflive-loop-chord-opt-test
+  (testing "deflive-loop :chord opt binds *chord-ctx* inside loop body"
+    (core/start! :bpm 60000)
+    (try
+      (let [c        (chord-ns/chord :F 4 :min7)
+            observed (promise)]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [& _] nil)
+                      cljseq.sidecar/send-note-off! (fn [& _] nil)]
+          (core/deflive-loop :chord-opt-test {:chord c}
+            (deliver observed loop-ns/*chord-ctx*)
+            (core/stop-loop! :chord-opt-test))
+          (let [result (deref observed 500 ::timeout)]
+            (is (= c result) "*chord-ctx* bound inside loop"))))
+      (finally (core/stop!)))))
