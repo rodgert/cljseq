@@ -20,6 +20,16 @@
     (m21/play-chorale-parts! 371 {:dur-mult 0.8
                                   :channels {:soprano 5 :alto 6 :tenor 7 :bass 8}})
 
+  ## Caching
+  Extracted EDN is cached at two levels to avoid repeated music21 subprocess
+  overhead (startup alone costs 2-4 seconds):
+    - In-memory: atom keyed by [bwv-id mode]; cleared on REPL restart or clear-cache!
+    - On-disk:   ~/.cache/cljseq/m21/bwv371-chords.edn etc.; invalidated when
+                 m21_extract.py changes (script mtime comparison)
+
+    (m21/clear-cache!)       ; evict everything
+    (m21/clear-cache! 371)   ; evict BWV 371 only (both modes)
+
   ## Phase 1 chord map format
     {:pitches [48 55 62 67] :dur/beats 1.0}   ; chord — MIDI bass→soprano
     {:rest true :dur/beats 1.0}               ; rest
@@ -50,6 +60,115 @@
     (if (.exists (io/file venv)) venv "python3")))
 
 (def ^:private extractor-script "script/m21_extract.py")
+
+(def ^:dynamic *cache-dir*
+  "Directory for on-disk EDN cache files.
+  Default: ~/.cache/cljseq/m21/
+  Override: (alter-var-root #'m21/*cache-dir* (constantly \"/my/path\"))"
+  (str (System/getProperty "user.home") "/.cache/cljseq/m21"))
+
+;; ---------------------------------------------------------------------------
+;; Cache — in-memory + on-disk EDN cache for extracted corpora
+;; ---------------------------------------------------------------------------
+
+;; In-memory cache: {[bwv-id mode] parsed-data}.
+;; defonce survives namespace reload so extracted data persists across eval cycles.
+(defonce ^:private mem-cache (atom {}))
+
+(defn- script-mtime
+  "Return last-modified timestamp (ms) of m21_extract.py, or 0 if not found."
+  ^long []
+  (.lastModified (io/file extractor-script)))
+
+(defn- cache-file
+  "Return the on-disk cache java.io.File for bwv-id and mode (:chords or :parts)."
+  [bwv-id mode]
+  (io/file *cache-dir* (str "bwv" bwv-id "-" (name mode) ".edn")))
+
+(defn- parse-edn
+  "Strip comment lines (starting with ;) from s and parse as EDN."
+  [s]
+  (->> (str/split-lines s)
+       (remove #(str/starts-with? (str/trim %) ";"))
+       (str/join "\n")
+       edn/read-string))
+
+(defn- write-disk-cache!
+  "Write raw EDN string to the on-disk cache, prefixed with a script-mtime header."
+  [bwv-id mode raw-edn]
+  (try
+    (let [f (cache-file bwv-id mode)]
+      (io/make-parents f)
+      (spit f (str "; cljseq-m21-cache script-mtime=" (script-mtime) "\n" raw-edn)))
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "[cljseq.m21] disk cache write failed:" (.getMessage e))))))
+
+(defn- read-disk-cache
+  "Return on-disk cache content for bwv-id/mode if it exists and script mtime
+  still matches; return nil if missing or stale."
+  [bwv-id mode]
+  (try
+    (let [f (cache-file bwv-id mode)]
+      (when (.exists f)
+        (let [content    (slurp f)
+              first-line (first (str/split-lines content))
+              cached-mtime (when (str/starts-with? first-line "; cljseq-m21-cache")
+                             (some-> (re-find #"script-mtime=(\d+)" first-line)
+                                     second
+                                     Long/parseLong))]
+          (when (= cached-mtime (script-mtime))
+            content))))
+    (catch Exception _
+      nil)))
+
+(defn- cached-load
+  "Load bwv-id in mode (:chords or :parts) through the two-level cache.
+
+  Lookup order:
+    1. In-memory atom  — instant
+    2. On-disk EDN file — fast (file read); validates script mtime
+    3. Python subprocess — slow; populates both caches on success"
+  [bwv-id mode extract-fn]
+  (let [k [bwv-id mode]]
+    (or (get @mem-cache k)
+        (when-let [raw (read-disk-cache bwv-id mode)]
+          (let [data (parse-edn raw)]
+            (swap! mem-cache assoc k data)
+            data))
+        (let [raw  (extract-fn)
+              data (parse-edn raw)]
+          (write-disk-cache! bwv-id mode raw)
+          (swap! mem-cache assoc k data)
+          data))))
+
+(defn clear-cache!
+  "Evict cached extractions from both in-memory and on-disk stores.
+
+  With no args: clears all cached chorales.
+  With bwv-id:  clears that chorale only (both :chords and :parts modes).
+
+  Call after upgrading music21 or modifying m21_extract.py if you want to
+  force re-extraction before the script mtime check would trigger it.
+
+  Examples:
+    (m21/clear-cache!)       ; evict everything
+    (m21/clear-cache! 371)   ; evict BWV 371 only"
+  ([]
+   (reset! mem-cache {})
+   (let [dir (io/file *cache-dir*)]
+     (when (.exists dir)
+       (doseq [^java.io.File f (.listFiles dir)]
+         (.delete f))))
+   (println "[cljseq.m21] cache cleared")
+   nil)
+  ([bwv-id]
+   (swap! mem-cache
+          #(dissoc % [bwv-id :chords] [bwv-id :parts]))
+   (doseq [mode [:chords :parts]]
+     (let [f (cache-file bwv-id mode)]
+       (when (.exists f) (.delete f))))
+   nil))
 
 ;; ---------------------------------------------------------------------------
 ;; Subprocess extraction
@@ -95,12 +214,7 @@
   Example:
     (m21/load-chorale 371)   ; BWV 371 \"Ich dank' dir, lieber Herre\""
   [bwv-id]
-  (let [raw  (run-extractor bwv-id)
-        ;; Strip comment lines (start with ;) before EDN parsing
-        edn-str (str/join "\n"
-                          (remove #(str/starts-with? (str/trim %) ";")
-                                  (str/split-lines raw)))]
-    (edn/read-string edn-str)))
+  (cached-load bwv-id :chords #(run-extractor bwv-id)))
 
 ;; ---------------------------------------------------------------------------
 ;; Playback
@@ -154,11 +268,7 @@
   Example:
     (m21/load-chorale-parts 371)   ; BWV 371 \"Ich dank' dir, lieber Herre\""
   [bwv-id]
-  (let [raw     (run-extractor bwv-id ["--parts"])
-        edn-str (str/join "\n"
-                          (remove #(str/starts-with? (str/trim %) ";")
-                                  (str/split-lines raw)))]
-    (edn/read-string edn-str)))
+  (cached-load bwv-id :parts #(run-extractor bwv-id ["--parts"])))
 
 (defn- play-voice-events!
   "Play a voice event sequence on `channel`, advancing *virtual-time* via sleep!.
