@@ -18,7 +18,7 @@ std::unique_ptr<RtMidiOut> g_midi;
 
 } // anonymous namespace
 
-bool midi_init() {
+bool midi_init(unsigned int port_index) {
     try {
         g_midi = std::make_unique<RtMidiOut>();
     } catch (const RtMidiError& e) {
@@ -37,13 +37,18 @@ bool midi_init() {
         return false;
     }
 
-    // Phase 1: open the first available port
+    if (port_index >= port_count) {
+        std::fprintf(stderr, "[midi] requested port %u out of range (%u available)\n",
+                     port_index, port_count);
+        return false;
+    }
+
     try {
-        g_midi->openPort(0);
-        std::fprintf(stderr, "[midi] opened port [0] %s\n",
-                     g_midi->getPortName(0).c_str());
+        g_midi->openPort(port_index);
+        std::fprintf(stderr, "[midi] opened port [%u] %s\n",
+                     port_index, g_midi->getPortName(port_index).c_str());
     } catch (const RtMidiError& e) {
-        std::fprintf(stderr, "[midi] failed to open port 0: %s\n", e.what());
+        std::fprintf(stderr, "[midi] failed to open port %u: %s\n", port_index, e.what());
         return false;
     }
 
@@ -81,6 +86,30 @@ void midi_cc(uint8_t channel, uint8_t cc, uint8_t value) {
         g_midi->sendMessage(&msg);
     } catch (const RtMidiError& e) {
         std::fprintf(stderr, "[midi] sendMessage error: %s\n", e.what());
+    }
+}
+
+void midi_pitch_bend(uint8_t channel, uint8_t lsb, uint8_t msb) {
+    if (!g_midi || !g_midi->isPortOpen()) return;
+    uint8_t ch = static_cast<uint8_t>((channel - 1) & 0x0F);
+    // MIDI pitch bend: status 0xEn, then LSB, then MSB
+    std::vector<uint8_t> msg = { static_cast<uint8_t>(0xE0 | ch), lsb, msb };
+    try {
+        g_midi->sendMessage(&msg);
+    } catch (const RtMidiError& e) {
+        std::fprintf(stderr, "[midi] pitch_bend sendMessage error: %s\n", e.what());
+    }
+}
+
+void midi_channel_pressure(uint8_t channel, uint8_t pressure) {
+    if (!g_midi || !g_midi->isPortOpen()) return;
+    uint8_t ch = static_cast<uint8_t>((channel - 1) & 0x0F);
+    // MIDI channel pressure: status 0xDn, then pressure byte (single data byte)
+    std::vector<uint8_t> msg = { static_cast<uint8_t>(0xD0 | ch), pressure };
+    try {
+        g_midi->sendMessage(&msg);
+    } catch (const RtMidiError& e) {
+        std::fprintf(stderr, "[midi] channel_pressure sendMessage error: %s\n", e.what());
     }
 }
 

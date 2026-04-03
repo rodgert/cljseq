@@ -139,28 +139,29 @@
              (put-node s' path (assoc node :value value)))))
   nil)
 
-(defn send!
-  "Physical write: update `path` to `value` and dispatch to all physical bindings.
+(defn send-at!
+  "Physical write: update `path` to `value` and dispatch to all physical bindings,
+  scheduling the outgoing messages at `time-ns` (nanoseconds since epoch).
+
+  Use this when you need the CC or NRPN to arrive at the sidecar at a specific
+  wall-clock time — for example, to align a per-step filter sweep with a note-on
+  that was already scheduled for `time-ns` via sidecar/send-note-on!.
 
   Binding types dispatched:
 
     :midi-cc   — single CC message; value scaled to [0,127] via binding :range.
-                 Example: (ctrl/send! [:filter/cutoff] 0.7) ; CC 74 = 89
+    :midi-nrpn — NRPN parameter (CC 99/98/6/38); supports 7-bit, 14-bit, :raw.
 
-    :midi-nrpn — NRPN parameter; emits CC 99/98 (parameter select) then CC 6/38
-                 (data entry). Supports 7-bit (CC6 only) and 14-bit (CC6 + CC38)
-                 resolution controlled by :bits in the binding (default 14).
-                 Value is scaled from binding :range to [0,127] or [0,16383].
-                 Example: (ctrl/send! [:portamento] 1000) ; NRPN 1, 14-bit
+  Binding types and value scaling behave identically to send!.
 
-    others     — logged; dispatch deferred to future sprint."
-  [path value]
+  Example:
+    (ctrl/send-at! on-ns [:filter/cutoff] 0.7)"
+  [time-ns path value]
   (swap! @system-ref
          (fn [s]
            (let [node (or (get-node s path) (make-node))]
              (put-node s path (assoc node :value value)))))
-  (let [node   (get-node @@system-ref path)
-        now-ns (* (System/currentTimeMillis) 1000000)]
+  (let [node (get-node @@system-ref path)]
     (doseq [binding (:bindings node)]
       (case (:type binding)
         :midi-cc
@@ -173,19 +174,20 @@
               pct     (/ (- raw lo) (- hi lo))
               scaled  (long (Math/round (* pct 127.0)))]
           (when (sidecar/connected?)
-            (sidecar/send-cc! now-ns ch cc-num (max 0 (min 127 scaled)))))
+            (sidecar/send-cc! time-ns ch cc-num (max 0 (min 127 scaled)))))
 
         :midi-nrpn
         (let [ch        (int (or (:channel binding) 1))
               nrpn      (int (:nrpn binding))
               bits      (int (or (:bits binding) 14))
               max-val   (if (= 14 bits) 16383 127)
-              [lo hi]   (or (:range binding) [0 max-val])
-              lo        (double lo)
-              hi        (double hi)
-              raw       (double value)
-              pct       (/ (- raw lo) (- hi lo))
-              clamped   (max 0 (min max-val (long (Math/round (* pct (double max-val))))))
+              ;; :raw true → bypass range scaling; use value directly
+              clamped   (if (:raw binding)
+                          (max 0 (min max-val (long value)))
+                          (let [[lo hi] (or (:range binding) [0 max-val])
+                                pct     (/ (- (double value) (double lo))
+                                           (- (double hi)   (double lo)))]
+                            (max 0 (min max-val (long (Math/round (* pct (double max-val))))))))
               param-msb (bit-and (bit-shift-right nrpn 7) 0x7F)
               param-lsb (bit-and nrpn 0x7F)
               ;; 14-bit: CC6 = value >> 7, CC38 = value & 0x7F
@@ -195,17 +197,90 @@
                           clamped)
               data-lsb  (bit-and clamped 0x7F)]
           (when (sidecar/connected?)
-            (sidecar/send-cc! now-ns ch 99 param-msb)
-            (sidecar/send-cc! now-ns ch 98 param-lsb)
-            (sidecar/send-cc! now-ns ch  6 data-msb)
+            ;; NRPN sequence must arrive in order: CC99 → CC98 → CC6 → CC38.
+            ;; The scheduler min-heap does not preserve insertion order for equal
+            ;; timestamps, so we add 1ns offsets to guarantee ordering.
+            (sidecar/send-cc! time-ns       ch 99 param-msb)
+            (sidecar/send-cc! (+ time-ns 1) ch 98 param-lsb)
+            (sidecar/send-cc! (+ time-ns 2) ch  6 data-msb)
             (when (= 14 bits)
-              (sidecar/send-cc! now-ns ch 38 data-lsb))))
+              (sidecar/send-cc! (+ time-ns 3) ch 38 data-lsb))))
 
         ;; Other binding types: log and skip
         (binding [*out* *err*]
           (println (str "[ctrl] send! binding type " (:type binding)
                         " at " (pr-str path) " not yet dispatched"))))))
   nil)
+
+(defn send!
+  "Physical write: update `path` to `value` and dispatch to all physical bindings.
+
+  Schedules outgoing MIDI at the current wall-clock time.
+  Use send-at! when you need to align the dispatch with a previously scheduled
+  note-on (e.g. for per-step mod routing).
+
+  Binding types dispatched:
+
+    :midi-cc   — single CC message; value scaled to [0,127] via binding :range.
+                 Example: (ctrl/send! [:filter/cutoff] 0.7) ; CC 74 = 89
+
+    :midi-nrpn — NRPN parameter; emits CC 99/98 (parameter select) then CC 6/38
+                 (data entry). Supports 7-bit (CC6 only) and 14-bit (CC6 + CC38)
+                 resolution controlled by :bits in the binding (default 14).
+                 Value is scaled from binding :range to [0,127] or [0,16383].
+                 Add :raw true to the binding to skip scaling and use the value
+                 directly (useful for compound-addressed parameters where the
+                 user encodes sub-param and data manually).
+                 Example: (ctrl/send! [:portamento] 1000) ; NRPN 1, 14-bit
+                 Example: (ctrl/send! [:ribbon/mode] 1)   ; :raw true, direct value
+
+    others     — logged; dispatch deferred to future sprint."
+  [path value]
+  (send-at! (* (System/currentTimeMillis) 1000000) path value))
+
+(defn send-raw-nrpn!
+  "Fire a raw NRPN directly to the sidecar, bypassing the control tree.
+
+  `channel`  — MIDI channel (1–16)
+  `nrpn-num` — NRPN parameter number (0–16383); split into CC99/CC98
+  `value`    — data value; 14-bit [0–16383] by default (see :bits option)
+
+  Options:
+    :bits — 7 for 7-bit (CC6 only, no CC38); 14 for full 14-bit (default)
+
+  Useful for compound-addressed Hydrasynth parameters (ribbon sub-params,
+  ARP sub-params) where CC6 encodes a sub-parameter rather than data MSB.
+  In that case pack the value as (bit-or (bit-shift-left sub-param 7) data).
+
+  Does nothing if the sidecar is not connected.
+
+  Examples:
+    ;; Ribbon mode sub-param 0=off, NRPN group 0x41 (65):
+    (ctrl/send-raw-nrpn! 1 (bit-or (bit-shift-left 65 7) 0) 1)
+
+    ;; Portamento NRPN 1, 14-bit value 500:
+    (ctrl/send-raw-nrpn! 1 1 500)"
+  ([channel nrpn-num value]
+   (send-raw-nrpn! channel nrpn-num value 14))
+  ([channel nrpn-num value bits]
+   (when (sidecar/connected?)
+     (let [now-ns    (* (System/currentTimeMillis) 1000000)
+           ch        (int channel)
+           nrpn      (int nrpn-num)
+           bits      (int bits)
+           max-val   (if (= 14 bits) 16383 127)
+           clamped   (max 0 (min max-val (long value)))
+           param-msb (bit-and (bit-shift-right nrpn 7) 0x7F)
+           param-lsb (bit-and nrpn 0x7F)
+           data-msb  (if (= 14 bits)
+                       (bit-and (bit-shift-right clamped 7) 0x7F)
+                       clamped)
+           data-lsb  (bit-and clamped 0x7F)]
+       (sidecar/send-cc! now-ns ch 99 param-msb)
+       (sidecar/send-cc! now-ns ch 98 param-lsb)
+       (sidecar/send-cc! now-ns ch  6 data-msb)
+       (when (= 14 bits)
+         (sidecar/send-cc! now-ns ch 38 data-lsb))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Node declaration (Q8)

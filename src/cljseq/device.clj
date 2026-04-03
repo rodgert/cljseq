@@ -142,14 +142,15 @@
   NRPN entries default to 14-bit resolution (range [0 16383]).
   Add :bits 7 and :range [0 127] to an entry for 7-bit parameters."
   [device-id channel nrpn-list]
-  (doseq [{:keys [nrpn path range bits]} (or nrpn-list [])]
+  (doseq [{:keys [nrpn path range bits raw]} (or nrpn-list [])]
     (let [node-path (into [device-id] path)
           b         (int (or bits 14))
           max-val   (if (= 14 b) 16383 127)
           r         (or range [0 max-val])]
       (ctrl/defnode! node-path :type :int :node-meta {:range r})
       (ctrl/bind! node-path
-                  {:type :midi-nrpn :channel channel :nrpn nrpn :bits b :range r}
+                  (cond-> {:type :midi-nrpn :channel channel :nrpn nrpn :bits b :range r}
+                    raw (assoc :raw true))
                   :priority 20))))
 
 (defn- register-target-device!

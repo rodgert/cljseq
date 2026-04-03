@@ -1,0 +1,277 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; ASM Hydrasynth Deluxe — cljseq device map
+;;
+;; Source: ASM Hydrasynth MIDI Spec v1.5.0 (official)
+;;         ~/Downloads/Hydrasynth.csv (CC map)
+;; Confidence: High. All CC and NRPN numbers confirmed from official MIDI spec v1.5.
+;;             Deluxe-specific controls (vs Explorer) not confirmed — test empirically.
+;;
+;; Deluxe: 49-key, polyAT keybed (MPE only), ribbon strip
+;; Same synthesis engine, firmware, CC/NRPN map as Explorer.
+;; Differs from Explorer only in keyboard range (49 vs 25 keys).
+;;
+;; See hydrasynth-explorer.edn header for NRPN encoding and MPE notes.
+;; Open question: does the Deluxe have additional hardware controls vs Explorer?
+;; Test empirically when hardware is available (Q5).
+
+{:device/id           :asm/hydrasynth-deluxe
+ :device/name         "ASM Hydrasynth Deluxe"
+ :device/manufacturer "Ashun Sound Machines"
+ :device/type         :synthesizer
+ :device/voices       8
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ :midi/channel        1
+
+ :midi/mpe
+ {:supported     true
+  :master-channel 1
+  :note-channels  [2 3 4 5 6 7 8 9]
+  :per-note       {:pitch-bend true :channel-pressure true :cc74-slide true}
+  :polyat-mode    :mpe-only
+  :transmit-mode  :int-run-only}
+
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on true :note-off true}
+  :aftertouch {:channel-pressure true
+               :poly-key-pressure :mpe-only}}
+
+ :midi/pitch-bend
+ {:range-semitones :per-patch
+  :configurable    true
+  :nrpn            8129
+  :range-nrpn      [0 24]}
+
+ :midi/clock
+ {:receive true
+  :send    true
+  :uses    [:arp :lfo-bpm-sync :envelope-bpm-sync]}
+
+ :midi/sysex
+ {:manufacturer-id [0x00 0x21 0x27]
+  :purpose         [:patch-dump :patch-load :global-settings]}
+
+ :midi/cc
+
+ [;; --- Standard / Global ---------------------------------------------------
+  {:cc 1   :path [:mod-wheel]     :range [0 127] :default 0   :cc-type :global}
+  {:cc 5   :path [:glide :time]   :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 7   :path [:volume]        :range [0 127] :default 100 :cc-type :global}
+  {:cc 11  :path [:exp-pedal]     :range [0 127] :default 0   :cc-type :global}
+  {:cc 64  :path [:sustain]       :range [0 127] :default 0   :cc-type :global :note "≥64 = on"}
+  {:cc 66  :path [:glide :on-off] :range [0 127] :default 0   :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 127 :label :on}]}
+  {:cc 95  :path [:detune]        :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 117 :path [:stereo-width]  :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 123 :path [:all-notes-off] :range [0 0]               :cc-type :global}
+
+  ;; --- Macros ---------------------------------------------------------------
+  {:cc 16  :path [:macro :1]  :range [0 127] :cc-type :fixed}
+  {:cc 17  :path [:macro :2]  :range [0 127] :cc-type :fixed}
+  {:cc 18  :path [:macro :3]  :range [0 127] :cc-type :fixed}
+  {:cc 19  :path [:macro :4]  :range [0 127] :cc-type :fixed}
+  {:cc 20  :path [:macro :5]  :range [0 127] :cc-type :fixed}
+  {:cc 21  :path [:macro :6]  :range [0 127] :cc-type :fixed}
+  {:cc 22  :path [:macro :7]  :range [0 127] :cc-type :fixed}
+  {:cc 23  :path [:macro :8]  :range [0 127] :cc-type :fixed}
+
+  ;; --- Oscillators ---------------------------------------------------------
+  {:cc 44  :path [:osc1 :vol]      :range [0 127] :cc-type :fixed}
+  {:cc 45  :path [:osc1 :pan]      :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 46  :path [:osc2 :vol]      :range [0 127] :cc-type :fixed}
+  {:cc 47  :path [:osc2 :pan]      :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 48  :path [:osc3 :vol]      :range [0 127] :cc-type :fixed}
+  {:cc 49  :path [:osc3 :pan]      :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 24  :path [:osc1 :wavescan] :range [0 127] :cc-type :fixed}
+  {:cc 111 :path [:osc1 :cent]     :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 26  :path [:osc2 :wavescan] :range [0 127] :cc-type :fixed}
+  {:cc 112 :path [:osc2 :cent]     :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 113 :path [:osc3 :cent]     :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 118 :path [:osc1 :fm-rate]  :range [0 127] :cc-type :fixed}
+  {:cc 119 :path [:osc2 :fm-rate]  :range [0 127] :cc-type :fixed}
+  {:cc 114 :path [:osc3 :fm-rate]  :range [0 127] :cc-type :fixed}
+  {:cc 115 :path [:noise :fm-rate] :range [0 127] :cc-type :fixed}
+  {:cc 116 :path [:ring-mod :fm-rate] :range [0 127] :cc-type :fixed}
+
+  ;; --- Noise & Ring Mod ----------------------------------------------------
+  {:cc 3   :path [:noise :vol]           :range [0 127] :cc-type :fixed}
+  {:cc 8   :path [:noise :pan]           :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 9   :path [:ring-mod :vol]        :range [0 127] :cc-type :fixed}
+  {:cc 10  :path [:ring-mod :pan]        :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 43  :path [:ring-mod :rm12-depth] :range [0 127] :cc-type :fixed}
+
+  ;; --- Mutators ------------------------------------------------------------
+  {:cc 29  :path [:mut1 :ratio]   :range [0 127] :cc-type :fixed}
+  {:cc 30  :path [:mut1 :depth]   :range [0 127] :cc-type :fixed}
+  {:cc 31  :path [:mut1 :dry-wet] :range [0 127] :cc-type :fixed}
+  {:cc 33  :path [:mut2 :ratio]   :range [0 127] :cc-type :fixed}
+  {:cc 34  :path [:mut2 :depth]   :range [0 127] :cc-type :fixed}
+  {:cc 35  :path [:mut2 :dry-wet] :range [0 127] :cc-type :fixed}
+  {:cc 36  :path [:mut3 :ratio]   :range [0 127] :cc-type :fixed}
+  {:cc 37  :path [:mut3 :depth]   :range [0 127] :cc-type :fixed}
+  {:cc 39  :path [:mut3 :dry-wet] :range [0 127] :cc-type :fixed}
+  {:cc 40  :path [:mut4 :ratio]   :range [0 127] :cc-type :fixed}
+  {:cc 41  :path [:mut4 :depth]   :range [0 127] :cc-type :fixed}
+  {:cc 42  :path [:mut4 :dry-wet] :range [0 127] :cc-type :fixed}
+
+  ;; --- Filter 1 ------------------------------------------------------------
+  {:cc 74  :path [:filter1 :cutoff]    :range [0 127] :default 127 :cc-type :fixed}
+  {:cc 71  :path [:filter1 :resonance] :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 50  :path [:filter1 :drive]     :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 51  :path [:filter1 :keytrack]  :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 52  :path [:filter1 :lfo1-amt]  :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 53  :path [:filter1 :vel-env]   :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 54  :path [:filter1 :env1-amt]  :range [0 127] :default 64  :cc-type :fixed}
+
+  ;; --- Filter 2 ------------------------------------------------------------
+  {:cc 55  :path [:filter2 :cutoff]    :range [0 127] :cc-type :fixed}
+  {:cc 56  :path [:filter2 :resonance] :range [0 127] :cc-type :fixed}
+  {:cc 57  :path [:filter2 :morph]     :range [0 127] :cc-type :fixed}
+  {:cc 58  :path [:filter2 :keytrack]  :range [0 127] :cc-type :fixed}
+  {:cc 59  :path [:filter2 :lfo1-amt]  :range [0 127] :cc-type :fixed}
+  {:cc 60  :path [:filter2 :vel-env]   :range [0 127] :cc-type :fixed}
+  {:cc 61  :path [:filter2 :env1-amt]  :range [0 127] :cc-type :fixed}
+
+  ;; --- Amp -----------------------------------------------------------------
+  {:cc 62  :path [:amp :lfo2-amt] :range [0 127] :cc-type :fixed}
+
+  ;; --- LFOs ----------------------------------------------------------------
+  {:cc 72  :path [:lfo1 :rate]  :range [0 127] :cc-type :fixed}
+  {:cc 70  :path [:lfo1 :gain]  :range [0 127] :cc-type :fixed}
+  {:cc 73  :path [:lfo2 :rate]  :range [0 127] :cc-type :fixed}
+  {:cc 28  :path [:lfo2 :gain]  :range [0 127] :cc-type :fixed}
+  {:cc 76  :path [:lfo3 :rate]  :range [0 127] :cc-type :fixed}
+  {:cc 75  :path [:lfo3 :gain]  :range [0 127] :cc-type :fixed}
+  {:cc 78  :path [:lfo4 :rate]  :range [0 127] :cc-type :fixed}
+  {:cc 77  :path [:lfo4 :gain]  :range [0 127] :cc-type :fixed}
+  {:cc 80  :path [:lfo5 :rate]  :range [0 127] :cc-type :fixed}
+  {:cc 79  :path [:lfo5 :gain]  :range [0 127] :cc-type :fixed}
+
+  ;; --- Envelopes -----------------------------------------------------------
+  {:cc 81  :path [:env1 :attack]  :range [0 127] :cc-type :fixed}
+  {:cc 82  :path [:env1 :decay]   :range [0 127] :cc-type :fixed}
+  {:cc 83  :path [:env1 :sustain] :range [0 127] :cc-type :fixed}
+  {:cc 84  :path [:env1 :release] :range [0 127] :cc-type :fixed}
+  {:cc 85  :path [:env2 :attack]  :range [0 127] :cc-type :fixed}
+  {:cc 86  :path [:env2 :decay]   :range [0 127] :cc-type :fixed}
+  {:cc 87  :path [:env2 :sustain] :range [0 127] :cc-type :fixed}
+  {:cc 88  :path [:env2 :release] :range [0 127] :cc-type :fixed}
+  {:cc 89  :path [:env3 :attack]  :range [0 127] :cc-type :fixed}
+  {:cc 90  :path [:env3 :decay]   :range [0 127] :cc-type :fixed}
+  {:cc 96  :path [:env3 :sustain] :range [0 127] :cc-type :fixed}
+  {:cc 97  :path [:env3 :release] :range [0 127] :cc-type :fixed}
+  {:cc 25  :path [:env4 :attack]  :range [0 127] :cc-type :fixed}
+  {:cc 27  :path [:env4 :decay]   :range [0 127] :cc-type :fixed}
+  {:cc 125 :path [:env4 :sustain] :range [0 127] :cc-type :fixed}
+  {:cc 124 :path [:env4 :release] :range [0 127] :cc-type :fixed}
+  {:cc 102 :path [:env5 :attack]  :range [0 127] :cc-type :fixed}
+  {:cc 103 :path [:env5 :decay]   :range [0 127] :cc-type :fixed}
+  {:cc 104 :path [:env5 :sustain] :range [0 127] :cc-type :fixed}
+  {:cc 105 :path [:env5 :release] :range [0 127] :cc-type :fixed}
+
+  ;; --- Arpeggiator ---------------------------------------------------------
+  {:cc 106 :path [:arp :division] :range [0 127] :cc-type :fixed}
+  {:cc 107 :path [:arp :gate]     :range [0 127] :cc-type :fixed}
+  {:cc 108 :path [:arp :mode]     :range [0 127] :cc-type :fixed}
+  {:cc 109 :path [:arp :ratchet]  :range [0 127] :cc-type :fixed}
+  {:cc 110 :path [:arp :chance]   :range [0 127] :cc-type :fixed}
+  {:cc 120 :path [:arp :octave]   :range [0 127] :cc-type :fixed}
+  {:cc 122 :path [:arp :length]   :range [0 127] :cc-type :fixed}
+
+  ;; --- Effects — Delay -----------------------------------------------------
+  {:cc 14  :path [:delay :feedback] :range [0 127] :cc-type :fixed}
+  {:cc 15  :path [:delay :time]     :range [0 127] :cc-type :fixed}
+  {:cc 63  :path [:delay :wet-tone] :range [0 127] :cc-type :fixed}
+  {:cc 92  :path [:delay :dry-wet]  :range [0 127] :cc-type :fixed}
+
+  ;; --- Effects — Reverb ----------------------------------------------------
+  {:cc 65  :path [:reverb :time]    :range [0 127] :cc-type :fixed}
+  {:cc 67  :path [:reverb :tone]    :range [0 127] :cc-type :fixed}
+  {:cc 91  :path [:reverb :dry-wet] :range [0 127] :cc-type :fixed}
+
+  ;; --- Effects — Pre/Post FX -----------------------------------------------
+  {:cc 12  :path [:pre-fx :param1]  :range [0 127] :cc-type :fixed}
+  {:cc 13  :path [:pre-fx :param2]  :range [0 127] :cc-type :fixed}
+  {:cc 93  :path [:pre-fx :mix]     :range [0 127] :cc-type :fixed}
+  {:cc 68  :path [:post-fx :param1] :range [0 127] :cc-type :fixed}
+  {:cc 69  :path [:post-fx :param2] :range [0 127] :cc-type :fixed}
+  {:cc 94  :path [:post-fx :mix]    :range [0 127] :cc-type :fixed}]
+
+ :midi/nrpn
+
+ [;; --- Oscillator types ----------------------------------------------------
+  {:nrpn 8089 :path [:osc1 :type] :bits 7 :range [0 127] :note "NRPN 3FH/19H; wavetable 0–218"}
+  {:nrpn 8090 :path [:osc2 :type] :bits 7 :range [0 127] :note "NRPN 3FH/1AH"}
+  {:nrpn 8077 :path [:osc3 :type] :bits 7 :range [0 127] :note "NRPN 3FH/0DH"}
+
+  ;; --- Filter 1 type -------------------------------------------------------
+  {:nrpn 8104 :path [:filter1 :type] :bits 7 :range [0 127]
+   :values [{:value 0  :label :lp-ldr12} {:value 1  :label :lp-ldr24}
+            {:value 2  :label :lp-fat12} {:value 3  :label :lp-fat24}
+            {:value 4  :label :lp-gate}  {:value 5  :label :lp-ms20}
+            {:value 6  :label :hp-ms20}  {:value 7  :label :lp-3ldr}
+            {:value 8  :label :bp-3ldr}  {:value 9  :label :hp-3ldr}
+            {:value 10 :label :vowel}]}
+
+  {:nrpn 8108 :path [:filter :routing] :bits 7 :range [0 127]
+   :values [{:value 0 :label :series} {:value 1 :label :parallel}]}
+
+  ;; --- Macros (10-bit; use raw NRPN values 0–1024) -------------------------
+  {:nrpn 8152 :path [:macro :1-hi] :bits 14 :range [0 16383] :note "NRPN 3FH/58H; native [0 1024]"}
+  {:nrpn 8153 :path [:macro :2-hi] :bits 14 :range [0 16383] :note "NRPN 3FH/59H; native [0 1024]"}
+  {:nrpn 8154 :path [:macro :3-hi] :bits 14 :range [0 16383] :note "NRPN 3FH/5AH; native [0 1024]"}
+  {:nrpn 8155 :path [:macro :4-hi] :bits 14 :range [0 16383] :note "NRPN 3FH/5BH; native [0 1024]"}
+  {:nrpn 8156 :path [:macro :5-hi] :bits 14 :range [0 16383] :note "NRPN 3FH/5CH; native [0 1024]"}
+  {:nrpn 8157 :path [:macro :6-hi] :bits 14 :range [0 16383] :note "NRPN 3FH/5DH; native [0 1024]"}
+  {:nrpn 8158 :path [:macro :7-hi] :bits 14 :range [0 16383] :note "NRPN 3FH/5EH; native [0 1024]"}
+  {:nrpn 8159 :path [:macro :8-hi] :bits 14 :range [0 16383] :note "NRPN 3FH/5FH; native [0 1024]"}
+
+  ;; --- Voice / Global ------------------------------------------------------
+  {:nrpn 8129 :path [:pitch-bend-range]  :bits 7 :range [0 127] :note "NRPN 3FH/41H; [0 24] semitones"}
+  {:nrpn 8083 :path [:polyphony]         :bits 7 :range [0 127]
+   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:nrpn 8124 :path [:density]           :bits 7 :range [0 127] :note "NRPN 3FH/3CH; [1 8] voices"}
+  {:nrpn 8121 :path [:detune-nrpn]       :bits 7 :range [0 127] :note "NRPN 3FH/39H"}
+  {:nrpn 8132 :path [:stereo-width-nrpn] :bits 7 :range [0 127] :note "NRPN 3FH/44H"}
+  {:nrpn 8085 :path [:glide :time-nrpn]  :bits 7 :range [0 127] :note "NRPN 3FH/15H"}
+  {:nrpn 8125 :path [:aftertouch :delay]   :bits 7 :range [0 127] :note "NRPN 3FH/3DH; [0 400]"}
+  {:nrpn 8126 :path [:aftertouch :fade-in] :bits 7 :range [0 127] :note "NRPN 3FH/3EH; [0 400]"}
+
+  ;; --- Effects -------------------------------------------------------------
+  {:nrpn 7794 :path [:reverb :type] :bits 7 :range [0 127]
+   :values [{:value 0 :label :hall} {:value 1 :label :room}
+            {:value 2 :label :plate} {:value 3 :label :cloud}]}
+  {:nrpn 7664 :path [:delay :bpm-sync] :bits 7 :range [0 127]
+   :values [{:value 0 :label :off} {:value 1 :label :on}]}]
+
+ ;; -------------------------------------------------------------------------
+ ;; Physical controllers — Deluxe specific
+ ;; -------------------------------------------------------------------------
+ :device/controllers
+ {:keyboard {:type :keyboard :keys 49 :range [36 84] :note "C2–C6; extends with octave shift"}
+  :ribbon   {:type :ribbon-strip
+             :note "Ribbon CC transmit unknown — test empirically (Q4 open)"}
+  :mod-wheel  {:type :wheel :cc 1}
+  :pitch-bend {:type :wheel}}
+
+ :cljseq/bind-sources
+ {:notes      {:source :note-on           :yields :pitch-midi}
+  :velocity   {:source :note-on           :yields :velocity-0-127}
+  :aftertouch {:source :channel-pressure  :yields :pressure-0-127}
+  :pitch-bend {:source :pitch-bend        :yields :bend-0-16383}
+  :mod-wheel  {:source :cc-1              :yields :cc-0-127}
+  :macro-1    {:source :cc-16             :yields :cc-0-127}
+  :macro-2    {:source :cc-17             :yields :cc-0-127}
+  :macro-3    {:source :cc-18             :yields :cc-0-127}
+  :macro-4    {:source :cc-19             :yields :cc-0-127}
+  :macro-5    {:source :cc-20             :yields :cc-0-127}
+  :macro-6    {:source :cc-21             :yields :cc-0-127}
+  :macro-7    {:source :cc-22             :yields :cc-0-127}
+  :macro-8    {:source :cc-23             :yields :cc-0-127}}
+
+ :device/firmware-version "1.5"
+ :device/map-source       "ASM Hydrasynth MIDI Spec v1.5.0 (official); ~/Downloads/Hydrasynth.csv"
+ :device/map-version      "2026-04-02"}

@@ -134,10 +134,12 @@
                                  :read {:clock (clock/->Phasor 1 0)}
                                  :output {:target :stdout}})
     (Thread/sleep 5)   ; let runner start
-    (let [pos-before (flux/read-pos :test/freeze)]
-      (flux/freeze! :test/freeze)
-      (Thread/sleep 10)   ; allow several potential advances
-      (is (= pos-before (flux/read-pos :test/freeze)) "frozen head did not advance"))
+    ;; Measure stability after freeze — avoids the race between reading pos-before
+    ;; and calling freeze! (a tick can slip between the two).
+    (flux/freeze! :test/freeze)
+    (let [pos-at-freeze (flux/read-pos :test/freeze)]
+      (Thread/sleep 20)   ; allow several potential advances if freeze were broken
+      (is (= pos-at-freeze (flux/read-pos :test/freeze)) "frozen head did not advance"))
     (flux/unfreeze! :test/freeze)
     (flux/stop! :test/freeze)))
 
@@ -282,5 +284,6 @@
     (let [p0 (flux/read-pos :test/fwd)]
       (Thread/sleep 5)
       (let [p1 (flux/read-pos :test/fwd)]
-        (is (>= p1 p0) "position advanced or wrapped")))
+        ;; >= would fail on a valid modular wrap (e.g. 3→0); just assert movement
+        (is (not= p0 p1) "position advanced (or wrapped)")))
     (flux/stop! :test/fwd)))

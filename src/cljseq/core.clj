@@ -22,6 +22,7 @@
             [cljseq.loop     :as loop-ns]
             [cljseq.midi-in  :as midi-in]
             [cljseq.mod      :as mod]
+            [cljseq.mpe      :as mpe]
             [cljseq.sidecar  :as sidecar])
   (:import  [java.util.concurrent.locks LockSupport])
   (:gen-class))
@@ -194,19 +195,33 @@
                       1/4)
          now-beat (double loop-ns/*virtual-time*)]
      (if (sidecar/connected?)
-       (let [tl        (:timeline @system-state)
-             channel   (or (and (map? note) (:midi/channel note)) 1)
-             velocity  (or (and (map? note) (:mod/velocity note)) 64)
-             on-ns     (clock/beat->epoch-ns now-beat tl)
-             off-ns    (clock/beat->epoch-ns (+ now-beat (double beats)) tl)
-             timing    loop-ns/*timing-ctx*
-             t-off-ns  (if timing
-                         (long (Math/round (* (clock/sample timing now-beat)
-                                              (clock/beats->ms 1.0 (double (:bpm tl)))
-                                              1000000.0)))
-                         0)]
-         (sidecar/send-note-on!  (+ on-ns t-off-ns) channel midi velocity)
-         (sidecar/send-note-off! (+ off-ns t-off-ns) channel midi))
+       (let [tl       (:timeline @system-state)
+             timing   loop-ns/*timing-ctx*
+             t-off-ns (if timing
+                        (long (Math/round (* (clock/sample timing now-beat)
+                                             (clock/beats->ms 1.0 (double (:bpm tl)))
+                                             1000000.0)))
+                        0)
+             step     (if (map? note) note {:pitch/midi midi :dur/beats beats})]
+         ;; Route through MPE allocator when enabled and step has per-note expression keys
+         (if (and (mpe/mpe-enabled?) (mpe/mpe-step? step))
+           (mpe/play-mpe! step now-beat tl)
+           (let [channel   (or (and (map? note) (:midi/channel note)) 1)
+                 velocity  (or (and (map? note) (:mod/velocity note)) 64)
+                 wall-ns   (* (System/currentTimeMillis) 1000000)
+                 on-ns     (max wall-ns (clock/beat->epoch-ns now-beat tl))
+                 off-ns    (max (+ on-ns (* (long (clock/beats->ms beats (double (:bpm tl)))) 1000000))
+                                (clock/beat->epoch-ns (+ now-beat (double beats)) tl))
+                 t-on-ns   (+ on-ns t-off-ns)]
+             ;; Dispatch ctrl-path step-mods at note-on time (§24.6 Phase 3)
+             (doseq [[k mod] (or loop-ns/*step-mod-ctx* [])
+                     :when (vector? k)]
+               (let [val (if (satisfies? clock/ITemporalValue mod)
+                           (clock/sample mod now-beat)
+                           mod)]
+                 (ctrl/send-at! t-on-ns k val)))
+             (sidecar/send-note-on!  t-on-ns channel midi velocity)
+             (sidecar/send-note-off! (+ off-ns t-off-ns) channel midi))))
        (let [ms (long (clock/beats->ms beats (get-bpm)))]
          (println (format "[play!] beat=%-8s midi=%-3d dur=%s beats (%dms)"
                           (str now-beat) midi (str beats) ms)))))))

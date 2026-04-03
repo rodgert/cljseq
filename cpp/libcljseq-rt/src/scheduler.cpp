@@ -115,6 +115,16 @@ void scheduler_run() {
                 if (g_dispatch.cc)
                     g_dispatch.cc(ev.channel, ev.note_or_cc, ev.velocity_or_value);
                 break;
+            case MsgType::PitchBend:
+                // note_or_cc = lsb (low 7 bits), velocity_or_value = msb (high 7 bits)
+                if (g_dispatch.pitch_bend)
+                    g_dispatch.pitch_bend(ev.channel, ev.note_or_cc, ev.velocity_or_value);
+                break;
+            case MsgType::ChanPressure:
+                // velocity_or_value = pressure 0–127
+                if (g_dispatch.chan_pressure)
+                    g_dispatch.chan_pressure(ev.channel, ev.velocity_or_value);
+                break;
             default:
                 std::fprintf(stderr, "[scheduler] unexpected event type 0x%02x\n",
                              static_cast<unsigned>(ev.type));

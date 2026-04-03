@@ -298,3 +298,144 @@
       (let [[_ _ m6 m38] @calls]
         (is (= 127 (:val m6))  "data MSB clamped to max")
         (is (= 127 (:val m38)) "data LSB clamped to max")))))
+
+;; ---------------------------------------------------------------------------
+;; send! — :midi-nrpn :raw true (compound/passthrough)
+;; ---------------------------------------------------------------------------
+
+(deftest nrpn-raw-passthrough-test
+  (testing ":raw true skips percentage scaling — value used directly"
+    ;; With :raw true, value 1024 should pass through as 1024 (not scaled from range).
+    ;; 1024 = 0x0400: data-msb = 1024 >> 7 = 8, data-lsb = 1024 & 0x7F = 0
+    (ctrl/defnode! [:nrpn/raw-macro] :type :int :node-meta {:range [0 16383]})
+    (ctrl/bind! [:nrpn/raw-macro]
+                {:type :midi-nrpn :channel 1 :nrpn 100 :bits 14 :range [0 16383] :raw true})
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send! [:nrpn/raw-macro] 1024))
+      (let [[_ _ m6 m38] @calls
+            reconstructed (+ (* (:val m6) 128) (:val m38))]
+        (is (= 1024 reconstructed) "raw value 1024 passes through unchanged")))))
+
+(deftest nrpn-raw-no-scaling-test
+  (testing ":raw true with a narrow :range does not scale the value"
+    ;; With a [0 100] range and :raw false, value 50 → ~8192.
+    ;; With :raw true, value 50 → 50 exactly (CC6=0, CC38=50).
+    (ctrl/defnode! [:nrpn/raw-narrow] :type :int :node-meta {:range [0 100]})
+    (ctrl/bind! [:nrpn/raw-narrow]
+                {:type :midi-nrpn :channel 1 :nrpn 5 :bits 14 :range [0 100] :raw true})
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send! [:nrpn/raw-narrow] 50))
+      (let [[_ _ m6 m38] @calls
+            reconstructed (+ (* (:val m6) 128) (:val m38))]
+        (is (= 50 reconstructed) "raw value 50 passes through, not scaled to ~8192")))))
+
+(deftest nrpn-raw-clamp-test
+  (testing ":raw true still clamps to [0 16383]"
+    (ctrl/defnode! [:nrpn/raw-clamp] :type :int :node-meta {:range [0 16383]})
+    (ctrl/bind! [:nrpn/raw-clamp]
+                {:type :midi-nrpn :channel 1 :nrpn 1 :bits 14 :range [0 16383] :raw true})
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send! [:nrpn/raw-clamp] 99999))
+      (let [[_ _ m6 m38] @calls]
+        (is (= 127 (:val m6))  "raw: data MSB clamped to max")
+        (is (= 127 (:val m38)) "raw: data LSB clamped to max")))))
+
+(deftest nrpn-raw-7bit-test
+  (testing ":raw true with :bits 7 passes value directly as CC6"
+    ;; Sub-param 3 should arrive as CC6=3, no CC38 emitted
+    (ctrl/defnode! [:nrpn/raw-7bit] :type :int :node-meta {:range [0 127]})
+    (ctrl/bind! [:nrpn/raw-7bit]
+                {:type :midi-nrpn :channel 1 :nrpn 200 :bits 7 :range [0 127] :raw true})
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send! [:nrpn/raw-7bit] 42))
+      (is (= 3 (count @calls)) "7-bit raw: 3 CCs (no CC38)")
+      (let [[_ _ m6] @calls]
+        (is (= 42 (:val m6)) "CC6 = raw value 42")))))
+
+;; ---------------------------------------------------------------------------
+;; send-raw-nrpn!
+;; ---------------------------------------------------------------------------
+
+(deftest send-raw-nrpn-14bit-test
+  (testing "send-raw-nrpn! fires 4 CCs with correct encoding"
+    ;; NRPN 8320 = 65*128+0; value 768 = 0x300: data-msb=6, data-lsb=0
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send-raw-nrpn! 1 8320 768))
+      (is (= 4 (count @calls)))
+      (let [[m99 m98 m6 m38] @calls]
+        (is (= {:ch 1 :cc 99 :val 65} m99) "CC99 = 8320 >> 7 = 65")
+        (is (= {:ch 1 :cc 98 :val 0}  m98) "CC98 = 8320 & 0x7F = 0")
+        (is (= {:ch 1 :cc  6 :val 6}  m6)  "CC6 = 768 >> 7 = 6")
+        (is (= {:ch 1 :cc 38 :val 0}  m38) "CC38 = 768 & 0x7F = 0")))))
+
+(deftest send-raw-nrpn-7bit-test
+  (testing "send-raw-nrpn! with :bits 7 emits only 3 CCs"
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send-raw-nrpn! 2 10 99 7))
+      (is (= 3 (count @calls)) "7-bit: no CC38")
+      (let [[_ _ m6] @calls]
+        (is (= 99 (:val m6)) "CC6 = direct value"))))  )
+
+(deftest send-raw-nrpn-no-sidecar-test
+  (testing "send-raw-nrpn! does nothing when sidecar is not connected"
+    (let [calls (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly false)
+                    cljseq.sidecar/send-cc!   (fn [_t ch cc val]
+                                                (swap! calls conj {:ch ch :cc cc :val val}))]
+        (ctrl/send-raw-nrpn! 1 1 500))
+      (is (empty? @calls) "no CCs sent when disconnected"))))
+
+;; ---------------------------------------------------------------------------
+;; send-at! — explicit timestamp
+;; ---------------------------------------------------------------------------
+
+(deftest send-at-uses-given-timestamp-test
+  (testing "send-at! passes the given time-ns to the sidecar, not current time"
+    (ctrl/defnode! [:send-at/cutoff] :type :int :node-meta {:range [0 127]})
+    (ctrl/bind! [:send-at/cutoff]
+                {:type :midi-cc :channel 1 :cc-num 74 :range [0 127]})
+    (let [recorded-ts (atom nil)]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [t _ch _cc _val]
+                                                (reset! recorded-ts t))]
+        (ctrl/send-at! 999999999 [:send-at/cutoff] 64))
+      (is (= 999999999 @recorded-ts) "send-at! forwards the explicit timestamp"))))
+
+(deftest send-at-updates-ctrl-tree-test
+  (testing "send-at! updates the ctrl tree value as a side-effect"
+    (ctrl/defnode! [:send-at/val] :type :int :node-meta {:range [0 127]})
+    (ctrl/bind! [:send-at/val]
+                {:type :midi-cc :channel 1 :cc-num 10 :range [0 127]})
+    (with-redefs [cljseq.sidecar/connected? (constantly false)]
+      (ctrl/send-at! 12345 [:send-at/val] 100))
+    (is (= 100 (ctrl/get [:send-at/val])) "ctrl tree value updated even when sidecar absent")))
+
+(deftest send-at-nrpn-uses-given-timestamp-test
+  (testing "send-at! forwards timestamp for NRPN bindings"
+    (ctrl/defnode! [:send-at/nrpn] :type :int :node-meta {:range [0 16383]})
+    (ctrl/bind! [:send-at/nrpn]
+                {:type :midi-nrpn :channel 1 :nrpn 10 :bits 14 :range [0 16383]})
+    (let [timestamps (atom #{})]
+      (with-redefs [cljseq.sidecar/connected? (constantly true)
+                    cljseq.sidecar/send-cc!   (fn [t _ch _cc _val]
+                                                (swap! timestamps conj t))]
+        (ctrl/send-at! 777000 [:send-at/nrpn] 8192))
+      (is (= #{777000} @timestamps) "all 4 NRPN CCs use the given timestamp"))))

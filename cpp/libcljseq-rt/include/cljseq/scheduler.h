@@ -11,23 +11,31 @@ namespace cljseq {
 // ---------------------------------------------------------------------------
 
 enum class MsgType : uint8_t {
-    NoteOn   = 0x01,
-    NoteOff  = 0x02,
-    CC       = 0x03,
-    Ping     = 0xF0,
-    Shutdown = 0xFF,
+    NoteOn      = 0x01,
+    NoteOff     = 0x02,
+    CC          = 0x03,
+    PitchBend   = 0x04,  ///< per-note MPE pitch bend; payload bytes: lsb, msb (14-bit)
+    ChanPressure = 0x05, ///< per-channel pressure (MPE aftertouch); payload byte: pressure
+    Ping        = 0xF0,
+    Shutdown    = 0xFF,
 };
 
 // ---------------------------------------------------------------------------
 // ScheduledEvent — one entry in the timed-dispatch priority queue
+//
+// Field reuse by type:
+//   NoteOn/NoteOff  — note_or_cc = note;     velocity_or_value = velocity / 0
+//   CC              — note_or_cc = cc number; velocity_or_value = value
+//   PitchBend       — note_or_cc = lsb;       velocity_or_value = msb   (14-bit = msb<<7|lsb)
+//   ChanPressure    — note_or_cc = 0 (unused); velocity_or_value = pressure
 // ---------------------------------------------------------------------------
 
 struct ScheduledEvent {
     int64_t  time_ns;           ///< epoch-nanoseconds (system_clock epoch)
     MsgType  type;
     uint8_t  channel;           ///< MIDI channel 1–16
-    uint8_t  note_or_cc;        ///< note number or CC number
-    uint8_t  velocity_or_value; ///< velocity (NoteOn) or value (CC); 0 for NoteOff
+    uint8_t  note_or_cc;        ///< note, CC number, or pitch-bend LSB
+    uint8_t  velocity_or_value; ///< velocity, CC value, pitch-bend MSB, or pressure
 };
 
 // ---------------------------------------------------------------------------
@@ -38,6 +46,10 @@ struct DispatchCallbacks {
     std::function<void(uint8_t channel, uint8_t note, uint8_t velocity)> note_on;
     std::function<void(uint8_t channel, uint8_t note)>                   note_off;
     std::function<void(uint8_t channel, uint8_t cc,   uint8_t value)>    cc;
+    /// Pitch bend: lsb = low 7 bits, msb = high 7 bits; 14-bit value = (msb<<7)|lsb
+    std::function<void(uint8_t channel, uint8_t lsb, uint8_t msb)>       pitch_bend;
+    /// Channel pressure (aftertouch): pressure 0–127
+    std::function<void(uint8_t channel, uint8_t pressure)>               chan_pressure;
 };
 
 // ---------------------------------------------------------------------------

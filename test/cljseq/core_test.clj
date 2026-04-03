@@ -4,6 +4,7 @@
   (:require [clojure.test :refer [deftest is testing]]
             [cljseq.clock :as clock]
             [cljseq.core  :as core]
+            [cljseq.ctrl  :as ctrl]
             [cljseq.loop  :as loop-ns]))
 
 ;; ---------------------------------------------------------------------------
@@ -166,3 +167,58 @@
         (is (some #{:v2} @seen) "v2 should have run after swap"))
       (finally
         (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; §24.6 Phase 3 — ctrl-path step-mod dispatch at note-on time
+;; ---------------------------------------------------------------------------
+
+(deftest ctrl-path-step-mod-dispatched-at-note-on-test
+  (testing "ctrl-path entry in *step-mod-ctx* dispatched via send-at! at note-on time"
+    ;; Set up a ctrl node with a MIDI CC binding
+    (core/start! :bpm 120)
+    (try
+      (ctrl/defnode! [:step-mod/cutoff] :type :int :node-meta {:range [0 127]})
+      (ctrl/bind! [:step-mod/cutoff]
+                  {:type :midi-cc :channel 1 :cc-num 74 :range [0 127]})
+      (let [send-at-calls (atom [])
+            note-on-calls (atom [])]
+        (with-redefs [cljseq.sidecar/connected?   (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [t ch n v]
+                                                      (swap! note-on-calls conj {:t t :ch ch :n n :v v}))
+                      cljseq.sidecar/send-note-off! (fn [& _])
+                      cljseq.sidecar/send-cc!        (fn [t ch cc val]
+                                                       (swap! send-at-calls conj {:t t :ch ch :cc cc :val val}))]
+          (binding [loop-ns/*virtual-time*   0.0
+                    loop-ns/*step-mod-ctx*   {[:step-mod/cutoff] 80}]
+            (core/play! {:pitch/midi 60 :dur/beats 1/4})))
+        ;; The CC for cutoff should have been dispatched
+        (let [cc-calls (filter #(= 74 (:cc %)) @send-at-calls)]
+          (is (= 1 (count cc-calls)) "one CC74 dispatched for step-mod")
+          ;; CC and note-on should share the same timestamp
+          (when (and (seq cc-calls) (seq @note-on-calls))
+            (is (= (:t (first cc-calls))
+                   (:t (first @note-on-calls)))
+                "step-mod CC and note-on share the same scheduled timestamp"))))
+      (finally (core/stop!)))))
+
+(deftest ctrl-path-step-mod-keyword-not-dispatched-test
+  (testing "keyword keys in *step-mod-ctx* do NOT trigger send-at! (handled by apply-step-mods)"
+    (core/start! :bpm 120)
+    (try
+      (ctrl/defnode! [:step-mod/vel] :type :int :node-meta {:range [0 127]})
+      (ctrl/bind! [:step-mod/vel]
+                  {:type :midi-cc :channel 1 :cc-num 11 :range [0 127]})
+      (let [cc11-calls (atom [])]
+        (with-redefs [cljseq.sidecar/connected?    (constantly true)
+                      cljseq.sidecar/send-note-on!  (fn [& _])
+                      cljseq.sidecar/send-note-off! (fn [& _])
+                      cljseq.sidecar/send-cc!        (fn [_t _ch cc _val]
+                                                       (when (= 11 cc)
+                                                         (swap! cc11-calls conj cc)))]
+          (binding [loop-ns/*virtual-time*   0.0
+                    ;; :mod/velocity is a keyword key — goes into step map, not ctrl dispatch
+                    loop-ns/*step-mod-ctx*   {:mod/velocity 80}]
+            (core/play! {:pitch/midi 60 :dur/beats 1/4})))
+        ;; CC11 (bound to [:step-mod/vel]) should NOT have been sent
+        (is (empty? @cc11-calls) "keyword step-mod does not trigger CC on [:step-mod/vel]"))
+      (finally (core/stop!)))))

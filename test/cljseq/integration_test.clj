@@ -61,21 +61,25 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- await-note-on-enqueue
-  "Wait up to timeout-ms for the sidecar to log receipt of a NoteOn for `note`."
+  "Wait up to timeout-ms for the sidecar to log receipt of a NoteOn for `note`.
+
+  Sidecar log format (post-MPE): [ipc] enqueue type=0x01 ch=N b9=NOTE b10=VEL time_ns=..."
   [note timeout-ms]
   (sidecar/await-dispatch
    #(and (str/includes? % "[ipc] enqueue")
          (str/includes? % "type=0x01")
-         (str/includes? % (str "note=" note " ")))
+         (str/includes? % (str "b9=" note " ")))
    timeout-ms))
 
 (defn- await-note-off-enqueue
-  "Wait up to timeout-ms for the sidecar to log receipt of a NoteOff for `note`."
+  "Wait up to timeout-ms for the sidecar to log receipt of a NoteOff for `note`.
+
+  Sidecar log format (post-MPE): [ipc] enqueue type=0x02 ch=N b9=NOTE b10=0 time_ns=..."
   [note timeout-ms]
   (sidecar/await-dispatch
    #(and (str/includes? % "[ipc] enqueue")
          (str/includes? % "type=0x02")
-         (str/includes? % (str "note=" note " ")))
+         (str/includes? % (str "b9=" note " ")))
    timeout-ms))
 
 (defn- enqueue-channel
@@ -85,9 +89,10 @@
     (Long/parseLong ch)))
 
 (defn- enqueue-vel
-  "Extract velocity from an '[ipc] enqueue' log line."
+  "Extract velocity from an '[ipc] enqueue' log line.
+  Post-MPE log uses b10= for velocity on NoteOn."
   [line]
-  (when-let [[_ v] (re-find #"vel=(\d+)" line)]
+  (when-let [[_ v] (re-find #"b10=(\d+)" line)]
     (Long/parseLong v)))
 
 ;; ---------------------------------------------------------------------------
