@@ -49,8 +49,32 @@ static unsigned short parse_port(int argc, char* argv[]) {
     std::exit(1);
 }
 
+static unsigned int parse_midi_port(int argc, char* argv[]) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::strcmp(argv[i], "--midi-port") == 0) {
+            int p = std::atoi(argv[i + 1]);
+            if (p >= 0)
+                return static_cast<unsigned int>(p);
+        }
+    }
+    return 0;  // default: port 0
+}
+
+static int parse_midi_in_port(int argc, char* argv[]) {
+    for (int i = 1; i + 1 < argc; ++i) {
+        if (std::strcmp(argv[i], "--midi-in-port") == 0) {
+            int p = std::atoi(argv[i + 1]);
+            if (p >= 0)
+                return p;
+        }
+    }
+    return -1;  // -1 = no MIDI input monitoring
+}
+
 int main(int argc, char* argv[]) {
-    unsigned short port = parse_port(argc, argv);
+    unsigned short port         = parse_port(argc, argv);
+    unsigned int   midi_port    = parse_midi_port(argc, argv);
+    int            midi_in_port = parse_midi_in_port(argc, argv);
 
     // 1. Select Link bridge based on build configuration.
     //    The sidecar's business logic is identical in both cases.
@@ -64,16 +88,18 @@ int main(int argc, char* argv[]) {
     cljseq::LinkBridge& link = null_link;
 #endif
 
-    // 2. Open first available MIDI output port.
-    if (!midi_init()) {
+    // 2. Open the requested MIDI output port (default 0).
+    if (!midi_init(midi_port)) {
         std::fprintf(stderr, "[main] MIDI init failed — continuing without MIDI\n");
     }
 
     // 3. Wire scheduler callbacks to MIDI dispatch.
     cljseq::scheduler_init({
-        .note_on  = midi_note_on,
-        .note_off = midi_note_off,
-        .cc       = midi_cc,
+        .note_on       = midi_note_on,
+        .note_off      = midi_note_off,
+        .cc            = midi_cc,
+        .pitch_bend    = midi_pitch_bend,
+        .chan_pressure  = midi_channel_pressure,
     });
 
     // 4. Start scheduler on its own thread.
@@ -81,7 +107,7 @@ int main(int argc, char* argv[]) {
 
     // 5. Accept the JVM connection and run the bidirectional IPC event loop.
     //    (blocks until Shutdown message received)
-    ipc_serve(port, link);
+    ipc_serve(port, link, midi_in_port);
 
     // 6. Signal scheduler to stop and wait for it to drain.
     cljseq::scheduler_stop();

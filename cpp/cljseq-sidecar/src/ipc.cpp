@@ -21,6 +21,7 @@
 // One connection is accepted; reconnection is not supported in Phase 1.
 
 #include "ipc.h"
+#include "midi_monitor.h"
 
 #include <cljseq/link_bridge.h>
 #include <cljseq/scheduler.h>
@@ -91,15 +92,18 @@ void write_le_double(uint8_t* p, double v) noexcept {
 // ---------------------------------------------------------------------------
 
 enum class MsgType : uint8_t {
-    NoteOn      = 0x01,
-    NoteOff     = 0x02,
-    CC          = 0x03,
-    LinkEnable  = 0x10,
-    LinkDisable = 0x11,
-    LinkSetBpm  = 0x12,
-    LinkState   = 0x80,
-    Ping        = 0xF0,
-    Shutdown    = 0xFF,
+    NoteOn       = 0x01,
+    NoteOff      = 0x02,
+    CC           = 0x03,
+    PitchBend    = 0x04,  // per-note MPE pitch bend
+    ChanPressure = 0x05,  // per-channel pressure (MPE aftertouch)
+    LinkEnable   = 0x10,
+    LinkDisable  = 0x11,
+    LinkSetBpm   = 0x12,
+    MidiIn       = 0x20,  // sidecar→JVM: MIDI message received on input port
+    LinkState    = 0x80,
+    Ping         = 0xF0,
+    Shutdown     = 0xFF,
 };
 
 // ---------------------------------------------------------------------------
@@ -108,14 +112,37 @@ enum class MsgType : uint8_t {
 
 class IpcSession : public std::enable_shared_from_this<IpcSession> {
 public:
-    IpcSession(tcp::socket socket, asio::io_context& io, cljseq::LinkBridge& link)
-        : socket_(std::move(socket)), io_(io), link_(link) {}
+    IpcSession(tcp::socket socket, asio::io_context& io,
+               cljseq::LinkBridge& link, int midi_in_port)
+        : socket_(std::move(socket)), io_(io), link_(link),
+          midi_in_port_(midi_in_port) {}
+
+    ~IpcSession() {
+        if (midi_in_port_ >= 0)
+            cljseq::midi_monitor_stop();
+    }
 
     void start() {
         // Register Link state callback: when Link fires, push 0x80 to JVM.
         link_.set_state_callback([this](const cljseq::LinkState& ls) {
             push_link_state(ls);
         });
+
+        // If a MIDI input port was requested, open it and push every received
+        // message back to the JVM as a 0x20 MidiIn frame.
+        if (midi_in_port_ >= 0) {
+            auto self = shared_from_this();
+            bool ok = cljseq::midi_monitor_start(
+                static_cast<unsigned int>(midi_in_port_),
+                [self](int64_t time_ns, uint8_t status, uint8_t b1, uint8_t b2) {
+                    self->push_midi_in(time_ns, status, b1, b2);
+                });
+            if (!ok)
+                std::fprintf(stderr,
+                    "[ipc] midi_monitor_start(%d) failed — input monitoring disabled\n",
+                    midi_in_port_);
+        }
+
         read_header();
     }
 
@@ -125,10 +152,11 @@ private:
     tcp::socket              socket_;
     asio::io_context&        io_;
     cljseq::LinkBridge&      link_;
+    int                      midi_in_port_;
     std::array<uint8_t, kHeaderLen> header_buf_;
     std::vector<uint8_t>     payload_buf_;
 
-    // Serialise concurrent writes (Link callback vs. potential future senders).
+    // Serialise concurrent writes (Link callback, MIDI-in callback vs. read loop).
     std::mutex               write_mutex_;
 
     // ---------------------------------------------------------------------------
@@ -179,6 +207,14 @@ private:
         case MsgType::NoteOn:
         case MsgType::NoteOff:
         case MsgType::CC:
+        case MsgType::PitchBend:
+        case MsgType::ChanPressure:
+            // All five types share the same 12-byte payload layout:
+            //   [int64 time_ns][uint8 channel][uint8 byte9][uint8 byte10][uint8 reserved]
+            //   NoteOn/NoteOff: byte9=note,   byte10=velocity/0
+            //   CC:             byte9=cc_num, byte10=value
+            //   PitchBend:      byte9=lsb,    byte10=msb   (14-bit = msb<<7|lsb)
+            //   ChanPressure:   byte9=0,       byte10=pressure
             if (len < 12) {
                 std::fprintf(stderr, "[ipc] short payload for type 0x%02x (%zu bytes)\n",
                              msg_type_byte, len);
@@ -191,7 +227,7 @@ private:
                 ev.channel           = payload[8];
                 ev.note_or_cc        = payload[9];
                 ev.velocity_or_value = payload[10];
-                std::fprintf(stderr, "[ipc] enqueue type=0x%02x ch=%u note=%u vel=%u time_ns=%lld\n",
+                std::fprintf(stderr, "[ipc] enqueue type=0x%02x ch=%u b9=%u b10=%u time_ns=%lld\n",
                              msg_type_byte, ev.channel, ev.note_or_cc,
                              ev.velocity_or_value, (long long)ev.time_ns);
                 cljseq::scheduler_enqueue(ev);
@@ -277,6 +313,49 @@ private:
                                  ec.message().c_str());
             });
     }
+
+    // ---------------------------------------------------------------------------
+    // Outbound: push MidiIn (0x20) to JVM
+    //
+    // Wire payload (12 bytes):
+    //   [int64 time_ns(8)][uint8 status(1)][uint8 b1(1)][uint8 b2(1)][uint8 reserved(1)]
+    //
+    // Called from the RtMidi callback thread — must not block.
+    // ---------------------------------------------------------------------------
+
+    void push_midi_in(int64_t time_ns, uint8_t status, uint8_t b1, uint8_t b2) {
+        static constexpr std::size_t kPayloadLen = 12;
+        static constexpr std::size_t kFrameLen   = 8 + kPayloadLen;
+
+        auto frame = std::make_shared<std::vector<uint8_t>>(kFrameLen, uint8_t{0});
+        uint8_t* p = frame->data();
+
+        // Header
+        write_le32(p, static_cast<uint32_t>(kPayloadLen));
+        p[4] = static_cast<uint8_t>(MsgType::MidiIn);
+        // p[5..7] reserved, zeroed
+
+        // Payload
+        uint8_t* d = p + 8;
+        write_le64(d, time_ns); d += 8;
+        d[0] = status;
+        d[1] = b1;
+        d[2] = b2;
+        // d[3] reserved, zeroed
+
+        std::fprintf(stderr,
+            "[midi_monitor] recv status=0x%02x b1=%u b2=%u time_ns=%lld\n",
+            status, b1, b2, (long long)time_ns);
+
+        std::lock_guard<std::mutex> lk(write_mutex_);
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(*frame),
+            [self, frame](asio::error_code ec, std::size_t) {
+                if (ec)
+                    std::fprintf(stderr, "[ipc] midi_in push write error: %s\n",
+                                 ec.message().c_str());
+            });
+    }
 };
 
 } // anonymous namespace
@@ -285,7 +364,7 @@ private:
 // ipc_serve — entry point
 // ---------------------------------------------------------------------------
 
-void ipc_serve(unsigned short port, cljseq::LinkBridge& link) {
+void ipc_serve(unsigned short port, cljseq::LinkBridge& link, int midi_in_port) {
     asio::io_context io;
     tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), port));
     std::fprintf(stderr, "[ipc] listening on port %u\n", port);
@@ -295,7 +374,7 @@ void ipc_serve(unsigned short port, cljseq::LinkBridge& link) {
     acceptor.accept(socket);
     std::fprintf(stderr, "[ipc] JVM connected\n");
 
-    auto session = std::make_shared<IpcSession>(std::move(socket), io, link);
+    auto session = std::make_shared<IpcSession>(std::move(socket), io, link, midi_in_port);
     session->start();
 
     io.run();

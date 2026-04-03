@@ -13,6 +13,7 @@ add_executable(cljseq-sidecar
   src/main.cpp
   src/ipc.cpp
   src/midi_dispatch.cpp
+  src/midi_monitor.cpp
   src/osc_dispatch.cpp
 )
 

@@ -13,5 +13,9 @@
 /// When `link` fires its state callback, a 0x80 LinkState frame is written back
 /// to the connected JVM over the same TCP socket (bidirectional IPC).
 ///
+/// When `midi_in_port >= 0`, an RtMidiIn port is opened on that index and every
+/// received MIDI message is pushed to the JVM as a 0x20 MidiIn frame:
+///   payload (12 bytes): [int64 time_ns][uint8 status][uint8 b1][uint8 b2][uint8 reserved]
+///
 /// `link` must outlive ipc_serve(). A NullLinkBridge may be passed safely.
-void ipc_serve(unsigned short port, cljseq::LinkBridge& link);
+void ipc_serve(unsigned short port, cljseq::LinkBridge& link, int midi_in_port = -1);

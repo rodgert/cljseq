@@ -92,9 +92,12 @@
 (def ^:private MSG-NOTE-ON      (unchecked-byte 0x01))
 (def ^:private MSG-NOTE-OFF     (unchecked-byte 0x02))
 (def ^:private MSG-CC           (unchecked-byte 0x03))
+(def ^:private MSG-PITCH-BEND   (unchecked-byte 0x04))  ; per-note MPE pitch bend
+(def ^:private MSG-CHAN-PRESSURE (unchecked-byte 0x05)) ; per-channel pressure (MPE)
 (def ^:private MSG-LINK-ENABLE  (unchecked-byte 0x10))
 (def ^:private MSG-LINK-DISABLE (unchecked-byte 0x11))
 (def ^:private MSG-LINK-SET-BPM (unchecked-byte 0x12))
+(def ^:private MSG-MIDI-IN      (unchecked-byte 0x20))  ; sidecar→JVM: MIDI input received
 (def ^:private MSG-LINK-STATE   (unchecked-byte 0x80))
 (def ^:private MSG-PING         (unchecked-byte 0xF0))
 (def ^:private MSG-SHUTDOWN     (unchecked-byte 0xFF))
@@ -124,6 +127,21 @@
     (.put buf (unchecked-byte channel))
     (.put buf (unchecked-byte cc-num))
     (.put buf (unchecked-byte value))
+    (.put buf (byte 0))
+    (.array buf)))
+
+(defn- pitch-bend-payload
+  "Serialize a MIDI pitch bend payload (12 bytes, little-endian).
+  value-14bit — 0–16383; center = 8192; lsb = low 7 bits, msb = high 7 bits."
+  ^bytes [^long time-ns ^long channel ^long value-14bit]
+  (let [buf (ByteBuffer/allocate 12)
+        lsb (bit-and value-14bit 0x7F)
+        msb (bit-and (bit-shift-right value-14bit 7) 0x7F)]
+    (.order buf ByteOrder/LITTLE_ENDIAN)
+    (.putLong buf time-ns)
+    (.put buf (unchecked-byte channel))
+    (.put buf (unchecked-byte lsb))
+    (.put buf (unchecked-byte msb))
     (.put buf (byte 0))
     (.array buf)))
 
@@ -172,6 +190,30 @@
   "Send a Control Change event to the sidecar."
   [time-ns channel cc-num value]
   (send-frame! (make-frame MSG-CC (cc-payload time-ns channel cc-num value))))
+
+(defn send-pitch-bend!
+  "Send a MIDI pitch bend event (0xEn) to the sidecar.
+
+  time-ns      — epoch-nanoseconds
+  channel      — MIDI channel 1–16
+  value-14bit  — 0–16383; center (no bend) = 8192
+
+  Wire payload: [int64 time-ns][uint8 channel][uint8 lsb][uint8 msb][uint8 reserved]
+  The C++ sidecar encodes this as a standard MIDI pitch-bend message (0xEn lsb msb)."
+  [time-ns channel value-14bit]
+  (send-frame! (make-frame MSG-PITCH-BEND
+                           (pitch-bend-payload time-ns channel value-14bit))))
+
+(defn send-channel-pressure!
+  "Send a MIDI channel pressure (aftertouch) event (0xDn) to the sidecar.
+
+  time-ns  — epoch-nanoseconds
+  channel  — MIDI channel 1–16
+  pressure — 0–127
+
+  Reuses the CC payload layout (same byte structure, different message type)."
+  [time-ns channel pressure]
+  (send-frame! (make-frame MSG-CHAN-PRESSURE (cc-payload time-ns channel 0 pressure))))
 
 (defn send-ping!
   "Send a keepalive Ping. No payload."
@@ -259,6 +301,62 @@
     (.start t)))
 
 ;; ---------------------------------------------------------------------------
+;; MIDI input monitor — inbound 0x20 MidiIn frames
+;; ---------------------------------------------------------------------------
+
+(def midi-in-messages
+  "Atom holding a vector of all MIDI messages received from the sidecar's MIDI
+  input port.  Each entry is a map:
+    {:time-ns <epoch-ns> :status <uint8> :b1 <uint8> :b2 <uint8>}
+
+  Use `await-midi-message` in tests, or deref directly for inspection.
+  Reset with (reset! sidecar/midi-in-messages [])."
+  (atom []))
+
+(defn- decode-midi-in-payload
+  "Decode a 12-byte MidiIn push payload into a map."
+  [^bytes payload]
+  (let [buf (doto (ByteBuffer/wrap payload)
+              (.order ByteOrder/LITTLE_ENDIAN))]
+    {:time-ns (.getLong buf)
+     :status  (bit-and (.get buf) 0xFF)
+     :b1      (bit-and (.get buf) 0xFF)
+     :b2      (bit-and (.get buf) 0xFF)}))
+
+;; Register the push handler for 0x20 MidiIn at load time.
+;; cljseq.link registers 0x80 the same way (see cljseq.link/start-link!).
+(register-push-handler!
+  0x20
+  (fn [^bytes payload]
+    (when (>= (alength payload) 11)
+      (let [msg (decode-midi-in-payload payload)]
+        (swap! midi-in-messages conj msg)))))
+
+(defn await-midi-message
+  "Block until a MIDI input message matching `pred` arrives (or timeout).
+
+  `pred`       — (fn [msg]) where msg is {:time-ns N :status N :b1 N :b2 N}
+  `timeout-ms` — max wait in milliseconds (default 2000)
+
+  Returns the matching message map, or nil on timeout.
+
+  Example — wait for any NoteOn on any channel:
+    (sidecar/await-midi-message
+      #(= 0x90 (bit-and (:status %) 0xF0))
+      3000)"
+  ([pred] (await-midi-message pred 2000))
+  ([pred timeout-ms]
+   (let [deadline (+ (System/currentTimeMillis) (long timeout-ms))]
+     (loop [seen 0]
+       (let [msgs @midi-in-messages
+             n    (count msgs)]
+         (if-let [found (first (filter pred (subvec msgs seen)))]
+           found
+           (when (< (System/currentTimeMillis) deadline)
+             (Thread/sleep 10)
+             (recur n))))))))
+
+;; ---------------------------------------------------------------------------
 ;; Process management
 ;; ---------------------------------------------------------------------------
 
@@ -310,20 +408,30 @@
   "Spawn the cljseq-sidecar binary and open the TCP IPC connection.
 
   Options:
-    :binary — explicit path to the sidecar binary (default: searches build/)
-    :port   — TCP port (default: OS-assigned free port)
+    :binary       — explicit path to the sidecar binary (default: searches build/)
+    :port         — TCP port (default: OS-assigned free port)
+    :midi-port    — MIDI output port index (default 0; run sidecar once to see port list)
+    :midi-in-port — MIDI input port index to monitor (default nil = disabled).
+                    When set, every received MIDI message is pushed to the JVM as
+                    a 0x20 MidiIn frame and appended to `midi-in-messages`.
+                    Use `await-midi-message` to wait for a specific message in tests.
 
   Returns the port number the sidecar is listening on.
 
   Example:
     (sidecar/start-sidecar!)
-    (sidecar/start-sidecar! :binary \"/usr/local/bin/cljseq-sidecar\" :port 7777)"
-  [& {:keys [binary port]}]
+    (sidecar/start-sidecar! :binary \"/usr/local/bin/cljseq-sidecar\" :port 7777)
+    (sidecar/start-sidecar! :midi-port 2)               ; MIDI output port 2
+    (sidecar/start-sidecar! :midi-port 2 :midi-in-port 1) ; output 2 + monitor input 1"
+  [& {:keys [binary port midi-port midi-in-port]}]
   (when (:running? @sidecar-state)
     (throw (ex-info "Sidecar already running; call stop-sidecar! first" {})))
   (let [port   (long (or port (find-free-port)))
-        binary (or binary (find-binary))]
-    (let [pb   (doto (ProcessBuilder. [binary "--port" (str port)])
+        binary (or binary (find-binary))
+        cmd    (cond-> [binary "--port" (str port)]
+                 midi-port    (conj "--midi-port"    (str midi-port))
+                 midi-in-port (conj "--midi-in-port" (str midi-in-port)))]
+    (let [pb   (doto (ProcessBuilder. ^java.util.List cmd)
                  ;; Inherit stdin and stdout; pipe stderr for capture+tee
                  (.redirectInput  ProcessBuilder$Redirect/INHERIT)
                  (.redirectOutput ProcessBuilder$Redirect/INHERIT))
