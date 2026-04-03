@@ -15,15 +15,16 @@
 
   Key design decisions: Q47 (single system-state atom), Q48 (patch system),
   Q11 (live-loop alias), Q1 (virtual time), phase0-readiness.md."
-  (:require [cljseq.clock    :as clock]
-            [cljseq.ctrl     :as ctrl]
-            [cljseq.flux     :as flux]
-            [cljseq.link     :as link]
-            [cljseq.loop     :as loop-ns]
-            [cljseq.midi-in  :as midi-in]
-            [cljseq.mod      :as mod]
-            [cljseq.mpe      :as mpe]
-            [cljseq.sidecar  :as sidecar])
+  (:require [cljseq.clock     :as clock]
+            [cljseq.conductor :as conductor]
+            [cljseq.ctrl      :as ctrl]
+            [cljseq.flux      :as flux]
+            [cljseq.link      :as link]
+            [cljseq.loop      :as loop-ns]
+            [cljseq.midi-in   :as midi-in]
+            [cljseq.mod       :as mod]
+            [cljseq.mpe       :as mpe]
+            [cljseq.sidecar   :as sidecar])
   (:import  [java.util.concurrent.locks LockSupport])
   (:gen-class))
 
@@ -125,6 +126,7 @@
   []
   (midi-in/close-all-inputs!)
   (flux/stop-all!)
+  (conductor/stop-all-conductors!)
   (mod/mod-unroute-all!)
   (loop-ns/stop-all-loops!)
   ;; Wait briefly for threads to notice the stop signal

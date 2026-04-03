@@ -33,6 +33,7 @@
   See examples/ for full demonstrations."
   (:require [cljseq.arc        :as arc]
             [cljseq.chord      :as chord]
+            [cljseq.conductor  :as conductor]
             [cljseq.core       :as core]
             [cljseq.dsl        :as dsl]
             [cljseq.fractal    :as frac]
@@ -107,10 +108,15 @@
 (def wind-down     traj/wind-down)
 (def mod-route!    mod/mod-route!)
 (def mod-unroute!  mod/mod-unroute!)
-(def arc-bind!     arc/arc-bind!)
-(def arc-unbind!   arc/arc-unbind!)
-(def arc-send!     arc/arc-send!)
-(def arc-routes    arc/arc-routes)
+(def arc-bind!        arc/arc-bind!)
+(def arc-unbind!      arc/arc-unbind!)
+(def arc-send!        arc/arc-send!)
+(def arc-routes       arc/arc-routes)
+(def defconductor!    conductor/defconductor!)
+(def fire!            conductor/fire!)
+(def abort!           conductor/abort!)
+(def conductor-state  conductor/conductor-state)
+(def conductor-names  conductor/conductor-names)
 
 ;; ---------------------------------------------------------------------------
 ;; Re-export DSL
