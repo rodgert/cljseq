@@ -269,12 +269,18 @@
                                     cljseq.loop/*harmony-ctx*   harmony-ctx#]
                             ~@body))
          sref#       (cljseq.loop/-system-ref)]
+     ;; Clear a stale entry (loop was stopped but entry was not removed).
+     ;; If we don't do this, re-using the name hot-swaps the fn into a dead
+     ;; thread and the new body never executes.
+     (when-let [entry# (get-in @@sref# [:loops ~loop-name])]
+       (when-not @(:running? entry#)
+         (swap! @sref# update :loops dissoc ~loop-name)))
      (if (get-in @@sref# [:loops ~loop-name])
-       ;; Hot-swap: update fn; thread picks it up next iteration
+       ;; Hot-swap: loop is running — update fn; thread picks it up next iteration
        (do
          (swap! @sref# assoc-in [:loops ~loop-name :fn] loop-fn#)
          ~loop-name)
-       ;; First evaluation: create entry and start thread
+       ;; First evaluation (or restart after stop): create entry and start thread
        (let [running?# (atom true)]
          (swap! @sref# assoc-in [:loops ~loop-name]
                 {:fn         loop-fn#

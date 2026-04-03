@@ -176,6 +176,25 @@
       (is (= :updated @v) "body was hot-swapped")
       (loop/stop-loop! :test-swap-loop))))
 
+(deftest deflive-loop-restarts-stopped-loop-test
+  (testing "deflive-loop with a stopped loop name starts a fresh loop"
+    ;; Regression: previously the stale state-map entry caused deflive-loop to
+    ;; hot-swap the fn into the dead thread, so the new body never executed.
+    (let [v (atom :initial)]
+      (loop/deflive-loop :test-restart-loop {}
+        (reset! v :first)
+        (loop/sleep! 1))
+      (Thread/sleep 30)
+      (loop/stop-loop! :test-restart-loop)
+      (Thread/sleep 20)  ; let old thread exit
+      (reset! v :waiting)
+      (loop/deflive-loop :test-restart-loop {}
+        (reset! v :second)
+        (loop/sleep! 1000))
+      (Thread/sleep 30)  ; give new thread time to fire once
+      (is (= :second @v) "new body executed after restart with same name")
+      (loop/stop-loop! :test-restart-loop))))
+
 (deftest live-loop-alias-test
   (testing "live-loop is an alias for deflive-loop"
     (loop/live-loop :test-alias-loop {}
