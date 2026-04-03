@@ -237,10 +237,11 @@
         (is (= {:ch 2 :cc 38 :val 116} m38) "CC 38 = data LSB (500 & 0x7F = 116)")))))
 
 (deftest nrpn-7bit-dispatch-test
-  (testing "7-bit NRPN emits only CC 99/98/6 — no CC 38"
+  (testing "7-bit NRPN emits all 4 CCs using 14-bit wire encoding"
     ;; NRPN 0 (eg type), value 64 on channel 1:
     ;;   param-msb = 0, param-lsb = 0
-    ;;   data-msb  = 64 (7-bit passthrough), CC38 omitted
+    ;;   wire value = 0*128 + 64 → data-msb = 0, data-lsb = 64
+    ;;   :bits 7 controls value clamping only; wire encoding is always 14-bit
     (ctrl/defnode! [:nrpn/eg-type] :type :int :node-meta {:range [0 127]})
     (ctrl/bind! [:nrpn/eg-type]
                 {:type :midi-nrpn :channel 1 :nrpn 0 :bits 7 :range [0 127]})
@@ -249,11 +250,12 @@
                     cljseq.sidecar/send-cc!   (fn [_t ch cc val]
                                                 (swap! calls conj {:ch ch :cc cc :val val}))]
         (ctrl/send! [:nrpn/eg-type] 64))
-      (is (= 3 (count @calls)) "exactly 3 CC messages for 7-bit NRPN (no CC 38)")
-      (let [[m99 m98 m6] @calls]
+      (is (= 4 (count @calls)) "exactly 4 CC messages for 7-bit NRPN (14-bit wire encoding)")
+      (let [[m99 m98 m6 m38] @calls]
         (is (= {:ch 1 :cc 99 :val 0}  m99) "CC 99 = param MSB")
         (is (= {:ch 1 :cc 98 :val 0}  m98) "CC 98 = param LSB")
-        (is (= {:ch 1 :cc  6 :val 64} m6)  "CC 6 = value (7-bit passthrough)")))))
+        (is (= {:ch 1 :cc  6 :val 0}  m6)  "CC 6 = data MSB (64 >> 7 = 0)")
+        (is (= {:ch 1 :cc 38 :val 64} m38) "CC 38 = data LSB (64 & 0x7F = 64)")))))
 
 (deftest nrpn-high-param-number-test
   (testing "NRPN parameter > 127 splits correctly across CC 99/98"
@@ -350,8 +352,8 @@
         (is (= 127 (:val m38)) "raw: data LSB clamped to max")))))
 
 (deftest nrpn-raw-7bit-test
-  (testing ":raw true with :bits 7 passes value directly as CC6"
-    ;; Sub-param 3 should arrive as CC6=3, no CC38 emitted
+  (testing ":raw true with :bits 7 uses 14-bit wire encoding"
+    ;; value 42: wire = 0*128+42 → CC6=0, CC38=42
     (ctrl/defnode! [:nrpn/raw-7bit] :type :int :node-meta {:range [0 127]})
     (ctrl/bind! [:nrpn/raw-7bit]
                 {:type :midi-nrpn :channel 1 :nrpn 200 :bits 7 :range [0 127] :raw true})
@@ -360,9 +362,10 @@
                     cljseq.sidecar/send-cc!   (fn [_t ch cc val]
                                                 (swap! calls conj {:ch ch :cc cc :val val}))]
         (ctrl/send! [:nrpn/raw-7bit] 42))
-      (is (= 3 (count @calls)) "7-bit raw: 3 CCs (no CC38)")
-      (let [[_ _ m6] @calls]
-        (is (= 42 (:val m6)) "CC6 = raw value 42")))))
+      (is (= 4 (count @calls)) "7-bit raw: 4 CCs (14-bit wire encoding)")
+      (let [[_ _ m6 m38] @calls]
+        (is (= 0  (:val m6))  "CC6 = data MSB (42 >> 7 = 0)")
+        (is (= 42 (:val m38)) "CC38 = data LSB (42 & 0x7F = 42)")))))
 
 ;; ---------------------------------------------------------------------------
 ;; send-raw-nrpn!
@@ -384,15 +387,17 @@
         (is (= {:ch 1 :cc 38 :val 0}  m38) "CC38 = 768 & 0x7F = 0")))))
 
 (deftest send-raw-nrpn-7bit-test
-  (testing "send-raw-nrpn! with :bits 7 emits only 3 CCs"
+  (testing "send-raw-nrpn! with :bits 7 uses 14-bit wire encoding"
+    ;; value 99: wire = 0*128+99 → CC6=0, CC38=99
     (let [calls (atom [])]
       (with-redefs [cljseq.sidecar/connected? (constantly true)
                     cljseq.sidecar/send-cc!   (fn [_t ch cc val]
                                                 (swap! calls conj {:ch ch :cc cc :val val}))]
         (ctrl/send-raw-nrpn! 2 10 99 7))
-      (is (= 3 (count @calls)) "7-bit: no CC38")
-      (let [[_ _ m6] @calls]
-        (is (= 99 (:val m6)) "CC6 = direct value"))))  )
+      (is (= 4 (count @calls)) "7-bit: 4 CCs (14-bit wire encoding)")
+      (let [[_ _ m6 m38] @calls]
+        (is (= 0  (:val m6))  "CC6 = data MSB (99 >> 7 = 0)")
+        (is (= 99 (:val m38)) "CC38 = data LSB (99 & 0x7F = 99)")))))
 
 (deftest send-raw-nrpn-no-sidecar-test
   (testing "send-raw-nrpn! does nothing when sidecar is not connected"

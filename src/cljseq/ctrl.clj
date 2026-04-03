@@ -190,11 +190,13 @@
                             (max 0 (min max-val (long (Math/round (* pct (double max-val))))))))
               param-msb (bit-and (bit-shift-right nrpn 7) 0x7F)
               param-lsb (bit-and nrpn 0x7F)
-              ;; 14-bit: CC6 = value >> 7, CC38 = value & 0x7F
-              ;; 7-bit:  CC6 = value (0–127), CC38 omitted
-              data-msb  (if (= 14 bits)
-                          (bit-and (bit-shift-right clamped 7) 0x7F)
-                          clamped)
+              ;; Always use full 14-bit NRPN wire encoding: CC6=MSB, CC38=LSB.
+              ;; Wire value = CC6*128 + CC38 — this is what the Hydrasynth (and the
+              ;; MIDI NRPN standard) expects.  :bits only controls the user-facing
+              ;; value range (7 → [0,127], 14 → [0,16383]); it does NOT switch to a
+              ;; "CC6-only" encoding.  For a 7-bit param with value 5: CC6=0, CC38=5
+              ;; (wire value = 0*128+5 = 5 ✓), not CC6=5 (wire value = 5*128 = 640 ✗).
+              data-msb  (bit-and (bit-shift-right clamped 7) 0x7F)
               data-lsb  (bit-and clamped 0x7F)]
           (when (sidecar/connected?)
             ;; NRPN sequence must arrive in order: CC99 → CC98 → CC6 → CC38.
@@ -203,8 +205,7 @@
             (sidecar/send-cc! time-ns       ch 99 param-msb)
             (sidecar/send-cc! (+ time-ns 1) ch 98 param-lsb)
             (sidecar/send-cc! (+ time-ns 2) ch  6 data-msb)
-            (when (= 14 bits)
-              (sidecar/send-cc! (+ time-ns 3) ch 38 data-lsb))))
+            (sidecar/send-cc! (+ time-ns 3) ch 38 data-lsb)))
 
         ;; Other binding types: log and skip
         (binding [*out* *err*]
@@ -246,7 +247,9 @@
   `value`    — data value; 14-bit [0–16383] by default (see :bits option)
 
   Options:
-    :bits — 7 for 7-bit (CC6 only, no CC38); 14 for full 14-bit (default)
+    :bits — 7 for 7-bit value range [0,127]; 14 for 14-bit range [0,16383] (default).
+            Both always send CC99/CC98/CC6/CC38 using standard 14-bit wire encoding
+            (wire value = CC6*128 + CC38).  :bits only controls value clamping.
 
   Useful for compound-addressed Hydrasynth parameters (ribbon sub-params,
   ARP sub-params) where CC6 encodes a sub-parameter rather than data MSB.
@@ -272,15 +275,13 @@
            clamped   (max 0 (min max-val (long value)))
            param-msb (bit-and (bit-shift-right nrpn 7) 0x7F)
            param-lsb (bit-and nrpn 0x7F)
-           data-msb  (if (= 14 bits)
-                       (bit-and (bit-shift-right clamped 7) 0x7F)
-                       clamped)
+           ;; Always use full 14-bit encoding — see send-at! comment.
+           data-msb  (bit-and (bit-shift-right clamped 7) 0x7F)
            data-lsb  (bit-and clamped 0x7F)]
-       (sidecar/send-cc! now-ns ch 99 param-msb)
-       (sidecar/send-cc! now-ns ch 98 param-lsb)
-       (sidecar/send-cc! now-ns ch  6 data-msb)
-       (when (= 14 bits)
-         (sidecar/send-cc! now-ns ch 38 data-lsb))))))
+       (sidecar/send-cc! now-ns       ch 99 param-msb)
+       (sidecar/send-cc! (+ now-ns 1) ch 98 param-lsb)
+       (sidecar/send-cc! (+ now-ns 2) ch  6 data-msb)
+       (sidecar/send-cc! (+ now-ns 3) ch 38 data-lsb)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Node declaration (Q8)
