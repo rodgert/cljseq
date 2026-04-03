@@ -13,7 +13,7 @@
 ;;   Wire value = VV*128 + WW  (14-bit standard NRPN)
 ;;
 ;; NRPN entries in :midi/nrpn use :bits 7 :range [0 127] for 7-bit parameters
-;; (user passes the raw synth value 0–127 = direct CC6 passthrough).
+;; (value clamped to 0–127; wire encoding is still CC6=0, CC38=value).
 ;; Macro NRPNs use :bits 14 :range [0 16383]; native synth range is [0 1024].
 ;;
 ;; MPE notes:
