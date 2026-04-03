@@ -45,6 +45,18 @@
 
 (defonce ^:private system-ref (atom nil))
 
+;; ---------------------------------------------------------------------------
+;; Watcher registry
+;;
+;; {path {watch-key fn}} — keyed by watch-key so callers can remove them.
+;; Watchers fire synchronously (in the writer's thread) after every send! or
+;; set! that touches their path, AFTER MIDI dispatch completes.
+;; Exceptions in watchers are printed and swallowed so they can't kill the
+;; caller (e.g. a mod-route! runner thread).
+;; ---------------------------------------------------------------------------
+
+(defonce ^:private watchers (atom {}))
+
 (defn -register-system!
   "Wire ctrl to the shared system-state atom. Called by cljseq.core/start!."
   [ref]
@@ -101,6 +113,18 @@
                 (subvec new-stack 1)
                 new-stack)))))
 
+(defn- fire-watchers!
+  "Fire all watchers registered on `path` with `value`.
+  Called internally after every send-at! and set!."
+  [path value]
+  (doseq [[_ f] (clojure.core/get @watchers path)]
+    (try
+      (f path value)
+      (catch Exception e
+        (binding [*out* *err*]
+          (println (str "[ctrl] watcher error on " (pr-str path)
+                        ": " (.getMessage e))))))))
+
 ;; ---------------------------------------------------------------------------
 ;; Core read/write API
 ;; ---------------------------------------------------------------------------
@@ -137,6 +161,7 @@
            (let [node (or (get-node s path) (make-node))
                  s'   (if undoable (push-undo s) s)]
              (put-node s' path (assoc node :value value)))))
+  (fire-watchers! path value)
   nil)
 
 (defn send-at!
@@ -211,6 +236,7 @@
         (binding [*out* *err*]
           (println (str "[ctrl] send! binding type " (:type binding)
                         " at " (pr-str path) " not yet dispatched"))))))
+  (fire-watchers! path value)
   nil)
 
 (defn send!
@@ -434,6 +460,41 @@
             :type  (:type node)})
          (walk-nodes (:tree @s) []))
     []))
+
+;; ---------------------------------------------------------------------------
+;; Watcher API
+;; ---------------------------------------------------------------------------
+
+(defn watch!
+  "Register a callback fired synchronously after every send! or set! that
+  writes to `path`.
+
+  `watch-key` — any value; identifies this watcher for later removal.
+                Use a namespaced keyword to avoid collisions, e.g. ::my-ns/key.
+  `f`         — (fn [path value]) called after MIDI dispatch completes.
+
+  Re-registering the same path+watch-key replaces the previous callback.
+  Exceptions thrown by `f` are printed to stderr and swallowed.
+
+  Example:
+    (ctrl/watch! [:arc/tension] ::my-listener
+                 (fn [path v] (println path \"changed to\" v)))"
+  [path watch-key f]
+  (swap! watchers assoc-in [path watch-key] f)
+  nil)
+
+(defn unwatch!
+  "Remove the watcher identified by `watch-key` from `path`.
+  No-op if the key is not registered."
+  [path watch-key]
+  (swap! watchers update path dissoc watch-key)
+  nil)
+
+(defn unwatch-all!
+  "Remove all watchers registered on `path`."
+  [path]
+  (swap! watchers dissoc path)
+  nil)
 
 ;; ---------------------------------------------------------------------------
 ;; Checkpoints and panic (Q47)

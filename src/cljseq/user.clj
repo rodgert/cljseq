@@ -31,7 +31,8 @@
     (end-session!)
 
   See examples/ for full demonstrations."
-  (:require [cljseq.chord      :as chord]
+  (:require [cljseq.arc        :as arc]
+            [cljseq.chord      :as chord]
             [cljseq.core       :as core]
             [cljseq.dsl        :as dsl]
             [cljseq.fractal    :as frac]
@@ -98,14 +99,18 @@
 ;; Trajectory / arc types
 ;; ---------------------------------------------------------------------------
 
-(def trajectory   traj/trajectory)
-(def apply-curve  traj/apply-curve)
-(def buildup      traj/buildup)
-(def breakdown    traj/breakdown)
-(def groove-lock  traj/groove-lock)
-(def wind-down    traj/wind-down)
-(def mod-route!   mod/mod-route!)
-(def mod-unroute! mod/mod-unroute!)
+(def trajectory    traj/trajectory)
+(def apply-curve   traj/apply-curve)
+(def buildup       traj/buildup)
+(def breakdown     traj/breakdown)
+(def groove-lock   traj/groove-lock)
+(def wind-down     traj/wind-down)
+(def mod-route!    mod/mod-route!)
+(def mod-unroute!  mod/mod-unroute!)
+(def arc-bind!     arc/arc-bind!)
+(def arc-unbind!   arc/arc-unbind!)
+(def arc-send!     arc/arc-send!)
+(def arc-routes    arc/arc-routes)
 
 ;; ---------------------------------------------------------------------------
 ;; Re-export DSL
