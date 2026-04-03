@@ -208,6 +208,22 @@
 ;; stop-loop! / stop-all-loops!
 ;; ---------------------------------------------------------------------------
 
+(deftest stop-loop-removes-state-entry-test
+  (testing "stop-loop! causes the state entry to be removed after thread exits"
+    ;; Use sleep! 1 (= 1ms at 60000 BPM) so the thread exits promptly after
+    ;; stop-loop! unparks it — park-until-beat! re-parks if the deadline is
+    ;; far away, so a short sleep is needed to make unpark effective quickly.
+    (loop/deflive-loop :test-cleanup-loop {}
+      (loop/sleep! 1))
+    (Thread/sleep 20)
+    ;; Entry exists while running
+    (is (some? (get-in @(deref (loop/-system-ref)) [:loops :test-cleanup-loop])))
+    (loop/stop-loop! :test-cleanup-loop)
+    ;; Thread wakes from its 1ms sleep, checks running? → false, self-cleanup runs
+    (Thread/sleep 30)
+    (is (nil? (get-in @(deref (loop/-system-ref)) [:loops :test-cleanup-loop]))
+        "state entry removed after stop")))
+
 (deftest stop-loop-halts-execution-test
   (testing "stop-loop! prevents further iterations"
     (let [counter (atom 0)]

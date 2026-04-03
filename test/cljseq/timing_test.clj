@@ -128,13 +128,17 @@
         (with-redefs [cljseq.sidecar/connected?    (constantly true)
                       cljseq.sidecar/send-note-on!  (fn [t _ _ _] (reset! captured t))
                       cljseq.sidecar/send-note-off! (fn [& _] nil)]
-          (binding [loop-ns/*virtual-time* 0.0
+          ;; Use beat 100.0 (a downbeat — even 8th-note index) so that
+          ;; beat->epoch-ns is safely in the future and the max(wall,beat)
+          ;; clamp in play! picks the beat value, not wall-clock.
+          ;; At 120 BPM, beat 100 = 50 seconds from anchor → always future.
+          (binding [loop-ns/*virtual-time* 100.0
                     loop-ns/*timing-ctx*   (timing/swing :amount 0.6)]
             (core/play! :C4 1/4)))
         (let [tl       (:timeline @core/system-state)
-              expected (clock/beat->epoch-ns 0.0 tl)]
+              expected (clock/beat->epoch-ns 100.0 tl)]
           (is (= expected @captured)
-              "downbeat timestamp unmodified with swing")))
+              "downbeat timestamp unmodified by swing")))
       (finally (core/stop!)))))
 
 (deftest play-no-timing-ctx-unaffected-test

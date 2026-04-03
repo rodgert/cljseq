@@ -438,4 +438,8 @@
                     cljseq.sidecar/send-cc!   (fn [t _ch _cc _val]
                                                 (swap! timestamps conj t))]
         (ctrl/send-at! 777000 [:send-at/nrpn] 8192))
-      (is (= #{777000} @timestamps) "all 4 NRPN CCs use the given timestamp"))))
+      ;; 1ns sequential offsets are added to preserve scheduler heap order
+      ;; (CC99 → CC98 → CC6 → CC38 must arrive in order). Base timestamp is
+      ;; the first CC; subsequent CCs get +1/+2/+3 ns.
+      (is (= #{777000 777001 777002 777003} @timestamps)
+          "4 NRPN CCs use sequentially offset timestamps (+0/+1/+2/+3 ns)"))))

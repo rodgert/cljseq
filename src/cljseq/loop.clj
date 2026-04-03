@@ -296,14 +296,24 @@
                          (when (cljseq.link/active?)
                            (cljseq.loop/-park-until-beat! start-beat#))
                          (loop []
-                         (when @running?#
-                           (let [f# (get-in @@sref#
-                                            [:loops ~loop-name :fn])]
-                             (f#)
-                             (swap! @sref#
-                                    update-in [:loops ~loop-name :tick-count]
-                                    inc))
-                           (recur)))))))]
+                           (when @running?#
+                             (let [f# (get-in @@sref#
+                                              [:loops ~loop-name :fn])]
+                               (f#)
+                               (swap! @sref#
+                                      update-in [:loops ~loop-name :tick-count]
+                                      inc))
+                             (recur)))
+                         ;; Self-cleanup: remove our state entry when exiting.
+                         ;; Only remove if we're still the current entry — a new
+                         ;; deflive-loop with the same name may have already
+                         ;; started a fresh thread with a different running? atom.
+                         (swap! @sref# update :loops
+                                (fn [loops#]
+                                  (if (identical? running?#
+                                                  (get-in loops# [~loop-name :running?]))
+                                    (dissoc loops# ~loop-name)
+                                    loops#)))))))]
            (.setDaemon t# true)
            (.setName t# (str "cljseq-loop-" (name ~loop-name)))
            (swap! @sref# assoc-in [:loops ~loop-name :thread] t#)
@@ -321,11 +331,16 @@
 ;; ---------------------------------------------------------------------------
 
 (defn stop-loop!
-  "Stop a named loop. The thread finishes its current iteration then exits."
+  "Stop a named loop. The thread finishes its current sleep then exits.
+
+  Unparks the loop thread immediately so it wakes from sleep! without waiting
+  for its current deadline — useful for tight test timing and REPL responsiveness."
   [loop-name]
   (when-let [s @system-ref]
-    (when-let [running? (get-in @s [:loops loop-name :running?])]
-      (reset! running? false)))
+    (when-let [{:keys [running? thread]} (get-in @s [:loops loop-name])]
+      (reset! running? false)
+      (when thread
+        (LockSupport/unpark ^Thread thread))))
   nil)
 
 (defn stop-all-loops!
