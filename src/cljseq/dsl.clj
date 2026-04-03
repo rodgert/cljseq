@@ -45,11 +45,14 @@
     (tick-mods!)                         ; sample all *mod-ctx* mods → ctrl/send!
 
   Key design decisions: §27 (DSL Sugar Layer), R&R usability corpus."
-  (:require [cljseq.clock  :as clock]
+  (:require [cljseq.chord  :as chord-ns]
+            [cljseq.clock  :as clock]
             [cljseq.core  :as core]
             [cljseq.ctrl  :as ctrl]
             [cljseq.loop  :as loop-ns]
-            [cljseq.mod   :as mod-ns]))
+            [cljseq.mod   :as mod-ns]
+            [cljseq.pitch :as pitch]
+            [cljseq.scale :as scale-ns]))
 
 ;; ---------------------------------------------------------------------------
 ;; Dynamic configuration vars (Configuration Registry, R&R §25)
@@ -253,6 +256,72 @@
                  ctx))
     step))
 
+;; ---------------------------------------------------------------------------
+;; Harmony context management (§4.3)
+;; *harmony-ctx* is defined in cljseq.loop; dsl provides the user-facing API.
+;; ---------------------------------------------------------------------------
+
+(defn use-harmony!
+  "Set the default harmonic context for the REPL session.
+
+  `s` should be a cljseq.scale/Scale record, or nil to clear.
+
+  Example:
+    (use-harmony! (scale/scale :C 4 :major))
+    (use-harmony! nil)   ; clear
+
+  Not thread-safe — intended for interactive REPL use only.
+  Inside live loops, use the :harmony key in deflive-loop opts instead."
+  [s]
+  (alter-var-root #'loop-ns/*harmony-ctx* (constantly s))
+  nil)
+
+(defmacro with-harmony
+  "Execute `body` with `s` as the active harmonic context.
+
+  `s` — a cljseq.scale/Scale record (from cljseq.scale/scale).
+
+  Example:
+    (with-harmony (scale/scale :C 4 :major)
+      (play! (root))
+      (play! (scale-degree 4)))"
+  [s & body]
+  `(binding [loop-ns/*harmony-ctx* ~s]
+     ~@body))
+
+(defn root
+  "Return the root Pitch of the current harmonic context (*harmony-ctx*).
+  Throws if no harmonic context is active."
+  []
+  (if-let [s loop-ns/*harmony-ctx*]
+    (:root s)
+    (throw (ex-info "root: no *harmony-ctx* active" {}))))
+
+(defn fifth
+  "Return the fifth-degree Pitch of the current harmonic context.
+  Throws if no harmonic context is active."
+  []
+  (if-let [s loop-ns/*harmony-ctx*]
+    (scale-ns/pitch-at s 4)
+    (throw (ex-info "fifth: no *harmony-ctx* active" {}))))
+
+(defn scale-degree
+  "Return the Pitch at 0-based scale degree `n` in the current harmonic context.
+  Negative degrees and degrees beyond the octave are supported.
+  Throws if no harmonic context is active."
+  [n]
+  (if-let [s loop-ns/*harmony-ctx*]
+    (scale-ns/pitch-at s n)
+    (throw (ex-info "scale-degree: no *harmony-ctx* active" {}))))
+
+(defn in-key?
+  "Return true if pitch `p` (Pitch, keyword, or MIDI int) is in the current
+  harmonic context. Throws if no harmonic context is active."
+  [p]
+  (if-let [s loop-ns/*harmony-ctx*]
+    (scale-ns/in-scale? s (pitch/->pitch p))
+    (throw (ex-info "in-key?: no *harmony-ctx* active" {}))))
+
 (defn tick-mods!
   "Sample all modulators in *mod-ctx* at the current virtual time and route
   each sampled value to ctrl/send!.
@@ -288,6 +357,7 @@
     (play! 60)           ; MIDI integer, *default-dur*
     (play! 60 1/4)       ; MIDI integer + explicit duration
     (play! {:pitch/midi 60 :dur/beats 1/2})  ; step map (passthrough)
+    (play! (root))       ; Pitch record from *harmony-ctx*
 
   Synth context (*synth-ctx*) provides :midi/channel and :mod/velocity
   defaults. Per-note step map keys override context; context overrides the
@@ -297,6 +367,8 @@
   ([note dur]
    (let [ctx  loop-ns/*synth-ctx*
          step (cond
+                ;; Pitch record check must precede map? since defrecords are maps
+                (instance? cljseq.pitch.Pitch note) {:pitch/midi (pitch/pitch->midi note)}
                 (map? note)     note
                 (keyword? note) {:pitch/midi (core/keyword->midi note)}
                 (integer? note) {:pitch/midi (long note)}
@@ -430,38 +502,62 @@
 (defn play-chord!
   "Play all notes of a chord simultaneously.
 
-  Usage: (play-chord! :C4 :major)
+  Accepts:
+    (play-chord! :C4 :major)          ; root keyword + quality keyword
+    (play-chord! :C4 :major 1)        ; with inversion
+    (play-chord! chord-record)         ; cljseq.chord/Chord record
+    (play-chord! [60 64 67])           ; raw MIDI integer vector
 
   Inherits the active synth context (*synth-ctx*)."
-  [root quality]
-  (let [intervals (case quality
-                    :major [0 4 7]
-                    :minor [0 3 7]
-                    :dim   [0 3 6]
-                    :aug   [0 4 8]
-                    [0 4 7])
-        root-midi (core/keyword->midi root)]
-    (doseq [offset intervals]
-      (play! (+ root-midi offset) *default-dur*))))
+  ([chord-or-root]
+   (let [midis (cond
+                 (instance? cljseq.chord.Chord chord-or-root)
+                 (chord-ns/chord->midis chord-or-root)
+                 (sequential? chord-or-root)
+                 (vec chord-or-root)
+                 :else (throw (ex-info "play-chord!: unrecognised form"
+                                       {:arg chord-or-root})))]
+     (doseq [m midis] (play! m *default-dur*))))
+  ([root quality]
+   (play-chord! root quality 0))
+  ([root quality inversion]
+   (let [p (pitch/keyword->pitch root)]
+     (when-not p
+       (throw (ex-info "play-chord!: unrecognised root keyword" {:root root})))
+     (doseq [m (chord-ns/chord->midis (chord-ns/->Chord p quality (int inversion)))]
+       (play! m *default-dur*)))))
 
 ;; ---------------------------------------------------------------------------
 ;; choose-from-scale — random scale degree
 ;; ---------------------------------------------------------------------------
 
-(def ^:private scale-intervals
-  {:major [0 2 4 5 7 9 11]
-   :minor [0 2 3 5 7 8 10]
-   :dorian [0 2 3 5 7 9 10]
-   :pentatonic [0 2 4 7 9]})
-
 (defn choose-from-scale
   "Return a random MIDI note from the given key and scale.
 
-  Usage: (choose-from-scale :C :major)  ; => random MIDI note in C major"
+  Accepts:
+    (choose-from-scale :C :major)              ; keyword key + scale name
+    (choose-from-scale :C :major :octave 3)    ; specify octave
+    (choose-from-scale :D scale-record)        ; cljseq.scale/Scale record as scale
+
+  When a Scale record is passed, the root of the record is used directly
+  and the `key` argument determines the octave override only."
   [key scale & {:keys [octave] :or {octave 4}}]
-  (let [root     (core/keyword->midi (keyword (str (name key) octave)))
-        offsets  (get scale-intervals scale [0 2 4 5 7 9 11])]
-    (+ root (rand-nth offsets))))
+  (cond
+    (instance? cljseq.scale.Scale scale)
+    (pitch/pitch->midi
+      (scale-ns/pitch-at scale (rand-int (count (:intervals scale)))))
+
+    (keyword? scale)
+    (let [root    (core/keyword->midi (keyword (str (name key) octave)))
+          s       (scale-ns/named-scale scale)
+          offsets (if s
+                    (vec (butlast (reductions + 0 (:intervals s))))
+                    [0 2 4 5 7 9 11])]
+      (+ root (rand-nth offsets)))
+
+    :else
+    (throw (ex-info "choose-from-scale: scale must be keyword or Scale record"
+                    {:scale scale}))))
 
 ;; ---------------------------------------------------------------------------
 ;; arp! — arpeggiate a chord
@@ -470,19 +566,78 @@
 (defn arp!
   "Arpeggiate a chord.
 
-  Usage: (arp! :C4 :major :up 1/16)
+  Accepts:
+    (arp! :C4 :major :up 1/16)         ; keyword root + quality
+    (arp! chord-record :up 1/16)       ; cljseq.chord/Chord record
+    (arp! [60 64 67] :up 1/16)         ; raw MIDI vector
 
   Plays all chord tones in sequence, each separated by `step-dur` beats.
   Direction: :up (default), :down, :up-down.
   Inherits the active synth context (*synth-ctx*)."
-  [root quality direction step-dur]
-  (let [intervals (get {:major [0 4 7] :minor [0 3 7]} quality [0 4 7])
-        root-midi (core/keyword->midi root)
-        notes     (map #(+ root-midi %) intervals)
-        ordered   (case direction
+  ([chord-or-root direction step-dur]
+   (let [notes (cond
+                 (instance? cljseq.chord.Chord chord-or-root)
+                 (chord-ns/chord->midis chord-or-root)
+                 (sequential? chord-or-root)
+                 (vec chord-or-root)
+                 :else (throw (ex-info "arp!: unrecognised chord form"
+                                       {:arg chord-or-root})))
+         ordered (case direction
+                   :down    (vec (reverse notes))
+                   :up-down (vec (concat notes (rest (reverse notes))))
+                   notes)]
+     (doseq [n ordered]
+       (play! n step-dur)
+       (core/sleep! step-dur))))
+  ([root quality direction step-dur]
+   (let [parsed (pitch/keyword->pitch root)
+         c      (if parsed
+                  (chord-ns/->Chord parsed quality 0)
+                  (throw (ex-info "arp!: unrecognised root keyword" {:root root})))
+         notes  (chord-ns/chord->midis c)
+         ordered (case direction
                     :down    (reverse notes)
                     :up-down (concat notes (rest (reverse notes)))
                     notes)]
     (doseq [n ordered]
       (play! n step-dur)
-      (core/sleep! step-dur))))
+      (core/sleep! step-dur)))))
+
+;; ---------------------------------------------------------------------------
+;; Voice-leading DSL helpers
+;; ---------------------------------------------------------------------------
+
+(defn play-voicing!
+  "Play a voiced chord (vector of MIDI integers) simultaneously.
+
+  Usage:
+    (play-voicing! [60 64 67])                       ; C major close
+    (play-voicing! (voice/close-position my-chord))  ; via cljseq.voice
+
+  Inherits the active synth context (*synth-ctx*)."
+  [midis]
+  (doseq [m midis] (play! m *default-dur*)))
+
+(defn play-progression!
+  "Play a voice-led chord progression, one chord per `dur` beats.
+
+  `chords` — seq of Chord records (cljseq.chord/Chord).
+  `dur`    — duration in beats for each chord (default: 1).
+
+  Applies smooth voice leading between chords. Plays all notes of each
+  chord simultaneously, then sleeps for `dur` beats.
+
+  Example:
+    (play-progression! [(chord/chord :C 4 :major)
+                        (chord/chord :F 4 :major)
+                        (chord/chord :G 4 :dom7)
+                        (chord/chord :C 4 :major)]
+                       4)"
+  ([chords]
+   (play-progression! chords 1))
+  ([chords dur]
+   (let [voice-ns (requiring-resolve 'cljseq.voice/smooth-progression)
+         voiced   (voice-ns chords)]
+     (doseq [v voiced]
+       (play-voicing! v)
+       (core/sleep! dur)))))

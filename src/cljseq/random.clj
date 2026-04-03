@@ -19,7 +19,8 @@
   ## Progressive quantization
     (progressive-quantize 61 (weighted-scale :major) 0.7) ; C# -> C or D
 
-  Key design decisions: R&R §23.4-23.5, Q36 (weighted scale as map extension).")
+  Key design decisions: R&R §23.4-23.5, Q36 (weighted scale as map extension)."
+  (:require [cljseq.pitch :as pitch]))
 
 ;; ---------------------------------------------------------------------------
 ;; Scale definitions
@@ -118,34 +119,59 @@
 ;; Progressive quantization (§23.4 — steps parameter)
 ;; ---------------------------------------------------------------------------
 
-(defn progressive-quantize
-  "Quantize `midi-note` to a weighted scale controlled by `steps`.
+(defn- step-intervals->offsets
+  "Convert step intervals (e.g. [2 2 1 2 2 2 1] for major) to cumulative
+  pitch-class offsets from root (e.g. [0 2 4 5 7 9 11])."
+  [step-intervals]
+  (vec (butlast
+         (reduce (fn [acc x] (conj acc (+ (peek acc) x)))
+                 [0]
+                 step-intervals))))
 
-  `midi-note`      — integer MIDI note [0-127]
-  `weighted-scale` — map from (weighted-scale ...) with :intervals and :weights
-  `steps`          — quantization depth [0.0-1.0]
-                     <= 0.5: raw (no quantization; slewing deferred to Phase 2)
-                     >  0.5: quantize with threshold = (steps-0.5)*2
-                             degrees with weight < threshold are excluded
-                     =  1.0: only highest-weight degree (tonic) survives
+(defn- scale->intervals-weights
+  "Extract [intervals weights] from either a weighted-scale map or a
+  cljseq.scale/Scale record. Scale records get uniform weights (1.0 each).
+
+  weighted-scale maps already store cumulative offsets in :intervals.
+  Scale records store step intervals in :intervals — these are converted."
+  [s]
+  (if (:weights s)
+    ;; weighted-scale map — :intervals already cumulative offsets
+    [(:intervals s) (:weights s)]
+    ;; Scale record — :intervals are step sizes, convert to cumulative offsets
+    (let [offsets (step-intervals->offsets (:intervals s))]
+      [offsets (vec (repeat (count offsets) 1.0))])))
+
+(defn progressive-quantize
+  "Quantize `midi-note` to a scale controlled by `steps`.
+
+  `midi-note` — integer MIDI note [0-127]
+  `s`         — weighted-scale map (from weighted-scale) OR a cljseq.scale/Scale
+                record. Scale records use uniform weights (every degree equally
+                likely). Weighted-scale maps honour per-degree weights.
+  `steps`     — quantization depth [0.0-1.0]
+                <= 0.5: raw (no quantization)
+                >  0.5: quantize with threshold = (steps-0.5)*2
+                =  1.0: only highest-weight degree (tonic) survives
 
   Returns the quantized MIDI note in the same octave as the input."
-  [midi-note {:keys [intervals weights]} steps]
-  (if (<= (double steps) 0.5)
-    (int midi-note)
-    (let [threshold (* (- (double steps) 0.5) 2.0)
-          eligible  (for [[iv w] (map vector intervals weights)
-                          :when (>= (double w) threshold)]
-                      (int iv))
-          eligible  (if (empty? eligible) [(first intervals)] eligible)
-          pitch     (mod (int midi-note) 12)
-          octave    (* 12 (quot (int midi-note) 12))
-          best      (apply min-key
-                           (fn [iv]
-                             (let [d (Math/abs (- pitch iv))]
-                               (min d (- 12 d))))
-                           eligible)]
-      (+ octave (int best)))))
+  [midi-note s steps]
+  (let [[intervals weights] (scale->intervals-weights s)]
+    (if (<= (double steps) 0.5)
+      (int midi-note)
+      (let [threshold (* (- (double steps) 0.5) 2.0)
+            eligible  (for [[iv w] (map vector intervals weights)
+                            :when (>= (double w) threshold)]
+                        (int iv))
+            eligible  (if (empty? eligible) [(first intervals)] eligible)
+            pc        (mod (int midi-note) 12)
+            octave    (* 12 (quot (int midi-note) 12))
+            best      (apply min-key
+                             (fn [iv]
+                               (let [d (Math/abs (- pc iv))]
+                                 (min d (- 12 d))))
+                             eligible)]
+        (+ octave (int best))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Scale weight learning from a note corpus
@@ -164,8 +190,9 @@
   Example:
     (learn-scale-weights [60 62 64 60 62 60 67 65])
     ;=> {:scale/type :major :intervals [0 2 4 5 7 9 11] :weights [1.0 0.5 ...]}"
-  [midi-notes & {:keys [scale-kw] :or {scale-kw :major}}]
-  (let [intervals (get scale-intervals scale-kw [0 2 4 5 7 9 11])
+  [midi-notes & {:keys [scale-kw scale] :or {scale-kw :major}}]
+  (let [intervals (or (and scale (step-intervals->offsets (:intervals scale)))
+                      (get scale-intervals scale-kw [0 2 4 5 7 9 11]))
         snap      (fn [pc]
                     (apply min-key
                            (fn [iv] (let [d (Math/abs (- pc iv))]

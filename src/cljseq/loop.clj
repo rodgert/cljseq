@@ -118,6 +118,21 @@
      :gate/len       (mod/lfo (->Phasor 1/8 0) phasor/sine-uni)}"
   nil)
 
+(def ^:dynamic *harmony-ctx*
+  "Active harmonic context for the current thread (§4.3).
+  A cljseq.scale/Scale record (root + interval pattern), or nil.
+
+  Used by dsl/root, dsl/fifth, dsl/scale-degree to derive pitches from the
+  current key/scale without hard-coding MIDI numbers.
+
+  Bound per-thread by deflive-loop (from the :harmony key in opts) and by
+  cljseq.dsl/with-harmony. Set at the REPL root with cljseq.dsl/use-harmony!.
+
+  Example:
+    (scale/scale :C 4 :major)      ; C major, root C4
+    (scale/scale :D 3 :dorian)     ; D dorian, root D3"
+  nil)
+
 (def ^:dynamic *virtual-time*
   "Current beat position, anchored to the master timeline.
   Advanced by sleep!. Bound per-thread by deflive-loop.
@@ -245,11 +260,13 @@
          timing-ctx#    (:timing ~opts)
          mod-ctx#       (:mod ~opts)
          step-mod-ctx#  (:step-mods ~opts)
+         harmony-ctx#   (:harmony ~opts)
          loop-fn#       (fn []
                           (binding [cljseq.loop/*synth-ctx*     synth-ctx#
                                     cljseq.loop/*timing-ctx*    timing-ctx#
                                     cljseq.loop/*mod-ctx*       mod-ctx#
-                                    cljseq.loop/*step-mod-ctx*  step-mod-ctx#]
+                                    cljseq.loop/*step-mod-ctx*  step-mod-ctx#
+                                    cljseq.loop/*harmony-ctx*   harmony-ctx#]
                             ~@body))
          sref#       (cljseq.loop/-system-ref)]
      (if (get-in @@sref# [:loops ~loop-name])

@@ -2,7 +2,8 @@
 (ns cljseq.random-test
   "Unit tests for cljseq.random — distribution primitives and weighted scales."
   (:require [clojure.test :refer [deftest is testing]]
-            [cljseq.random :as random]))
+            [cljseq.random :as random]
+            [cljseq.scale  :as scale]))
 
 ;; ---------------------------------------------------------------------------
 ;; rand-gaussian — statistical sanity
@@ -134,3 +135,43 @@
   (testing "empty note list returns all-zero weights"
     (let [ws (random/learn-scale-weights [])]
       (is (every? zero? (:weights ws))))))
+
+;; ---------------------------------------------------------------------------
+;; Scale record integration
+;; ---------------------------------------------------------------------------
+
+(deftest progressive-quantize-accepts-scale-record-test
+  (testing "progressive-quantize works with a Scale record (uniform weights)"
+    (let [s (scale/scale :C 4 :major)]
+      ;; C# (61) at full quantization should snap to C (60) or D (62)
+      (let [result (random/progressive-quantize 61 s 1.0)]
+        (is (#{60 62} result) "C# snaps to C or D in C major")))))
+
+(deftest progressive-quantize-scale-vs-weighted-test
+  (testing "Scale record: C# snaps toward C at steps=0.8 (uniform weights keep all degrees)"
+    ;; With uniform weights (Scale record), threshold = (0.8-0.5)*2 = 0.6.
+    ;; All degrees have weight 1.0 >= 0.6, so all are eligible.
+    ;; C# (pc=1) is closest to C (0) or D (2).
+    (let [s      (scale/scale :C 4 :major)
+          result (random/progressive-quantize 61 s 0.8)]
+      (is (#{60 62} result) "C# snaps to C or D (nearest scale members)")))
+  (testing "weighted-scale at steps=1.0 collapses to tonic only"
+    ;; Default weights: only tonic (1.0) survives at threshold=1.0.
+    (let [ws     (random/weighted-scale :major)
+          result (random/progressive-quantize 64 ws 1.0)]
+      (is (= 0 (mod result 12)) "All pitches snap to tonic at steps=1.0"))))
+
+(deftest progressive-quantize-scale-raw-test
+  (testing "steps <= 0.5 passes through unchanged for Scale record"
+    (let [s (scale/scale :C 4 :major)]
+      (is (= 61 (random/progressive-quantize 61 s 0.0)))
+      (is (= 61 (random/progressive-quantize 61 s 0.5))))))
+
+(deftest learn-scale-weights-with-scale-record-test
+  (testing "learn-scale-weights accepts :scale option with Scale record"
+    (let [s  (scale/scale :C 4 :major)
+          ws (random/learn-scale-weights [60 62 64 65 67] :scale s)]
+      (is (vector? (:intervals ws)))
+      (is (vector? (:weights ws)))
+      ;; intervals should match the major scale
+      (is (= [0 2 4 5 7 9 11] (:intervals ws))))))

@@ -7,7 +7,9 @@
             [cljseq.ctrl  :as ctrl]
             [cljseq.dsl   :as dsl]
             [cljseq.loop  :as loop-ns]
-            [cljseq.phasor :as phasor]))
+            [cljseq.phasor :as phasor]
+            [cljseq.pitch :as pitch]
+            [cljseq.scale :as scale]))
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers
@@ -445,4 +447,85 @@
           (let [step (deref observed 500 nil)]
             (is (some? step) "play! should have been called")
             (is (= 33 (:mod/velocity step)) "step-mod applied in loop"))))
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; Harmony context (*harmony-ctx*)
+;; ---------------------------------------------------------------------------
+
+(deftest harmony-use-harmony-test
+  (testing "use-harmony! sets *harmony-ctx* root binding"
+    (let [s (scale/scale :C 4 :major)]
+      (dsl/use-harmony! s)
+      (is (= s loop-ns/*harmony-ctx*))
+      (dsl/use-harmony! nil)
+      (is (nil? loop-ns/*harmony-ctx*)))))
+
+(deftest harmony-with-harmony-test
+  (testing "with-harmony scopes *harmony-ctx* to body"
+    (let [s (scale/scale :D 4 :dorian)]
+      (dsl/with-harmony s
+        (is (= s loop-ns/*harmony-ctx*)))
+      (is (nil? loop-ns/*harmony-ctx*)))))
+
+(deftest harmony-root-test
+  (testing "root returns the root pitch of *harmony-ctx*"
+    (dsl/with-harmony (scale/scale :C 4 :major)
+      (let [r (dsl/root)]
+        (is (= 60 (pitch/pitch->midi r))))))
+  (testing "root throws when no context"
+    (is (thrown? Exception (dsl/root)))))
+
+(deftest harmony-fifth-test
+  (testing "fifth returns degree 4 of *harmony-ctx*"
+    (dsl/with-harmony (scale/scale :C 4 :major)
+      ;; degree 4 of C major = G4 = MIDI 67
+      (is (= 67 (pitch/pitch->midi (dsl/fifth))))))
+  (testing "fifth throws when no context"
+    (is (thrown? Exception (dsl/fifth)))))
+
+(deftest harmony-scale-degree-test
+  (testing "scale-degree returns pitch at given degree"
+    (dsl/with-harmony (scale/scale :C 4 :major)
+      (is (= 60 (pitch/pitch->midi (dsl/scale-degree 0))))   ; C4
+      (is (= 62 (pitch/pitch->midi (dsl/scale-degree 1))))   ; D4
+      (is (= 72 (pitch/pitch->midi (dsl/scale-degree 7)))))  ; C5 (octave up)
+  (testing "scale-degree throws when no context"
+    (is (thrown? Exception (dsl/scale-degree 0))))))
+
+(deftest harmony-in-key-test
+  (testing "in-key? returns true for scale members"
+    (dsl/with-harmony (scale/scale :C 4 :major)
+      (is (dsl/in-key? (pitch/pitch :C 4)))
+      (is (dsl/in-key? :G4))
+      (is (not (dsl/in-key? (pitch/pitch :C 4 :sharp))))))
+  (testing "in-key? throws when no context"
+    (is (thrown? Exception (dsl/in-key? :C4)))))
+
+(deftest play-with-pitch-record-test
+  (testing "play! accepts a Pitch record"
+    (core/start! :bpm 6000)
+    (try
+      (let [observed (promise)]
+        (with-redefs [core/play! (fn [step] (deliver observed step))]
+          (dsl/play! (pitch/pitch :C 4) 1/4)
+          (let [step (deref observed 200 nil)]
+            (is (some? step) "play! should have been called")
+            (is (= 60 (:pitch/midi step)) "MIDI derived from Pitch record"))))
+      (finally (core/stop!)))))
+
+(deftest harmony-context-in-deflive-loop-test
+  (testing ":harmony opt binds *harmony-ctx* for the loop thread"
+    (core/start! :bpm 6000)
+    (try
+      (let [s        (scale/scale :G 4 :major)
+            observed (promise)]
+        (with-redefs [core/play! (fn [step] (deliver observed step))]
+          (core/deflive-loop :harmony-loop-test {:harmony s}
+            (dsl/play! (dsl/root) 1/4)
+            (core/stop-loop! :harmony-loop-test))
+          (let [step (deref observed 500 nil)]
+            (is (some? step) "play! should have been called")
+            ;; G4 = MIDI 67
+            (is (= 67 (:pitch/midi step)) "root of G major = G4"))))
       (finally (core/stop!)))))
