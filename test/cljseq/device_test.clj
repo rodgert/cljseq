@@ -29,7 +29,7 @@
   (testing "throws on missing resource"
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo
-         #"resource not found"
+         #"not found"
          (device/load-device-map "devices/nonexistent.edn")))))
 
 ;; ---------------------------------------------------------------------------

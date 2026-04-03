@@ -51,7 +51,8 @@
   Q55 (defdevice design — see inline notes in device.clj prior sprint)."
   (:require [clojure.java.io :as io]
             [clojure.edn     :as edn]
-            [cljseq.ctrl     :as ctrl]))
+            [cljseq.ctrl     :as ctrl]
+            [cljseq.dirs     :as dirs]))
 
 ;; ---------------------------------------------------------------------------
 ;; Device registry
@@ -65,16 +66,31 @@
 ;; ---------------------------------------------------------------------------
 
 (defn load-device-map
-  "Load a device map from a classpath resource path.
+  "Load a device map by filename, searching user data before classpath.
 
-  The path is relative to the classpath root (resources/ directory).
+  `name-or-path` — filename only (e.g. \"hydrasynth-explorer.edn\"), or a
+                   legacy full classpath path (e.g. \"devices/hydrasynth-explorer.edn\").
+                   Both forms are accepted for backwards compatibility.
+
+  Search order (filename form):
+    1. (dirs/devices-dir)/<name>          — user-created or learned map
+    2. classpath resources/devices/<name> — built-in map
+
   Example:
-    (load-device-map \"devices/korg-minilogue-xd.edn\")"
-  [resource-path]
-  (if-let [r (io/resource resource-path)]
-    (edn/read-string (slurp r))
-    (throw (ex-info "cljseq.device/load-device-map: resource not found"
-                    {:path resource-path}))))
+    (load-device-map \"hydrasynth-explorer.edn\")
+    (load-device-map \"devices/hydrasynth-explorer.edn\")  ; legacy — still works"
+  [name-or-path]
+  (let [;; Normalise: strip leading "devices/" prefix if present so both
+        ;; "hydrasynth-explorer.edn" and "devices/hydrasynth-explorer.edn" work.
+        fname (if (.startsWith ^String name-or-path "devices/")
+                (subs name-or-path (count "devices/"))
+                name-or-path)]
+    (if-let [url (dirs/resolve-device-resource fname)]
+      (edn/read-string (slurp url))
+      (throw (ex-info "cljseq.device/load-device-map: device map not found"
+                      {:name name-or-path
+                       :searched [(dirs/devices-dir)
+                                  (str "classpath:resources/devices/" fname)]})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Resolver building — :values [{:value n :label kw}] → {:label n}

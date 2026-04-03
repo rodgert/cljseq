@@ -44,6 +44,7 @@
             [clojure.java.io :as io]
             [clojure.string  :as str]
             [cljseq.core     :as core]
+            [cljseq.dirs     :as dirs]
             [cljseq.dsl      :as dsl]
             [cljseq.loop     :as loop-ns])
   (:import  [java.lang ProcessBuilder ProcessBuilder$Redirect]))
@@ -63,9 +64,10 @@
 
 (def ^:dynamic *cache-dir*
   "Directory for on-disk EDN cache files.
-  Default: ~/.cache/cljseq/m21/
-  Override: (alter-var-root #'m21/*cache-dir* (constantly \"/my/path\"))"
-  (str (System/getProperty "user.home") "/.cache/cljseq/m21"))
+  Default: (dirs/corpora-dir)/m21  (~/.local/share/cljseq/corpora/m21 on XDG)
+  Override: (alter-var-root #'m21/*cache-dir* (constantly \"/my/path\"))
+  or set CLJSEQ_DATA_DIR to redirect the entire user data tree."
+  (str (dirs/corpora-dir) "/m21"))
 
 ;; ---------------------------------------------------------------------------
 ;; Cache — in-memory + on-disk EDN cache for extracted corpora
