@@ -272,3 +272,50 @@
         (is (not= :timeout ctx))
         (is (= {:midi/channel 5} ctx) "synth ctx bound correctly"))
       (loop/stop-loop! :test-ctx-loop))))
+
+;; ---------------------------------------------------------------------------
+;; Resilient loop — errors do not kill the thread
+;; ---------------------------------------------------------------------------
+
+(deftest loop-survives-body-exception-test
+  (testing "a body exception is caught and the loop continues"
+    (let [counter  (atom 0)
+          throw?   (atom true)]
+      (loop/deflive-loop :test-error-loop {}
+        (swap! counter inc)
+        (when @throw?
+          (throw (ex-info "deliberate test error" {})))
+        (loop/sleep! 1))
+      ;; Let it throw for a few iterations, then disable the throw
+      (Thread/sleep 30)
+      (reset! throw? false)
+      (let [count-at-disable @counter]
+        (Thread/sleep 30)
+        (is (> @counter count-at-disable)
+            "loop kept running after exception"))
+      (loop/stop-loop! :test-error-loop))))
+
+(deftest loop-restarts-after-crash-test
+  (testing "deflive-loop detects a dead thread and starts a fresh one"
+    ;; Simulate a crashed loop by creating an entry with a dead thread
+    ;; and running?=true (exactly what happens when the body throws before
+    ;; the try-catch was in place, or with an Error that bypasses Exception).
+    (let [v        (atom :initial)
+          dead-t   (doto (Thread. (fn [])) (.start))
+          running? (atom true)
+          sref     @(loop/-system-ref)]
+      ;; Wait for the thread to die naturally
+      (.join dead-t 200)
+      ;; Inject the stale entry directly
+      (swap! sref assoc-in [:loops :test-crash-loop]
+             {:fn         (fn [] (reset! v :stale))
+              :tick-count 0
+              :running?   running?
+              :thread     dead-t})
+      ;; Re-evaluate — should detect dead thread and start fresh
+      (loop/deflive-loop :test-crash-loop {}
+        (reset! v :fresh)
+        (loop/sleep! 1000))
+      (Thread/sleep 30)
+      (is (= :fresh @v) "fresh loop body ran after dead thread detected")
+      (loop/stop-loop! :test-crash-loop))))

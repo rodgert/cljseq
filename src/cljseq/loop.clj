@@ -7,7 +7,10 @@
   name (Q11).
 
   Re-evaluating a `deflive-loop` form hot-swaps the body: the running thread
-  picks up the new fn at its next iteration without restarting.
+  picks up the new fn at its next iteration without restarting. If the body
+  throws an exception the error is printed and the loop continues — it does
+  not stop. Re-evaluating a `deflive-loop` whose thread has died (crash or
+  explicit stop) starts a fresh thread rather than silently updating dead state.
 
   Virtual time (`*virtual-time*`) is a thread-local beat counter anchored to
   the master timeline. `sleep!` advances it and parks the thread until the
@@ -286,11 +289,16 @@
                                     cljseq.loop/*chord-ctx*     chord-ctx#]
                             ~@body))
          sref#       (cljseq.loop/-system-ref)]
-     ;; Clear a stale entry (loop was stopped but entry was not removed).
-     ;; If we don't do this, re-using the name hot-swaps the fn into a dead
-     ;; thread and the new body never executes.
+     ;; Clear a stale entry so re-evaluation starts a fresh thread instead of
+     ;; silently hot-swapping into a loop that will never pick up the new fn.
+     ;; Two cases that produce stale entries:
+     ;;   (a) loop was stopped: running? = false
+     ;;   (b) loop body threw and killed the thread: running? still true but
+     ;;       the thread is no longer alive
      (when-let [entry# (get-in @@sref# [:loops ~loop-name])]
-       (when-not @(:running? entry#)
+       (when (or (not @(:running? entry#))
+                 (when-let [t# ^Thread (:thread entry#)]
+                   (not (.isAlive t#))))
          (swap! @sref# update :loops dissoc ~loop-name)))
      (if (get-in @@sref# [:loops ~loop-name])
        ;; Hot-swap: loop is running — update fn; thread picks it up next iteration
@@ -316,7 +324,13 @@
                            (when @running?#
                              (let [f# (get-in @@sref#
                                               [:loops ~loop-name :fn])]
-                               (f#)
+                               (try
+                                 (f#)
+                                 (catch Exception e#
+                                   (println (str "[cljseq] loop "
+                                                 (name ~loop-name)
+                                                 " error: "
+                                                 (.getMessage e#)))))
                                (swap! @sref#
                                       update-in [:loops ~loop-name :tick-count]
                                       inc))
