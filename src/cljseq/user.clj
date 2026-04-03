@@ -31,16 +31,18 @@
     (end-session!)
 
   See examples/ for full demonstrations."
-  (:require [cljseq.chord    :as chord]
-            [cljseq.core     :as core]
-            [cljseq.dsl      :as dsl]
-            [cljseq.fractal  :as frac]
-            [cljseq.loop     :as loop-ns]
-            [cljseq.pattern  :as pat]
-            [cljseq.scale    :as scale]
-            [cljseq.sidecar  :as sidecar]
+  (:require [cljseq.chord      :as chord]
+            [cljseq.core       :as core]
+            [cljseq.dsl        :as dsl]
+            [cljseq.fractal    :as frac]
+            [cljseq.loop       :as loop-ns]
+            [cljseq.mod        :as mod]
+            [cljseq.pattern    :as pat]
+            [cljseq.scale      :as scale]
+            [cljseq.sidecar    :as sidecar]
             [cljseq.stochastic :as stoch]
-            [cljseq.voice    :as voice]))
+            [cljseq.trajectory :as traj]
+            [cljseq.voice      :as voice]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session lifecycle
@@ -87,6 +89,23 @@
 
 (defmacro live-loop [loop-name opts & body]
   `(core/deflive-loop ~loop-name ~opts ~@body))
+
+;; ---------------------------------------------------------------------------
+;; Re-export DSL
+;; ---------------------------------------------------------------------------
+
+;; ---------------------------------------------------------------------------
+;; Trajectory / arc types
+;; ---------------------------------------------------------------------------
+
+(def trajectory   traj/trajectory)
+(def apply-curve  traj/apply-curve)
+(def buildup      traj/buildup)
+(def breakdown    traj/breakdown)
+(def groove-lock  traj/groove-lock)
+(def wind-down    traj/wind-down)
+(def mod-route!   mod/mod-route!)
+(def mod-unroute! mod/mod-unroute!)
 
 ;; ---------------------------------------------------------------------------
 ;; Re-export DSL
