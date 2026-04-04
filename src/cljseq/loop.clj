@@ -151,6 +151,37 @@
     (chord/chord :C 4 :maj7)   ; Cmaj7 as chord context"
   nil)
 
+(def ^:dynamic *tuning-ctx*
+  "Active microtonal tuning context for the current thread.
+  A map with :scale (MicrotonalScale, required) and optionally :kbm (KeyboardMap),
+  or nil for normal 12-TET operation.
+
+  When set, dsl/play! retunes outgoing :pitch/midi values through the KBM+scale
+  mapping, replacing the MIDI number with the nearest semitone and adding
+  :pitch/bend-cents for any deviation. When :kbm is absent an identity KBM
+  (map-size=0, middle-note=60) is used.
+
+  Notes whose MIDI number falls outside the KBM range, or whose KBM entry is
+  :x (unmapped), pass through unchanged.
+
+  Bound per-thread by deflive-loop (from the :tuning key in opts) and by
+  cljseq.dsl/with-tuning. Set at the REPL root with cljseq.dsl/use-tuning!.
+
+  Example:
+    {:scale (scala/load-scl \"31edo.scl\")}
+    {:kbm   (scala/load-kbm \"whitekeys.kbm\")
+     :scale (scala/load-scl \"pythagorean.scl\")}"
+  nil)
+
+(def ^:dynamic *sleep-interrupted?*
+  "Per-thread atom holding a boolean; when true, park-until-beat! exits early
+  and resets the atom to false. nil outside a live-loop thread.
+
+  Set to true by the hot-swap path in deflive-loop so that a sleeping thread
+  immediately wakes and picks up the new fn, rather than waiting for the
+  current sleep! deadline to expire naturally."
+  nil)
+
 (def ^:dynamic *virtual-time*
   "Current beat position, anchored to the master timeline.
   Advanced by sleep!. Bound per-thread by deflive-loop.
@@ -187,19 +218,24 @@
   "Park the current thread until `target-beat` on the effective timeline (Q60).
 
   Re-evaluates `beat->epoch-ms` on every wakeup — whether spurious or triggered
-  by `LockSupport/unpark` from `set-bpm!` or a Link state push. This means any
-  tempo change (local or from a Link peer) immediately causes the thread to
-  recompute its wall-clock deadline, rather than sleeping to the old deadline.
+  by `LockSupport/unpark` from `set-bpm!`, a Link state push, or a hot-swap.
+
+  When *sleep-interrupted?* is a non-nil atom holding true, exits immediately
+  and resets the atom to false — this lets the hot-swap path in deflive-loop
+  wake a sleeping thread so it picks up the new fn without waiting for the
+  current sleep! deadline to expire.
 
   When Link is active, `effective-timeline` returns the Link-sourced anchor, so
   `sleep!` is automatically phase-locked to the Link session."
   [^double target-beat]
   (loop []
-    (when-let [tl (effective-timeline)]
-      (let [epoch-ms (clock/beat->epoch-ms target-beat tl)]
-        (when (< (System/currentTimeMillis) epoch-ms)
-          (LockSupport/parkUntil epoch-ms)
-          (recur))))))
+    (if (some-> *sleep-interrupted?* deref)
+      (reset! *sleep-interrupted?* false)
+      (when-let [tl (effective-timeline)]
+        (let [epoch-ms (clock/beat->epoch-ms target-beat tl)]
+          (when (< (System/currentTimeMillis) epoch-ms)
+            (LockSupport/parkUntil epoch-ms)
+            (recur)))))))
 
 (defn -park-until-beat!
   "Public facade for macro expansions in other namespaces (e.g. deflive-loop).
@@ -280,13 +316,15 @@
          step-mod-ctx#  (:step-mods ~opts)
          harmony-ctx#   (:harmony ~opts)
          chord-ctx#     (:chord ~opts)
+         tuning-ctx#    (:tuning ~opts)
          loop-fn#       (fn []
                           (binding [cljseq.loop/*synth-ctx*     synth-ctx#
                                     cljseq.loop/*timing-ctx*    timing-ctx#
                                     cljseq.loop/*mod-ctx*       mod-ctx#
                                     cljseq.loop/*step-mod-ctx*  step-mod-ctx#
                                     cljseq.loop/*harmony-ctx*   harmony-ctx#
-                                    cljseq.loop/*chord-ctx*     chord-ctx#]
+                                    cljseq.loop/*chord-ctx*     chord-ctx#
+                                    cljseq.loop/*tuning-ctx*    tuning-ctx#]
                             ~@body))
          sref#       (cljseq.loop/-system-ref)]
      ;; Clear a stale entry so re-evaluation starts a fresh thread instead of
@@ -301,21 +339,29 @@
                    (not (.isAlive t#))))
          (swap! @sref# update :loops dissoc ~loop-name)))
      (if (get-in @@sref# [:loops ~loop-name])
-       ;; Hot-swap: loop is running — update fn; thread picks it up next iteration
-       (do
+       ;; Hot-swap: loop is running — update fn, interrupt any current sleep!
+       ;; so the thread wakes immediately and picks up the new fn.
+       (let [entry# (get-in @@sref# [:loops ~loop-name])]
          (swap! @sref# assoc-in [:loops ~loop-name :fn] loop-fn#)
+         (when-let [intr?# (:sleep-interrupted? entry#)]
+           (reset! intr?# true))
+         (when-let [t# ^Thread (:thread entry#)]
+           (LockSupport/unpark t#))
          ~loop-name)
        ;; First evaluation (or restart after stop): create entry and start thread
-       (let [running?# (atom true)]
+       (let [running?#           (atom true)
+             sleep-interrupted?# (atom false)]
          (swap! @sref# assoc-in [:loops ~loop-name]
-                {:fn         loop-fn#
-                 :tick-count 0
-                 :running?   running?#
-                 :thread     nil})
+                {:fn                 loop-fn#
+                 :tick-count         0
+                 :running?           running?#
+                 :sleep-interrupted? sleep-interrupted?#
+                 :thread             nil})
          (let [t# (Thread.
                    (fn []
                      (let [start-beat# (cljseq.loop/-start-beat)]
-                       (binding [cljseq.loop/*virtual-time* start-beat#]
+                       (binding [cljseq.loop/*virtual-time*       start-beat#
+                                 cljseq.loop/*sleep-interrupted?* sleep-interrupted?#]
                          ;; When Link is active, park until the quantum boundary
                          ;; so the loop enters the session in phase (§15.4).
                          (when (cljseq.link/active?)
@@ -334,7 +380,7 @@
                                (swap! @sref#
                                       update-in [:loops ~loop-name :tick-count]
                                       inc))
-                             (recur)))
+                           (recur)))
                          ;; Self-cleanup: remove our state entry when exiting.
                          ;; Only remove if we're still the current entry — a new
                          ;; deflive-loop with the same name may have already

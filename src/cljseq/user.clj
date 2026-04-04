@@ -31,15 +31,19 @@
     (end-session!)
 
   See examples/ for full demonstrations."
-  (:require [cljseq.arc        :as arc]
+  (:require [cljseq.analyze    :as analyze]
+            [cljseq.arc        :as arc]
+            [cljseq.ardour     :as ardour]
             [cljseq.chord      :as chord]
             [cljseq.conductor  :as conductor]
             [cljseq.core       :as core]
             [cljseq.dsl        :as dsl]
             [cljseq.fractal    :as frac]
+            [cljseq.learn      :as learn]
             [cljseq.loop       :as loop-ns]
             [cljseq.mod        :as mod]
             [cljseq.pattern    :as pat]
+            [cljseq.scala      :as scala]
             [cljseq.scale      :as scale]
             [cljseq.sidecar    :as sidecar]
             [cljseq.stochastic :as stoch]
@@ -100,12 +104,18 @@
 ;; Trajectory / arc types
 ;; ---------------------------------------------------------------------------
 
-(def trajectory    traj/trajectory)
-(def apply-curve   traj/apply-curve)
-(def buildup       traj/buildup)
-(def breakdown     traj/breakdown)
-(def groove-lock   traj/groove-lock)
-(def wind-down     traj/wind-down)
+(def trajectory       traj/trajectory)
+(def apply-curve      traj/apply-curve)
+(def buildup          traj/buildup)
+(def trance-buildup   traj/trance-buildup)
+(def breakdown        traj/breakdown)
+(def anticipation     traj/anticipation)
+(def groove-lock      traj/groove-lock)
+(def wind-down        traj/wind-down)
+(def swell            traj/swell)
+(def tension-peak     traj/tension-peak)
+(def arc-merge        traj/arc-merge)
+(def time-warp        traj/time-warp)
 (def mod-route!    mod/mod-route!)
 (def mod-unroute!  mod/mod-unroute!)
 (def arc-bind!        arc/arc-bind!)
@@ -115,8 +125,42 @@
 (def defconductor!    conductor/defconductor!)
 (def fire!            conductor/fire!)
 (def abort!           conductor/abort!)
+(def cue!             conductor/cue!)
 (def conductor-state  conductor/conductor-state)
 (def conductor-names  conductor/conductor-names)
+
+;; ---------------------------------------------------------------------------
+;; Analysis
+;; ---------------------------------------------------------------------------
+
+(def pitch-class-dist          analyze/pitch-class-dist)
+(def detect-key               analyze/detect-key)
+(def detect-key-candidates    analyze/detect-key-candidates)
+(def identify-chord           analyze/identify-chord)
+(def identify-chord-candidates analyze/identify-chord-candidates)
+(def chord->roman             analyze/chord->roman)
+(def analyze-progression      analyze/analyze-progression)
+(def scale-fitness            analyze/scale-fitness)
+(def suggest-scales           analyze/suggest-scales)
+(def tension-score            analyze/tension-score)
+(def progression-tension      analyze/progression-tension)
+(def borrowed-chord?          analyze/borrowed-chord?)
+(def annotate-progression     analyze/annotate-progression)
+(def suggest-progression      analyze/suggest-progression)
+
+;; ---------------------------------------------------------------------------
+;; MIDI Learn — device map authoring
+;; ---------------------------------------------------------------------------
+
+(def start-learn-session!  learn/start-learn-session!)
+(def learn-notes!          learn/learn-notes!)
+(def learn-cc!             learn/learn-cc!)
+(def learn-sequence!       learn/learn-sequence!)
+(def cancel-learn!         learn/cancel-learn!)
+(def learning?             learn/learning?)
+(def learn-session-state   learn/learn-session-state)
+(def clear-session!        learn/clear-session!)
+(def export-device-map!    learn/export-device-map!)
 
 ;; ---------------------------------------------------------------------------
 ;; Re-export DSL
@@ -126,6 +170,7 @@
 (def use-harmony!   dsl/use-harmony!)
 (def use-chord!     dsl/use-chord!)
 (def use-synth!     dsl/use-synth!)
+(def use-tuning!    dsl/use-tuning!)
 (def play-chord!    dsl/play-chord!)
 (def play-voicing!  dsl/play-voicing!)
 (def arp!           dsl/arp!)
@@ -133,19 +178,67 @@
 (def ring           dsl/ring)
 (def tick!          dsl/tick!)
 
+(defmacro with-tuning [ctx & body]
+  `(dsl/with-tuning ~ctx ~@body))
+
+;; ---------------------------------------------------------------------------
+;; ---------------------------------------------------------------------------
+;; Scala microtonal scales
+;; ---------------------------------------------------------------------------
+
+(def parse-scl         scala/parse-scl)
+(def load-scl          scala/load-scl)
+(def degree-count      scala/degree-count)
+(def degree->cents     scala/degree->cents)
+(def degree->note      scala/degree->note)
+(def degree->step      scala/degree->step)
+(def interval-cents    scala/interval-cents)
+(def parse-kbm         scala/parse-kbm)
+(def load-kbm          scala/load-kbm)
+(def midi->note        scala/midi->note)
+(def midi->step        scala/midi->step)
+(def scale->mts-bytes  scala/scale->mts-bytes)
+
+;; ---------------------------------------------------------------------------
+;; Ardour DAW integration
+;; ---------------------------------------------------------------------------
+
+(def connect-ardour!       ardour/connect!)
+(def transport-play!       ardour/transport-play!)
+(def transport-stop!       ardour/transport-stop!)
+(def transport-record!     ardour/transport-record!)
+(def goto-start!           ardour/goto-start!)
+(def add-marker!           ardour/add-marker!)
+(def ardour-save!          ardour/save!)
+(def capture!              ardour/capture!)
+(def capture-stop!         ardour/capture-stop!)
+(def capture-discard!      ardour/capture-discard!)
+(def capture-status        ardour/capture-status)
+(def recording?            ardour/recording?)
+
 ;; ---------------------------------------------------------------------------
 ;; Sidecar shorthand
 ;; ---------------------------------------------------------------------------
 
-(defn start-sidecar!
-  "Connect the MIDI sidecar on the given port index (default 0).
+(def list-midi-ports  sidecar/list-midi-ports)
+(def find-midi-port   sidecar/find-midi-port)
 
-  Use (list-midi-ports) from cljseq.sidecar to discover available ports.
+(defn start-sidecar!
+  "Connect the MIDI sidecar.
+
+  Options:
+    :midi-port    — MIDI output port: integer index or name substring (default 0)
+    :midi-in-port — MIDI input port: integer index or name substring (default nil)
+
+  Use (list-midi-ports) to discover available ports.
 
   Example:
-    (start-sidecar! :midi-port 1)"
-  [& {:keys [midi-port] :or {midi-port 0}}]
-  (sidecar/start-sidecar! :midi-port midi-port)
+    (start-sidecar!)
+    (start-sidecar! :midi-port 1)
+    (start-sidecar! :midi-port \"IAC\")
+    (start-sidecar! :midi-port \"Hydra\" :midi-in-port \"Hydra\")"
+  [& {:keys [midi-port midi-in-port] :or {midi-port 0}}]
+  (sidecar/start-sidecar! :midi-port midi-port :midi-in-port midi-in-port)
   (println (str "Sidecar started on MIDI port " midi-port))
   nil)
 
@@ -154,6 +247,9 @@
   []
   (sidecar/stop-sidecar!)
   nil)
+
+(def send-sysex! sidecar/send-sysex!)
+(def send-mts!   sidecar/send-mts!)
 
 ;; ---------------------------------------------------------------------------
 ;; Handy theory shortcuts at the top level

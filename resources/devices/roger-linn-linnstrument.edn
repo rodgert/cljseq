@@ -1,0 +1,118 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Roger Linn Design LinnStrument 200 — cljseq device map
+;;
+;; Source: Roger Linn Design LinnStrument MIDI Reference, firmware v2.x
+;;         https://www.rogerlinndesign.com/linnstrument/support
+;;
+;; Confidence: High for MPE configuration, note layout, per-note axes.
+;;             SysEx configuration commands not documented here (use
+;;             the LinnStrument's own panel controls or the companion app).
+;;
+;; LinnStrument 200: 8 rows × 25 columns = 200 pads.
+;; LinnStrument 128: 8 rows × 16 columns = 128 pads (same MIDI impl, smaller grid).
+;;
+;; MPE Notes:
+;;   Default mode is MPE Lower Zone (master ch 1, note channels 2–16).
+;;   Each pad sends on its assigned note channel:
+;;     X-axis → pitch bend (14-bit, ±48 st default; configurable ±1–96)
+;;     Y-axis → CC 74 (slide / timbre — MPE standard)
+;;     Z-axis → channel pressure (initial strike + continuous hold)
+;;   Split mode assigns independent MPE zones to left and right halves.
+;;   "One Channel" mode collapses all notes onto a single MIDI channel.
+
+{:device/id           :roger-linn/linnstrument-200
+ :device/name         "Roger Linn Design LinnStrument 200"
+ :device/manufacturer "Roger Linn Design"
+ :device/type         :controller
+ :device/role         :source             ; transmits to cljseq; not a MIDI target
+ :device/connectivity [:usb-midi]         ; USB class-compliant; no DIN
+
+ ;; -------------------------------------------------------------------------
+ ;; MPE configuration — Lower Zone (factory default)
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1                  ; master MPE channel (also used in one-channel mode)
+
+ :midi/mpe
+ {:supported          true
+  :master-channel     1
+  :note-channels      [2 3 4 5 6 7 8 9 10 11 12 13 14 15 16]
+  :per-note           {:pitch-bend       true   ; X axis — 14-bit, ±48 st default
+                       :channel-pressure true   ; Z axis — initial velocity + hold
+                       :cc74-slide       true}  ; Y axis — CC 74
+  :pitch-bend-range-semitones 48               ; default; configurable 1–96 via panel
+  :polyat-mode        :mpe-only                ; no traditional poly aftertouch (0xA0)
+
+  ;; Split mode: left and right halves become independent MPE zones.
+  ;; Enable on the LinnStrument panel (Split button). Each half can be
+  ;; configured with its own root note, octave, and channel range.
+  :split-mode
+  {:supported    true
+   :left-zone    {:master-channel 1 :note-channels [2 3 4 5 6 7 8]}
+   :right-zone   {:master-channel 9 :note-channels [10 11 12 13 14 15 16]}}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Per-note expression axes
+ ;; -------------------------------------------------------------------------
+ :midi/per-note-axes
+ {:x {:midi-msg     :pitch-bend
+      :resolution   14            ; 14-bit
+      :range-semitones 48
+      :label        "Pitch (X)"}
+  :y {:midi-msg     :cc
+      :cc-number    74
+      :range        [0 127]
+      :label        "Slide (Y)"}
+  :z {:midi-msg     :channel-pressure
+      :range        [0 127]
+      :label        "Pressure (Z)"}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Pad layout — LinnStrument 200 (8 rows × 25 columns)
+ ;; -------------------------------------------------------------------------
+ ;; Default note layout: guitar-like, each row shifts up by 5 semitones.
+ ;; Lowest row (row 0) starts at MIDI note 30 (F#1) by default.
+ ;; Both the bottom-row note and the row shift are user-configurable.
+ :device/pad-layout
+ {:rows                  8
+  :columns               25
+  :row-shift-semitones   5     ; semitone interval between adjacent rows
+  :bottom-row-note       30    ; F#1; configurable via panel
+  :velocity              true
+  :initial-velocity      true} ; velocity = strike speed
+
+ ;; -------------------------------------------------------------------------
+ ;; One-channel mode (non-MPE alternative)
+ ;; Useful for connecting to synths that don't understand MPE.
+ ;; -------------------------------------------------------------------------
+ :device/one-channel-mode
+ {:channel         1
+  :pressure        :channel-pressure
+  :pitch-bend      false        ; no per-note pitch bend in one-channel mode
+  :note-range      [0 127]}
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive false               ; LinnStrument is a controller; does not slave to clock
+  :transmit false}
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes for cljseq integration
+ ;; -------------------------------------------------------------------------
+ ;; The LinnStrument is a source-only device. Use ctrl/bind! with :source
+ ;; entries to map incoming CC 74 (slide) and channel pressure (Z) to
+ ;; control-tree parameters. MPE note events arrive on channels 2–16;
+ ;; use a per-channel listener if voice-level routing is needed.
+ ;;
+ ;; Example:
+ ;;   (ctrl/bind! :linnstrument/slide
+ ;;     {:midi/cc 74 :channel :any :min 0 :max 1.0 :target [:filter :cutoff]})
+ ;;
+ ;; MTS retuning is not applicable — the LinnStrument generates pitch bend
+ ;; natively for microtonality rather than receiving MTS messages.
+
+ :device/firmware-version "2.2"
+ :device/map-source       "Roger Linn Design LinnStrument MIDI Reference v2.x"
+ :device/map-version      "2026-04-04"}

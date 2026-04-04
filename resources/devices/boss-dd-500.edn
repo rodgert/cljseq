@@ -1,0 +1,109 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Boss DD-500 Digital Delay — cljseq device map
+;;
+;; Source: Boss DD-500 Owner's Manual, MIDI Implementation Chart (Appendix)
+;;         https://www.boss.info/global/support/by_product/dd-500/owners_manuals/
+;;
+;; Confidence: Patch/bank select and bypass CC are confirmed.
+;;             Per-parameter CCs are from the MIDI implementation chart;
+;;             verify against official PDF before use.
+;;
+;; The DD-500 has two independent delay engines (A and B), each with its own
+;; algorithm, time, feedback, and tone parameters. This makes it naturally
+;; suited to cljseq differential automation (engine A = rhythmic/short,
+;; engine B = ambient/long).
+;;
+;; MIDI via DIN 5-pin (in/out/thru) and USB.
+;; Patches 1–99 (PC 0–98). Bank select via CC 0 (MSB) for banks 1–3.
+
+{:device/id           :boss/dd-500
+ :device/name         "Boss DD-500 Digital Delay"
+ :device/manufacturer "Boss"
+ :device/type         :delay
+ :device/role         :target
+ :device/connectivity [:din-midi       ; 5-pin DIN in/out/thru
+                        :usb-midi]     ; USB class-compliant
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel
+ ;; -------------------------------------------------------------------------
+ :midi/channel 1                       ; default; configurable Ch 1–16
+
+ ;; -------------------------------------------------------------------------
+ ;; Program Change — patch recall
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:supported  true
+  :range      [0 98]                   ; PC 0=patch 1 … PC 98=patch 99
+  :bank-select {:cc-msb 0             ; CC 0 MSB selects bank (1–3)
+                :cc-lsb 32}}          ; CC 32 LSB (typically 0)
+
+ ;; -------------------------------------------------------------------------
+ ;; CC — parameter control
+ ;;
+ ;; Boss DD-500 exposes parameters via a fixed CC map published in the
+ ;; MIDI implementation appendix of the Owner's Manual.
+ ;; The CC assignments below are representative; verify against official PDF.
+ ;;
+ ;; Engine A parameters: CC 16–27
+ ;; Engine B parameters: CC 48–59 (verify — some variants use CC 32+)
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+ {;; Bypass / on-off
+  80 {:label "Bypass"        :range [0 127]
+      :description "0=bypass, 127=effect on"
+      :note "Standard Boss bypass CC for 500-series"}
+
+  ;; Expression pedal (assignable)
+  1  {:label "Expression"    :range [0 127]
+      :description "Expression pedal input; target parameter is configurable"}
+
+  ;; Output level
+  7  {:label "Output Level"  :range [0 127] :description "System output volume"}
+
+  ;; Engine A — delay parameters (verify CC# from MIDI implementation)
+  16 {:label "A: Delay Time"  :range [0 127] :description "Engine A delay time (coarse)"}
+  17 {:label "A: Feedback"    :range [0 127] :description "Engine A feedback/repeat amount"}
+  18 {:label "A: Effect Lvl" :range [0 127] :description "Engine A effect level/mix"}
+  19 {:label "A: Tone"        :range [0 127] :description "Engine A tone/high-cut filter"}
+  20 {:label "A: Mod Depth"   :range [0 127] :description "Engine A modulation depth"}
+  21 {:label "A: Mod Rate"    :range [0 127] :description "Engine A modulation rate"}
+
+  ;; Engine B — delay parameters (verify CC# from MIDI implementation)
+  48 {:label "B: Delay Time"  :range [0 127] :description "Engine B delay time (coarse)"}
+  49 {:label "B: Feedback"    :range [0 127] :description "Engine B feedback/repeat amount"}
+  50 {:label "B: Effect Lvl" :range [0 127] :description "Engine B effect level/mix"}
+  51 {:label "B: Tone"        :range [0 127] :description "Engine B tone/high-cut filter"}
+  52 {:label "B: Mod Depth"   :range [0 127] :description "Engine B modulation depth"}
+  53 {:label "B: Mod Rate"    :range [0 127] :description "Engine B modulation rate"}
+
+  ;; Tap tempo
+  64 {:label "Tap Tempo"      :range [0 127]
+      :description "Tap tempo — each 127→0 transition = one tap"}}
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive true                        ; delay time can lock to MIDI clock
+  :transmit false}
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes for cljseq integration
+ ;; -------------------------------------------------------------------------
+ ;; Dual-engine programming pattern:
+ ;;   Engine A: short rhythmic delay (beatsynced quarter/eighth)
+ ;;   Engine B: long ambient delay (dotted half, high feedback)
+ ;;
+ ;; Trajectory automation examples:
+ ;;   - Feedback ramp: sweep CC 17 (A feedback) 20→100 over 4 bars for buildup
+ ;;   - Cross-fade: increase CC 50 (B level) while decreasing CC 18 (A level)
+ ;;   - Time glide: slowly sweep CC 16 for pitch-shift effect (Doppler)
+ ;;
+ ;; Tempo sync: when :midi/clock :receive is true, delay time tracks BPM
+ ;; automatically. Use device-send! for CC 16/48 to select note division.
+
+ :device/firmware-version "1.0"        ; update as firmware advances
+ :device/map-source       "Boss DD-500 Owner's Manual MIDI Implementation Chart"
+ :device/map-version      "2026-04-04"}

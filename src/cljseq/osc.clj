@@ -165,6 +165,91 @@
         (when @running? (recur))))))
 
 ;; ---------------------------------------------------------------------------
+;; OSC message encoding (for osc-send!)
+;; ---------------------------------------------------------------------------
+
+(defn- osc-encode-str
+  "Encode a String as a null-terminated, 4-byte-aligned OSC string."
+  ^bytes [^String s]
+  (let [raw    (.getBytes s "UTF-8")
+        padlen (int (osc-align (inc (alength raw))))
+        buf    (byte-array padlen)]
+    (System/arraycopy raw 0 buf 0 (alength raw))
+    buf))
+
+(defn- arg-type-tag
+  "Return the single-char OSC type tag for a Clojure value."
+  [arg]
+  (cond
+    (or (instance? Long arg) (instance? Integer arg)) "i"
+    (or (instance? Double arg) (instance? Float arg)) "f"
+    (instance? String arg)                            "s"
+    :else (throw (ex-info "unsupported OSC arg type"
+                          {:arg arg :type (type arg)}))))
+
+(defn- encode-osc-arg
+  "Encode a single OSC argument to a byte array."
+  ^bytes [arg]
+  (cond
+    (or (instance? Long arg) (instance? Integer arg))
+    (.array (doto (ByteBuffer/allocate 4)
+              (.order ByteOrder/BIG_ENDIAN)
+              (.putInt (.intValue ^Number arg))))
+
+    (or (instance? Double arg) (instance? Float arg))
+    (.array (doto (ByteBuffer/allocate 4)
+              (.order ByteOrder/BIG_ENDIAN)
+              (.putFloat (.floatValue ^Number arg))))
+
+    (instance? String arg)
+    (osc-encode-str arg)))
+
+(defn encode-message
+  "Build a complete OSC message byte array from an address string and a seq
+  of Clojure arguments.
+
+  Supported argument types: Long/Integer → OSC int32 (i),
+  Double/Float → OSC float32 (f), String → OSC string (s).
+
+  A message with no arguments is valid (e.g. /transport_play)."
+  ^bytes [^String address args]
+  (let [addr-b  (osc-encode-str address)
+        tags    (apply str "," (map arg-type-tag args))
+        tag-b   (osc-encode-str tags)
+        arg-bs  (map encode-osc-arg args)
+        total   (transduce (map alength) + 0 (into [addr-b tag-b] arg-bs))
+        result  (byte-array total)
+        pos     (atom 0)]
+    (doseq [^bytes chunk (into [addr-b tag-b] arg-bs)]
+      (System/arraycopy chunk 0 result (int @pos) (alength chunk))
+      (swap! pos + (alength chunk)))
+    result))
+
+;; ---------------------------------------------------------------------------
+;; OSC client — send to an external target
+;; ---------------------------------------------------------------------------
+
+(defn osc-send!
+  "Send an OSC message via UDP to host:port.
+
+  Supported argument types: Long/Integer (OSC int32), Double/Float (OSC float32),
+  String (OSC string). No-arg messages are valid.
+
+  Creates a new DatagramSocket per call — suitable for low-frequency control
+  messages (transport, parameter changes). Not intended for audio-rate use.
+
+  Example:
+    (osc/osc-send! \"192.168.1.42\" 3819 \"/transport_play\")
+    (osc/osc-send! \"127.0.0.1\"    3819 \"/transport_record\" (int 1))
+    (osc/osc-send! \"127.0.0.1\"    9000 \"/n_set\" (int 1000) \"freq\" 440.0)"
+  [^String host port ^String address & args]
+  (let [msg  (encode-message address (vec args))
+        addr (InetSocketAddress. host (int (long port)))
+        pkt  (DatagramPacket. msg (alength msg) addr)]
+    (with-open [sock (DatagramSocket.)]
+      (.send sock pkt))))
+
+;; ---------------------------------------------------------------------------
 ;; Public API
 ;; ---------------------------------------------------------------------------
 

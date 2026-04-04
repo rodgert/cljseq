@@ -32,6 +32,25 @@ struct LinkState {
     bool     playing;      ///< transport state (start/stop sync)
 };
 
+// ---------------------------------------------------------------------------
+// AudioClockSnapshot — lightweight snapshot for MIDI clock generation
+//
+// Returned by LinkBridge::capture_audio_clock(). The MIDI clock thread calls
+// this on every iteration to compute the absolute time of the next 24 PPQN
+// pulse without accumulating drift.
+//
+// Given a snapshot, the time until the next pulse N is:
+//   next_beat  = N / 24.0
+//   delta_us   = (next_beat - beat_now) * 60_000_000 / bpm
+//   wakeup     = steady_clock::now() + microseconds(delta_us)
+// ---------------------------------------------------------------------------
+
+struct AudioClockSnapshot {
+    double  bpm;         ///< current session tempo
+    double  beat_now;    ///< beat position at moment of capture
+    bool    playing;     ///< Link transport state (true = playing)
+};
+
 // Callback type registered by the sidecar IPC layer.
 // Called from a Link listener thread — must be thread-safe, non-blocking.
 using LinkStateCallback = std::function<void(const LinkState&)>;
@@ -61,6 +80,11 @@ public:
     /// Register the callback that receives LinkState pushes.
     /// Must be called before enable().
     virtual void set_state_callback(LinkStateCallback cb) = 0;
+
+    /// Capture a lightweight snapshot of the current Link session state for
+    /// use by the MIDI clock thread. Thread-safe; may be called from any thread.
+    /// Returns a snapshot with bpm=120, beat_now=0, playing=false when inactive.
+    virtual AudioClockSnapshot capture_audio_clock() const = 0;
 };
 
 // ---------------------------------------------------------------------------
@@ -74,6 +98,9 @@ public:
     bool active() const override { return false; }
     void set_bpm(double /*bpm*/) override {}
     void set_state_callback(LinkStateCallback /*cb*/) override {}
+    AudioClockSnapshot capture_audio_clock() const override {
+        return {120.0, 0.0, false};
+    }
 };
 
 } // namespace cljseq

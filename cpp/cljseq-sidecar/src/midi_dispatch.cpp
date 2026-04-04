@@ -113,10 +113,52 @@ void midi_channel_pressure(uint8_t channel, uint8_t pressure) {
     }
 }
 
+void midi_send_realtime(uint8_t byte) {
+    if (!g_midi || !g_midi->isPortOpen()) return;
+    std::vector<uint8_t> msg = { byte };
+    try {
+        g_midi->sendMessage(&msg);
+    } catch (const RtMidiError& e) {
+        std::fprintf(stderr, "[midi] realtime sendMessage error: %s\n", e.what());
+    }
+}
+
+void midi_send_sysex(const uint8_t* data, std::size_t len) {
+    if (!g_midi || !g_midi->isPortOpen()) return;
+    std::vector<uint8_t> msg(data, data + len);
+    try {
+        g_midi->sendMessage(&msg);
+        std::fprintf(stderr, "[midi] sysex sent (%zu bytes)\n", len);
+    } catch (const RtMidiError& e) {
+        std::fprintf(stderr, "[midi] sysex sendMessage error: %s\n", e.what());
+    }
+}
+
 void midi_shutdown() {
     if (g_midi && g_midi->isPortOpen()) {
         g_midi->closePort();
         std::fprintf(stderr, "[midi] port closed\n");
     }
     g_midi.reset();
+}
+
+void midi_list_ports() {
+    try {
+        RtMidiOut midi_out;
+        unsigned int out_count = midi_out.getPortCount();
+        for (unsigned int i = 0; i < out_count; ++i) {
+            std::printf("output %u: %s\n", i, midi_out.getPortName(i).c_str());
+        }
+    } catch (const RtMidiError& e) {
+        std::fprintf(stderr, "[midi] output port enumeration error: %s\n", e.what());
+    }
+    try {
+        RtMidiIn midi_in;
+        unsigned int in_count = midi_in.getPortCount();
+        for (unsigned int i = 0; i < in_count; ++i) {
+            std::printf("input %u: %s\n", i, midi_in.getPortName(i).c_str());
+        }
+    } catch (const RtMidiError& e) {
+        std::fprintf(stderr, "[midi] input port enumeration error: %s\n", e.what());
+    }
 }

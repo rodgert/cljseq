@@ -65,6 +65,17 @@ void LinkEngine::set_state_callback(LinkStateCallback cb) {
     state_cb_ = std::move(cb);
 }
 
+AudioClockSnapshot LinkEngine::capture_audio_clock() const {
+    // captureAudioSessionState is RT-safe; may be called from any thread.
+    const auto state = link_.captureAudioSessionState();
+    const auto now   = link_.clock().micros();
+    return {
+        state.tempo(),
+        state.beatAtTime(now, quantum_),
+        state.isPlaying()
+    };
+}
+
 void LinkEngine::push_state() {
     // captureAudioSessionState: RT-safe, correct even on callback threads.
     const auto state    = link_.captureAudioSessionState();

@@ -231,6 +231,30 @@
 ;; Returns a java.net.URL or nil.
 ;; ---------------------------------------------------------------------------
 
+(defn scales-dir
+  "Directory for Scala (.scl) and keyboard mapping (.kbm) microtonal scale files.
+  Created on first access."
+  ^String []
+  (ensure-dir (str (user-data-dir) "/scales")))
+
+(defn resolve-scala-resource
+  "Resolve a Scala scale filename to a URL, searching user scales before classpath.
+
+  Search order:
+    1. (scales-dir)/<name>               — user scales (writable)
+    2. classpath resources/scales/<name> — built-in bundled scales (read-only)
+
+  Returns a java.net.URL if found, nil if not found in either location.
+
+  Example:
+    (dirs/resolve-scala-resource \"31edo.scl\")
+    (dirs/resolve-scala-resource \"pythagorean.scl\")"
+  [name]
+  (let [user-file (io/file (scales-dir) name)]
+    (if (.exists user-file)
+      (.toURL user-file)
+      (io/resource (str "scales/" name)))))
+
 (defn resolve-device-resource
   "Resolve a device map filename to a URL, searching user data before classpath.
 

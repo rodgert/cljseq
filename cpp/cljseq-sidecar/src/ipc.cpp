@@ -21,6 +21,7 @@
 // One connection is accepted; reconnection is not supported in Phase 1.
 
 #include "ipc.h"
+#include "midi_clock.h"
 #include "midi_monitor.h"
 
 #include <cljseq/link_bridge.h>
@@ -97,6 +98,7 @@ enum class MsgType : uint8_t {
     CC           = 0x03,
     PitchBend    = 0x04,  // per-note MPE pitch bend
     ChanPressure = 0x05,  // per-channel pressure (MPE aftertouch)
+    SysEx        = 0x06,  // raw SysEx blob (payload = F0 ... F7)
     LinkEnable   = 0x10,
     LinkDisable  = 0x11,
     LinkSetBpm   = 0x12,
@@ -234,15 +236,28 @@ private:
             }
             break;
 
+        case MsgType::SysEx:
+            // Payload is raw SysEx bytes including F0 and F7 delimiters.
+            if (len < 2 || payload[0] != 0xF0 || payload[len - 1] != 0xF7) {
+                std::fprintf(stderr, "[ipc] SysEx: invalid framing (%zu bytes)\n", len);
+                break;
+            }
+            midi_send_sysex(payload, len);
+            break;
+
         case MsgType::LinkEnable: {
             double quantum = (len >= 1 && payload[0] != 0)
                              ? static_cast<double>(payload[0])
                              : 4.0;
             link_.enable(quantum);
+            // Start MIDI clock output — Link is now the tempo source.
+            midi_clock_set_playing(true);
             break;
         }
 
         case MsgType::LinkDisable:
+            // Stop MIDI clock before leaving the Link session.
+            midi_clock_set_playing(false);
             link_.disable();
             break;
 

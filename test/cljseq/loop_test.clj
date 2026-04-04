@@ -176,6 +176,26 @@
       (is (= :updated @v) "body was hot-swapped")
       (loop/stop-loop! :test-swap-loop))))
 
+(deftest deflive-loop-hot-swap-interrupts-long-sleep-test
+  (testing "hot-swapping a loop parked in a very long sleep! picks up the new fn immediately"
+    ;; The loop sleeps for 1000 beats (= 1000ms at 60000 BPM).
+    ;; Without sleep interruption the new body would not run for ~1000ms.
+    ;; With it, the thread should pick up the new fn within ~50ms.
+    (let [v       (atom :original)
+          started (promise)]
+      (loop/deflive-loop :test-hotswap-interrupt {}
+        (deliver started :ok)
+        (reset! v :original)
+        (loop/sleep! 1000))
+      (deref started 500 :timeout)   ; wait for first iteration to begin
+      (Thread/sleep 5)               ; let it enter sleep!
+      (loop/deflive-loop :test-hotswap-interrupt {}
+        (reset! v :updated)
+        (loop/sleep! 1000))
+      (Thread/sleep 100)  ; well within the 1000-beat sleep deadline
+      (is (= :updated @v) "new body ran while old sleep was still pending")
+      (loop/stop-loop! :test-hotswap-interrupt))))
+
 (deftest deflive-loop-restarts-stopped-loop-test
   (testing "deflive-loop with a stopped loop name starts a fresh loop"
     ;; Regression: previously the stale state-map entry caused deflive-loop to

@@ -129,11 +129,39 @@
   (conductor/stop-all-conductors!)
   (mod/mod-unroute-all!)
   (loop-ns/stop-all-loops!)
+  ;; Stop the m21 server if it was ever loaded (dynamic to avoid circular dep)
+  (when-let [stop-m21 (resolve 'cljseq.m21/stop-server!)]
+    (stop-m21))
   ;; Wait briefly for threads to notice the stop signal
   (Thread/sleep 50)
   (swap! system-state assoc :loops {})
   (println "cljseq stopped")
   nil)
+
+;; ---------------------------------------------------------------------------
+;; Microtonal pitch bend configuration
+;; ---------------------------------------------------------------------------
+
+(def ^:dynamic *bend-range-cents*
+  "Pitch bend range in cents (one direction) used for the :pitch/bend-cents
+  step map key. Default 200.0 (±2 semitones — the MIDI standard default).
+
+  Match this to the pitch bend range configured on your synth. Override
+  per-block with binding:
+    (binding [core/*bend-range-cents* 1200.0]  ; ±1 octave bend range
+      (play! (scala/degree->step ms root 7) 1/4))"
+  200.0)
+
+(defn- cents->bend14
+  "Convert a cents offset to a 14-bit MIDI pitch bend value using
+  *bend-range-cents* as the range calibration.
+
+  Returns integer in [0, 16383]; center (no bend) = 8192."
+  ^long [cents]
+  (let [range (double *bend-range-cents*)
+        frac  (/ (double cents) range)
+        steps (if (>= frac 0.0) 8191.0 8192.0)]
+    (max 0 (min 16383 (long (Math/round (+ 8192.0 (* frac steps))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Note keyword → MIDI conversion
@@ -222,8 +250,16 @@
                            (clock/sample mod now-beat)
                            mod)]
                  (ctrl/send-at! t-on-ns k val)))
-             (sidecar/send-note-on!  t-on-ns channel midi velocity)
-             (sidecar/send-note-off! (+ off-ns t-off-ns) channel midi))))
+             ;; Microtonal pitch bend — send before note-on, reset after note-off
+             (let [bend-cents (when (map? note) (:pitch/bend-cents note))
+                   bend-14bit (when (and bend-cents (not (zero? (double bend-cents))))
+                                (cents->bend14 bend-cents))]
+               (when bend-14bit
+                 (sidecar/send-pitch-bend! t-on-ns channel bend-14bit))
+               (sidecar/send-note-on!  t-on-ns channel midi velocity)
+               (sidecar/send-note-off! (+ off-ns t-off-ns) channel midi)
+               (when bend-14bit
+                 (sidecar/send-pitch-bend! (+ off-ns t-off-ns) channel 8192))))))
        (let [ms (long (clock/beats->ms beats (get-bpm)))]
          (println (format "[play!] beat=%-8s midi=%-3d dur=%s beats (%dms)"
                           (str now-beat) midi (str beats) ms)))))))

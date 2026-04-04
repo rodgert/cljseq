@@ -257,6 +257,87 @@
       (is (contains? @routed [:arc/momentum])))))
 
 ;; ---------------------------------------------------------------------------
+;; :repeat — section repetition
+;; ---------------------------------------------------------------------------
+
+(deftest repeat-section-runs-n-times-test
+  (testing ":repeat N causes the section to execute N times"
+    (let [counter (atom 0)]
+      (conductor/defconductor! :test-repeat-3
+        [{:bars 0 :repeat 3 :on-start (fn [] (swap! counter inc))}])
+      (conductor/fire! :test-repeat-3)
+      (Thread/sleep 150)
+      (is (= 3 @counter) "on-start fires exactly 3 times"))))
+
+(deftest repeat-1-is-same-as-no-repeat-test
+  (testing ":repeat 1 is equivalent to omitting :repeat"
+    (let [c1 (atom 0) c2 (atom 0)]
+      (conductor/defconductor! :test-repeat-1-explicit
+        [{:bars 0 :repeat 1 :on-start (fn [] (swap! c1 inc))}])
+      (conductor/defconductor! :test-repeat-1-default
+        [{:bars 0 :on-start (fn [] (swap! c2 inc))}])
+      (conductor/fire! :test-repeat-1-explicit)
+      (conductor/fire! :test-repeat-1-default)
+      (Thread/sleep 150)
+      (is (= 1 @c1))
+      (is (= 1 @c2)))))
+
+(deftest repeat-abort-stops-mid-repetition-test
+  (testing "abort! during a :repeat section halts after the current iteration"
+    (let [counter (atom 0)
+          started (promise)]
+      (conductor/defconductor! :test-repeat-abort
+        [{:bars 1000 :repeat 10
+          :on-start (fn []
+                      (swap! counter inc)
+                      (deliver started :ok))}])
+      (conductor/fire! :test-repeat-abort)
+      (deref started 500 :timeout)
+      (conductor/abort! :test-repeat-abort)
+      (Thread/sleep 50)
+      ;; Only 1 repetition started before abort
+      (is (= 1 @counter)
+          "abort halts before second repetition begins"))))
+
+(deftest repeat-multiple-sections-test
+  (testing ":repeat applies independently per section"
+    (let [order (atom [])]
+      (conductor/defconductor! :test-repeat-multi
+        [{:name :a :bars 0 :repeat 2 :on-start (fn [] (swap! order conj :a))}
+         {:name :b :bars 0 :repeat 3 :on-start (fn [] (swap! order conj :b))}])
+      (conductor/fire! :test-repeat-multi)
+      (Thread/sleep 200)
+      (is (= [:a :a :b :b :b] @order)))))
+
+;; ---------------------------------------------------------------------------
+;; Built-in gesture keywords — swell and tension-peak
+;; ---------------------------------------------------------------------------
+
+(deftest builtin-swell-routes-arc-paths-test
+  (testing ":swell gesture routes tension, density, register"
+    (let [routed (atom #{})]
+      (with-redefs [cljseq.mod/mod-route! (fn [path _tr] (swap! routed conj path) path)]
+        (conductor/defconductor! :test-swell-smoke
+          [{:bars 0 :gesture :swell}])
+        (conductor/fire! :test-swell-smoke)
+        (Thread/sleep 100))
+      (is (contains? @routed [:arc/tension]))
+      (is (contains? @routed [:arc/density]))
+      (is (contains? @routed [:arc/register])))))
+
+(deftest builtin-tension-peak-routes-arc-paths-test
+  (testing ":tension-peak gesture routes tension, density, momentum"
+    (let [routed (atom #{})]
+      (with-redefs [cljseq.mod/mod-route! (fn [path _tr] (swap! routed conj path) path)]
+        (conductor/defconductor! :test-tension-peak-smoke
+          [{:bars 0 :gesture :tension-peak}])
+        (conductor/fire! :test-tension-peak-smoke)
+        (Thread/sleep 100))
+      (is (contains? @routed [:arc/tension]))
+      (is (contains? @routed [:arc/density]))
+      (is (contains? @routed [:arc/momentum])))))
+
+;; ---------------------------------------------------------------------------
 ;; stop-all-conductors!
 ;; ---------------------------------------------------------------------------
 
@@ -271,3 +352,157 @@
     (Thread/sleep 30)
     (is (= :aborted (:status (conductor/conductor-state :test-stop-all-a))))
     (is (= :aborted (:status (conductor/conductor-state :test-stop-all-b))))))
+
+;; ---------------------------------------------------------------------------
+;; :when predicate — conditional section skip
+;; ---------------------------------------------------------------------------
+
+(deftest when-predicate-skips-section-test
+  (testing ":when false skips entire section (no on-start, no sleep)"
+    (let [counter (atom 0)]
+      (conductor/defconductor! :test-when-skip
+        [{:bars 0 :when (constantly false) :on-start (fn [] (swap! counter inc))}
+         {:bars 0 :on-start (fn [] (swap! counter inc))}])
+      (conductor/fire! :test-when-skip)
+      (Thread/sleep 100)
+      (is (= 1 @counter) "only the second section ran"))))
+
+(deftest when-predicate-runs-section-test
+  (testing ":when true runs the section normally"
+    (let [counter (atom 0)]
+      (conductor/defconductor! :test-when-run
+        [{:bars 0 :when (constantly true) :on-start (fn [] (swap! counter inc))}])
+      (conductor/fire! :test-when-run)
+      (Thread/sleep 100)
+      (is (= 1 @counter)))))
+
+(deftest when-predicate-evaluated-per-repetition-test
+  (testing ":when is evaluated on each repetition — can flip mid-repeat"
+    (let [counter  (atom 0)
+          allow?   (atom false)]
+      ;; Start disallowed; flip to allowed after first check
+      (conductor/defconductor! :test-when-flip
+        [{:bars 0 :repeat 3
+          :when  (fn [] (let [v @allow?] (reset! allow? true) v))
+          :on-start (fn [] (swap! counter inc))}])
+      (conductor/fire! :test-when-flip)
+      (Thread/sleep 150)
+      ;; First rep: false (skipped). Second: true. Third: true. Counter = 2.
+      (is (= 2 @counter) "skipped first rep, ran second and third"))))
+
+(deftest when-exception-runs-section-test
+  (testing ":when exception is treated as true (run section, log error)"
+    (let [counter (atom 0)]
+      (conductor/defconductor! :test-when-exception
+        [{:bars 0
+          :when (fn [] (throw (ex-info "deliberate" {})))
+          :on-start (fn [] (swap! counter inc))}])
+      (conductor/fire! :test-when-exception)
+      (Thread/sleep 100)
+      (is (= 1 @counter) "section ran despite :when throwing"))))
+
+;; ---------------------------------------------------------------------------
+;; :on-transition — conductor-level transition callback
+;; ---------------------------------------------------------------------------
+
+(deftest on-transition-fires-between-sections-test
+  (testing ":on-transition is called before each section with from/to names"
+    (let [transitions (atom [])]
+      (conductor/defconductor! :test-transition
+        [{:name :a :bars 0}
+         {:name :b :bars 0}
+         {:name :c :bars 0}]
+        {:on-transition (fn [from to] (swap! transitions conj [from to]))})
+      (conductor/fire! :test-transition)
+      (Thread/sleep 150)
+      ;; Three sections → three on-transition calls
+      ;; First: [nil :a], then [:a :b], then [:b :c]
+      (is (= 3 (count @transitions)) "one call per section")
+      (is (= [nil :a] (first @transitions)) "first transition has nil from")
+      (is (= [:a :b] (second @transitions)))
+      (is (= [:b :c] (nth @transitions 2))))))
+
+(deftest on-transition-fires-with-nil-names-test
+  (testing ":on-transition handles sections without :name (nil to)"
+    (let [transitions (atom [])]
+      (conductor/defconductor! :test-transition-nil-names
+        [{:bars 0}
+         {:bars 0}]
+        {:on-transition (fn [from to] (swap! transitions conj [from to]))})
+      (conductor/fire! :test-transition-nil-names)
+      (Thread/sleep 100)
+      (is (= 2 (count @transitions)))
+      (is (= [[nil nil] [nil nil]] @transitions)))))
+
+(deftest on-transition-exception-does-not-stop-conductor-test
+  (testing ":on-transition exception is swallowed; conductor continues"
+    (let [counter (atom 0)]
+      (conductor/defconductor! :test-transition-error
+        [{:bars 0 :on-start (fn [] (swap! counter inc))}
+         {:bars 0 :on-start (fn [] (swap! counter inc))}]
+        {:on-transition (fn [_ _] (throw (ex-info "deliberate" {})))})
+      (conductor/fire! :test-transition-error)
+      (Thread/sleep 100)
+      (is (= 2 @counter) "both sections ran despite on-transition throwing"))))
+
+(deftest defconductor-without-opts-has-no-on-transition-test
+  (testing "defconductor! with no opts runs normally without on-transition"
+    (let [counter (atom 0)]
+      (conductor/defconductor! :test-no-opts
+        [{:bars 0 :on-start (fn [] (swap! counter inc))}
+         {:bars 0 :on-start (fn [] (swap! counter inc))}])
+      (conductor/fire! :test-no-opts)
+      (Thread/sleep 100)
+      (is (= 2 @counter)))))
+
+;; ---------------------------------------------------------------------------
+;; cue! — jump to named section at next boundary
+;; ---------------------------------------------------------------------------
+
+(deftest cue-jumps-to-named-section-test
+  (testing "cue! causes the runner to jump to the named section at the next boundary"
+    ;; :a has a 5-bar sleep (20ms at 60000 BPM). We set the cue after :a enters
+    ;; its sleep but before it finishes. When :a's sleep expires, the runner
+    ;; checks the cue, finds :c, and jumps there — skipping :b.
+    (let [a-started (promise)
+          order     (atom [])
+          reached   (promise)]
+      (conductor/defconductor! :test-cue
+        [{:name :a :bars 5
+          :on-start (fn [] (swap! order conj :a) (deliver a-started :ok))}
+         {:name :b :bars 0
+          :on-start (fn [] (swap! order conj :b))}
+         {:name :c :bars 0
+          :on-start (fn [] (swap! order conj :c) (deliver reached :ok))}])
+      (conductor/fire! :test-cue)
+      (deref a-started 500 :timeout)   ; wait until :a has entered its sleep
+      (conductor/cue! :test-cue :c)    ; set cue while :a is sleeping
+      (is (= :ok (deref reached 500 :timeout)) "section :c should run")
+      (Thread/sleep 30)
+      (is (= :a (first @order))         "section :a ran first")
+      (is (some #{:c} @order)           "section :c ran after cue")
+      (is (not (some #{:b} @order))     "section :b was skipped by cue"))))
+
+(deftest cue-noop-when-not-running-test
+  (testing "cue! on an idle conductor is a no-op"
+    (conductor/defconductor! :test-cue-idle [{:name :a :bars 0}])
+    (is (nil? (conductor/cue! :test-cue-idle :a)))))
+
+(deftest cue-unknown-target-continues-in-order-test
+  (testing "cue! with unknown target logs warning and continues in order"
+    ;; :a has a 5-bar sleep so we can set the cue while it's sleeping,
+    ;; then both :a and :b run in order (invalid cue is ignored).
+    (let [a-started (promise)
+          b-done    (promise)
+          order     (atom [])]
+      (conductor/defconductor! :test-cue-unknown
+        [{:name :a :bars 5
+          :on-start (fn [] (swap! order conj :a) (deliver a-started :ok))}
+         {:name :b :bars 0
+          :on-start (fn [] (swap! order conj :b) (deliver b-done :ok))}])
+      (conductor/fire! :test-cue-unknown)
+      (deref a-started 500 :timeout)
+      (conductor/cue! :test-cue-unknown :no-such-section)
+      (deref b-done 500 :timeout)
+      (Thread/sleep 20)
+      (is (= [:a :b] @order) "conductor ran in order after invalid cue"))))

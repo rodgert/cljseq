@@ -15,13 +15,16 @@
   NoteOn/NoteOff/CC payload (12 bytes):
     [int64 time_ns][uint8 channel][uint8 note_or_cc][uint8 vel_or_val][uint8 reserved]
 
+  SysEx payload: raw SysEx bytes including F0 and F7 delimiters.
+
   time_ns is epoch-nanoseconds (System/currentTimeMillis × 1,000,000), matching
   std::chrono::system_clock on the C++ side.
 
   Key design decisions: Q16 (direct JVM-to-process IPC, Option A),
   Q51 (native dependency policy), §3.5 (process topology), §29."
   (:require [clojure.java.io     :as io]
-            [clojure.string      :as str])
+            [clojure.string      :as str]
+            [cljseq.scala        :as scala])
   (:import  [java.net        Socket ServerSocket]
             [java.io         InputStream OutputStream BufferedReader InputStreamReader]
             [java.lang       ProcessBuilder ProcessBuilder$Redirect]
@@ -94,6 +97,7 @@
 (def ^:private MSG-CC           (unchecked-byte 0x03))
 (def ^:private MSG-PITCH-BEND   (unchecked-byte 0x04))  ; per-note MPE pitch bend
 (def ^:private MSG-CHAN-PRESSURE (unchecked-byte 0x05)) ; per-channel pressure (MPE)
+(def ^:private MSG-SYSEX        (unchecked-byte 0x06))  ; raw SysEx blob (F0 ... F7)
 (def ^:private MSG-LINK-ENABLE  (unchecked-byte 0x10))
 (def ^:private MSG-LINK-DISABLE (unchecked-byte 0x11))
 (def ^:private MSG-LINK-SET-BPM (unchecked-byte 0x12))
@@ -214,6 +218,46 @@
   Reuses the CC payload layout (same byte structure, different message type)."
   [time-ns channel pressure]
   (send-frame! (make-frame MSG-CHAN-PRESSURE (cc-payload time-ns channel 0 pressure))))
+
+(defn send-sysex!
+  "Send a raw SysEx message to the sidecar for immediate dispatch.
+
+  `data` must be a byte array that includes the leading 0xF0 status byte
+  and the trailing 0xF7 end-of-exclusive byte.
+
+  Throws if data is nil, fewer than 2 bytes, or if the first/last byte are
+  not 0xF0/0xF7.
+
+  Example (reset all controllers on ch 1):
+    (sidecar/send-sysex! (byte-array [0xF0 0x7E 0x7F 0x09 0x01 0xF7]))"
+  [^bytes data]
+  (when (or (nil? data) (< (alength data) 2)
+            (not= (bit-and (aget data 0) 0xFF) 0xF0)
+            (not= (bit-and (aget data (dec (alength data))) 0xFF) 0xF7))
+    (throw (ex-info "send-sysex!: data must be a byte[] starting with F0 and ending with F7"
+                    {:len (when data (alength data))})))
+  (send-frame! (make-frame MSG-SYSEX data)))
+
+(defn send-mts!
+  "Retune the connected synthesiser using MIDI Tuning Standard (MTS) Bulk Dump.
+
+  Generates a 408-byte Non-Realtime Universal SysEx (F0 7E 7F 08 01 ...) from
+  `ms` (a cljseq.scala/MicrotonalScale) and sends it via the sidecar.
+
+  `kbm` — optional cljseq.scala/KeyboardMap; when nil an identity map is used
+          (MIDI key 60 = middle-note, linear 12-TET key span).
+
+  Hydrasynth Explorer/Desktop/Deluxe all accept MTS Bulk Dump. After receiving
+  this message the synth retunes all 128 keys for the life of the patch.
+
+  Example:
+    (def ms (scala/load-scl \"31edo.scl\"))
+    (sidecar/send-mts! ms)
+
+    (def kbm (scala/load-kbm \"whitekeys.kbm\"))
+    (sidecar/send-mts! ms kbm)"
+  ([ms]      (send-mts! ms nil))
+  ([ms kbm]  (send-sysex! (scala/scale->mts-bytes ms kbm))))
 
 (defn send-ping!
   "Send a keepalive Ping. No payload."
@@ -357,7 +401,7 @@
              (recur n))))))))
 
 ;; ---------------------------------------------------------------------------
-;; Process management
+;; Process management helpers (must precede port discovery)
 ;; ---------------------------------------------------------------------------
 
 (defn- find-free-port
@@ -374,6 +418,62 @@
     (or (first (filter #(.exists (io/file %)) candidates))
         (throw (ex-info "cljseq-sidecar binary not found; build the C++ sidecar first"
                         {:searched candidates})))))
+
+;; ---------------------------------------------------------------------------
+;; MIDI port discovery
+;; ---------------------------------------------------------------------------
+
+(defn list-midi-ports
+  "Return all available MIDI ports enumerated by the sidecar binary.
+
+  Returns a map with :output and :input keys, each a vector of
+  {:index N :name \"<port name>\"} maps.
+
+  Example:
+    (sidecar/list-midi-ports)
+    ;; => {:output [{:index 0 :name \"IAC Driver Bus 1\"}
+    ;;               {:index 1 :name \"Hydrasynth\"}]
+    ;;      :input  [{:index 0 :name \"IAC Driver Bus 1\"}
+    ;;               {:index 1 :name \"Hydrasynth\"}]}"
+  []
+  (let [bin  (find-binary)
+        proc (.start (ProcessBuilder. ^java.util.List [bin "--list-ports"]))
+        out  (slurp (java.io.InputStreamReader. (.getInputStream proc)))
+        _    (.waitFor proc)
+        lines  (str/split-lines (str/trim out))
+        parsed (keep (fn [line]
+                       (when-let [[_ dir idx nm] (re-matches #"(output|input) (\d+): (.*)" line)]
+                         {:dir (keyword dir) :index (Long/parseLong idx) :name nm}))
+                     lines)
+        grouped (group-by :dir parsed)]
+    {:output (mapv #(dissoc % :dir) (get grouped :output []))
+     :input  (mapv #(dissoc % :dir) (get grouped :input []))}))
+
+(defn find-midi-port
+  "Find a MIDI port index by name substring (case-insensitive).
+
+  Returns the integer :index of the first port whose name contains
+  `name-substr`.
+
+  Options:
+    :direction — :output (default) or :input
+
+  Throws ex-info if no matching port is found.
+
+  Example:
+    (sidecar/find-midi-port \"IAC\")                    ; output port
+    (sidecar/find-midi-port \"Hydra\" :direction :input) ; input port"
+  [name-substr & {:keys [direction] :or {direction :output}}]
+  (let [ports      (list-midi-ports)
+        candidates (get ports direction [])
+        lower      (str/lower-case name-substr)
+        match      (first (filter #(str/includes? (str/lower-case (:name %)) lower)
+                                  candidates))]
+    (or (:index match)
+        (throw (ex-info (str "No MIDI " (name direction) " port matching: " name-substr)
+                        {:query     name-substr
+                         :direction direction
+                         :available (mapv :name candidates)})))))
 
 (defn- connect-with-retry!
   "Open a TCP connection to the sidecar, retrying with back-off.
@@ -410,8 +510,10 @@
   Options:
     :binary       — explicit path to the sidecar binary (default: searches build/)
     :port         — TCP port (default: OS-assigned free port)
-    :midi-port    — MIDI output port index (default 0; run sidecar once to see port list)
-    :midi-in-port — MIDI input port index to monitor (default nil = disabled).
+    :midi-port    — MIDI output port: integer index or name substring string.
+                    (default 0; use (list-midi-ports) to discover ports)
+    :midi-in-port — MIDI input port: integer index or name substring string.
+                    (default nil = disabled)
                     When set, every received MIDI message is pushed to the JVM as
                     a 0x20 MidiIn frame and appended to `midi-in-messages`.
                     Use `await-midi-message` to wait for a specific message in tests.
@@ -421,16 +523,23 @@
   Example:
     (sidecar/start-sidecar!)
     (sidecar/start-sidecar! :binary \"/usr/local/bin/cljseq-sidecar\" :port 7777)
-    (sidecar/start-sidecar! :midi-port 2)               ; MIDI output port 2
-    (sidecar/start-sidecar! :midi-port 2 :midi-in-port 1) ; output 2 + monitor input 1"
+    (sidecar/start-sidecar! :midi-port 2)                     ; by index
+    (sidecar/start-sidecar! :midi-port \"IAC\")                ; by name substring
+    (sidecar/start-sidecar! :midi-port \"Hydra\" :midi-in-port \"Hydra\") ; both by name"
   [& {:keys [binary port midi-port midi-in-port]}]
   (when (:running? @sidecar-state)
     (throw (ex-info "Sidecar already running; call stop-sidecar! first" {})))
-  (let [port   (long (or port (find-free-port)))
-        binary (or binary (find-binary))
-        cmd    (cond-> [binary "--port" (str port)]
-                 midi-port    (conj "--midi-port"    (str midi-port))
-                 midi-in-port (conj "--midi-in-port" (str midi-in-port)))]
+  (let [port         (long (or port (find-free-port)))
+        binary       (or binary (find-binary))
+        midi-port    (cond
+                       (string? midi-port)    (find-midi-port midi-port :direction :output)
+                       :else                  midi-port)
+        midi-in-port (cond
+                       (string? midi-in-port) (find-midi-port midi-in-port :direction :input)
+                       :else                  midi-in-port)
+        cmd          (cond-> [binary "--port" (str port)]
+                       midi-port    (conj "--midi-port"    (str midi-port))
+                       midi-in-port (conj "--midi-in-port" (str midi-in-port)))]
     (let [pb   (doto (ProcessBuilder. ^java.util.List cmd)
                  ;; Inherit stdin and stdout; pipe stderr for capture+tee
                  (.redirectInput  ProcessBuilder$Redirect/INHERIT)

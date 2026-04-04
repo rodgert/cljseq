@@ -375,6 +375,19 @@
   :macro-8      {:source :cc-23      :yields :cc-0-127}}
 
  ;; -------------------------------------------------------------------------
+ ;; MTS — MIDI Tuning Standard
+ ;; Hydrasynth accepts MTS Bulk Dump (Non-Realtime Universal SysEx F0 7E 7F 08 01).
+ ;; After receipt all 128 keys are retuned for the life of the patch.
+ ;; Use sidecar/send-mts! to push a cljseq.scala/MicrotonalScale to the synth.
+ ;; -------------------------------------------------------------------------
+ :mts/retune
+ {:supported     true
+  :message-type  :bulk-dump          ; F0 7E 7F 08 01 — Non-Realtime Universal SysEx
+  :size-bytes    408
+  :scope         :patch              ; tuning persists until patch change or power cycle
+  :send-fn       sidecar/send-mts!}
+
+ ;; -------------------------------------------------------------------------
  ;; Metadata
  ;; -------------------------------------------------------------------------
  :device/firmware-version "1.5"

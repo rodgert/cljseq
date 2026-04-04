@@ -1,0 +1,98 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Boss SDE-3000D Digital Delay (Dual) — cljseq device map
+;;
+;; Source: Boss SDE-3000D Owner's Manual, MIDI Implementation Chart (Appendix)
+;;         https://www.boss.info/global/support/by_product/sde-3000d/owners_manuals/
+;;
+;; Confidence: Device metadata and connectivity confirmed.
+;;             CC numbers should be verified against the official MIDI
+;;             implementation chart in the Owner's Manual before production use.
+;;
+;; The SDE-3000D is a stereo dual-engine delay, reissuing the classic Roland
+;; SDE-3000 (1983) with modern digital precision and MIDI control. Two completely
+;; independent delay engines (A and B) can run in parallel or series, with
+;; independent time/feedback/modulation per engine.
+;;
+;; This is different from the DD-500: the SDE-3000D is a single-algorithm unit
+;; (digital delay only) but with greater character fidelity to the original
+;; hardware and more flexible stereo routing between engines.
+;;
+;; MIDI via DIN 5-pin (in/out) and USB. No thru port on the SDE-3000D hardware.
+
+{:device/id           :boss/sde-3000d
+ :device/name         "Boss SDE-3000D Digital Delay"
+ :device/manufacturer "Boss"
+ :device/type         :delay
+ :device/role         :target
+ :device/connectivity [:din-midi       ; 5-pin DIN in/out (no thru)
+                        :usb-midi]
+
+ :midi/channel 1
+
+ :midi/program-change
+ {:supported  true
+  :range      [0 98]                   ; verify exact patch count from manual
+  :bank-select {:cc-msb 0 :cc-lsb 32}}
+
+ :midi/cc
+ {80 {:label "Bypass"          :range [0 127]
+      :description "0=bypass, 127=effect on"}
+  1  {:label "Expression"      :range [0 127]
+      :description "Expression/control input; assignable target"}
+  7  {:label "Output Level"    :range [0 127]}
+
+  ;; Engine A — delay parameters (verify CC# from MIDI implementation)
+  14 {:label "A: Delay Time"   :range [0 127]
+      :description "Engine A delay time (coarse; use with fine for precision)"}
+  15 {:label "A: Time Fine"    :range [0 127]
+      :description "Engine A delay time (fine adjustment)"}
+  16 {:label "A: Feedback"     :range [0 127]
+      :description "Engine A feedback / repeat count"}
+  17 {:label "A: High Cut"     :range [0 127]
+      :description "Engine A high-cut filter (simulates tape head degradation)"}
+  18 {:label "A: Low Cut"      :range [0 127]
+      :description "Engine A low-cut filter"}
+  19 {:label "A: Effect Lvl"  :range [0 127]
+      :description "Engine A wet output level"}
+  20 {:label "A: Pan"          :range [0 127]
+      :description "Engine A stereo pan (64=centre)"}
+  21 {:label "A: Mod Depth"    :range [0 127]
+      :description "Engine A modulation depth (chorus/pitch flutter effect)"}
+  22 {:label "A: Mod Rate"     :range [0 127]
+      :description "Engine A modulation rate"}
+
+  ;; Engine B — delay parameters (verify CC# from MIDI implementation)
+  28 {:label "B: Delay Time"   :range [0 127]}
+  29 {:label "B: Time Fine"    :range [0 127]}
+  30 {:label "B: Feedback"     :range [0 127]}
+  31 {:label "B: High Cut"     :range [0 127]}
+  32 {:label "B: Low Cut"      :range [0 127]}
+  33 {:label "B: Effect Lvl"  :range [0 127]}
+  34 {:label "B: Pan"          :range [0 127]}
+  35 {:label "B: Mod Depth"    :range [0 127]}
+  36 {:label "B: Mod Rate"     :range [0 127]}}
+
+ :midi/clock
+ {:receive true                        ; delay time can lock to MIDI clock
+  :transmit false}
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes for cljseq integration
+ ;; -------------------------------------------------------------------------
+ ;; The dual-engine + stereo pan architecture enables a "ping-pong" delay
+ ;; that can be automated in real time:
+ ;;   Engine A: left pan (CC 20 = 0), short time
+ ;;   Engine B: right pan (CC 34 = 127), long time (A+B = natural stereo spread)
+ ;;
+ ;; High-cut sweep (tape head simulation):
+ ;;   Sweep CC 17 from 127 (bright/clean) to 40 (dark/degraded) over a section
+ ;;   for a Berlin School "tape decay into the reverb tail" effect.
+ ;;
+ ;; Feedback ramp for self-oscillation:
+ ;;   Carefully sweep CC 16 above ~110 — the SDE-3000D enters self-oscillation
+ ;;   territory. Use send-cc! with a guard: never exceed 120 without a release plan.
+
+ :device/firmware-version "1.0"
+ :device/map-source       "Boss SDE-3000D Owner's Manual MIDI Implementation Chart"
+ :device/map-version      "2026-04-04"}

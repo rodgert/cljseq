@@ -1,0 +1,158 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Arturia KeyStep Pro — cljseq device map
+;;
+;; Source: Arturia KeyStep Pro User Manual + MIDI Implementation Chart
+;;         Arturia MIDI Control Center documentation
+;;
+;; Confidence: High for note/velocity/aftertouch/clock/track channels.
+;;             Per-step probability and per-track CC assignments are
+;;             configurable via MIDI Control Center — defaults noted here.
+;;
+;; The KeyStep Pro is a 37-key polyphonic controller/sequencer hybrid with:
+;;   - 4 independent sequencer tracks (Tracks 1–3: melodic; Track 4: drum)
+;;   - Each track has its own MIDI channel and CV/gate output
+;;   - Up to 64 steps per melodic track with per-step velocity, gate, probability
+;;   - DIN MIDI In + Out (unlike original KeyStep: In is present here)
+;;   - USB MIDI + CV/Gate outputs for Eurorack
+;;
+;; Role: :controller and :sequencer — transmits keyboard/sequencer data,
+;;       and has a DIN MIDI In so it can also receive (e.g. MIDI clock from DAW).
+
+{:device/id           :arturia/keystep-pro
+ :device/name         "Arturia KeyStep Pro"
+ :device/manufacturer "Arturia"
+ :device/type         :controller            ; primarily; also :sequencer
+ :device/role         :source                ; transmits to cljseq; keyboard/seq data
+ :device/connectivity [:usb-midi             ; USB-B, class-compliant
+                        :din-midi-in         ; 5-pin DIN MIDI input (clock slave, config)
+                        :din-midi-out        ; 5-pin DIN MIDI output (track 1 default)
+                        :cv-gate             ; 1V/oct + gate per track (4 outputs)
+                        :cv-clock]           ; clock output
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channels — one per track (default assignments)
+ ;; All are user-configurable via MIDI Control Center.
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1      ; keyboard channel (same as Track 1 default)
+
+ :device/tracks
+ {:track-1 {:channel 1 :type :melodic   :steps 64 :note "Keyboard transmits on this channel"}
+  :track-2 {:channel 2 :type :melodic   :steps 64}
+  :track-3 {:channel 3 :type :melodic   :steps 64}
+  :track-4 {:channel 10 :type :drum     :steps 64
+            :note "16 drum pads; default MIDI channel 10 (General MIDI drums)"}}
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI notes transmitted
+ ;; 37 full-size keys (C2–C5 default; octave-shifted with +/- buttons)
+ ;; -------------------------------------------------------------------------
+ :midi/notes
+ {:range      [0 127]                        ; octave shift extends physical 37-key range
+  :velocity   {:note-on true :note-off false} ; note-off velocity fixed at 64
+  :aftertouch {:channel-pressure true        ; 37-key strip transmits channel pressure
+               :poly-key-pressure false}}    ; per-key polyphonic AT not available
+
+ ;; -------------------------------------------------------------------------
+ ;; Pitch bend / mod
+ ;; -------------------------------------------------------------------------
+ :midi/pitch-bend
+ {:range-semitones 2    ; configurable in MIDI Control Center
+  :configurable    true
+  :source          :touch-strip}     ; touch strip in PB mode
+
+ ;; -------------------------------------------------------------------------
+ ;; CC transmitted
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+ [;; Touch strip (configurable mode: AT, PB, or CC)
+  {:cc :configurable
+   :path [:touch-strip]
+   :range [0 127]
+   :cc-type :configurable
+   :configured-via :midi-control-center
+   :default-cc 1
+   :note "CC number set in MIDI Control Center; default CC 1 (mod wheel)"}
+
+  ;; Sustain pedal (1/4" TRS input)
+  {:cc 64 :path [:sustain] :range [0 127] :default 0
+   :source :sustain-jack}
+
+  ;; Per-track CC automation (steps can record/play CC changes per track)
+  {:cc :configurable
+   :path [:track-1 :automation]
+   :note "CC automation per step on track channel; CC# user-assigned"}]
+
+ ;; -------------------------------------------------------------------------
+ ;; Sequencer
+ ;; -------------------------------------------------------------------------
+ :sequencer
+ {:tracks          4
+  :steps-per-track 64       ; melodic tracks; drum track also 64 steps
+  :per-step        [:note :velocity :gate-length :probability :cc-automation]
+  :polyphonic      true     ; up to 8 notes per step on melodic tracks
+  :patterns        16       ; 16 patterns per project storable on device
+  :note "Track 4 has 16 drum pad rows, each mapping to a configurable MIDI note"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Arpeggiator
+ ;; -------------------------------------------------------------------------
+ :arpeggiator
+ {:modes    [:up :down :up-down :random :order]
+  :rates    [1/8 1/16 1/32 1/4 :sync]  ; syncable to internal/external clock
+  :octave-range [1 4]}
+
+ ;; -------------------------------------------------------------------------
+ ;; Chord memory
+ ;; -------------------------------------------------------------------------
+ :chord-memory
+ {:max-notes 8
+  :note "Chord spread across active voices on keypress; velocity preserved per note"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive true     ; slaves to external MIDI clock via DIN In or USB
+  :transmit true    ; masters internal clock to DIN Out and USB
+  :transport-messages [:start :stop :continue]}
+
+ ;; -------------------------------------------------------------------------
+ ;; CV/Gate outputs — 4 channels (one per sequencer track)
+ ;; -------------------------------------------------------------------------
+ :cv-outputs
+ {:track-1 {:pitch  {:type :v/oct  :range-v [-5 5]}
+            :gate   {:type :gate   :levels-v [0 5]}
+            :mod    {:type :cv     :assignable true}}
+  :track-2 {:pitch  {:type :v/oct  :range-v [-5 5]}
+            :gate   {:type :gate   :levels-v [0 5]}}
+  :track-3 {:pitch  {:type :v/oct  :range-v [-5 5]}
+            :gate   {:type :gate   :levels-v [0 5]}}
+  :track-4 {:gate   {:type :gate   :levels-v [0 5]
+                     :note "Drum gates; one gate output per pad (via expander)"}
+            :clock  {:type :clock  :configurable true}}}
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x6B]   ; Arturia
+  :purpose         [:midi-control-center-communication :configuration-dump
+                    :project-backup]}
+
+ ;; -------------------------------------------------------------------------
+ ;; cljseq binding hints
+ ;; -------------------------------------------------------------------------
+ :cljseq/bind-sources
+ {:notes       {:source :note-on          :yields :pitch-midi}
+  :velocity    {:source :note-on          :yields :velocity-0-127}
+  :touch-strip {:source :channel-pressure :yields :pressure-0-127}
+  :sustain     {:source :cc-64            :yields :boolean}
+  :track-1-seq {:source :note-on          :channel 1 :yields :pitch-midi
+                :note "Sequencer output on Track 1 channel"}
+  :track-2-seq {:source :note-on          :channel 2 :yields :pitch-midi}
+  :track-3-seq {:source :note-on          :channel 3 :yields :pitch-midi}
+  :track-4-drum {:source :note-on         :channel 10 :yields :pitch-midi}}
+
+ :device/map-source   "Arturia KeyStep Pro User Manual + MIDI Implementation Chart"
+ :device/map-version  "2026-04-04"}

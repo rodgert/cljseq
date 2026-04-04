@@ -22,6 +22,7 @@
 //   6. Process exits with code 0
 
 #include "ipc.h"
+#include "midi_clock.h"
 #include "midi_dispatch.h"
 
 #include <cljseq/link_bridge.h>
@@ -72,6 +73,15 @@ static int parse_midi_in_port(int argc, char* argv[]) {
 }
 
 int main(int argc, char* argv[]) {
+    // --list-ports: print available MIDI ports to stdout and exit.
+    // Must be checked before parse_port(), which exits on missing --port.
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--list-ports") == 0) {
+            midi_list_ports();
+            return 0;
+        }
+    }
+
     unsigned short port         = parse_port(argc, argv);
     unsigned int   midi_port    = parse_midi_port(argc, argv);
     int            midi_in_port = parse_midi_in_port(argc, argv);
@@ -93,7 +103,12 @@ int main(int argc, char* argv[]) {
         std::fprintf(stderr, "[main] MIDI init failed — continuing without MIDI\n");
     }
 
-    // 3. Wire scheduler callbacks to MIDI dispatch.
+    // 3. Initialise MIDI clock (does not start the thread yet; Link enable
+    //    triggers playback via midi_clock_set_playing(true) in ipc.cpp).
+    midi_clock_init(link);
+    midi_clock_start();
+
+    // 4. Wire scheduler callbacks to MIDI dispatch.
     cljseq::scheduler_init({
         .note_on       = midi_note_on,
         .note_off      = midi_note_off,
@@ -102,18 +117,20 @@ int main(int argc, char* argv[]) {
         .chan_pressure  = midi_channel_pressure,
     });
 
-    // 4. Start scheduler on its own thread.
+    // 5. Start scheduler on its own thread.
     std::thread sched_thread(cljseq::scheduler_run);
 
-    // 5. Accept the JVM connection and run the bidirectional IPC event loop.
+    // 6. Accept the JVM connection and run the bidirectional IPC event loop.
     //    (blocks until Shutdown message received)
     ipc_serve(port, link, midi_in_port);
 
-    // 6. Signal scheduler to stop and wait for it to drain.
+    // 7. Signal clock and scheduler to stop and wait for them to drain.
+    //    Clock must stop before MIDI port closes so the final 0xFC can be sent.
+    midi_clock_stop();
     cljseq::scheduler_stop();
     sched_thread.join();
 
-    // 7. Close MIDI port.
+    // 8. Close MIDI port.
     midi_shutdown();
 
     std::fprintf(stderr, "[main] clean exit\n");

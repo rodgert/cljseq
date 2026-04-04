@@ -1,12 +1,16 @@
 ;; SPDX-License-Identifier: EPL-2.0
 ;;
-;; Arturia KeyStep (original) — cljseq device map
+;; Arturia KeyStep (original, 32-key) — cljseq device map
 ;;
 ;; The KeyStep is a controller (send-only role). This map describes what it
 ;; *transmits*; cljseq uses this to configure ctrl/bind! source mappings.
 ;;
 ;; Confidence: Medium-High for note/velocity/AT/clock.
 ;;             Strip CC assignment is user-configurable via MIDI Control Center.
+;;
+;; HARDWARE STATUS: This map has not been verified on physical hardware.
+;;                  Use arturia-keystep-pro.edn for the KeyStep Pro (37-key,
+;;                  4-track sequencer, DIN MIDI In, polyphonic recording).
 ;;
 ;; NOTE: The original KeyStep has no DIN MIDI input — it cannot be a target.
 ;;       Use :role :controller to reflect this.

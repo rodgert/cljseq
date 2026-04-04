@@ -49,7 +49,7 @@ the Windows Multimedia API (WinMM) via RtMidi — no extra driver is required.
 ## 1. Clone
 
 ```bash
-git clone https://github.com/YOUR_ORG/cljseq.git
+git clone https://github.com/rodgert/cljseq.git
 cd cljseq
 ```
 

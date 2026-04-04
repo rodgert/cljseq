@@ -25,6 +25,7 @@ public:
     bool active() const override;
     void set_bpm(double bpm) override;
     void set_state_callback(LinkStateCallback cb) override;
+    AudioClockSnapshot capture_audio_clock() const override;
 
 private:
     ableton::Link   link_;

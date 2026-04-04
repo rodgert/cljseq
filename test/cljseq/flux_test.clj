@@ -128,17 +128,29 @@
 ;; freeze! / unfreeze! — read head
 ;; ---------------------------------------------------------------------------
 
+(defn- wait-until [pred timeout-ms]
+  "Spin-poll `pred` every 1ms until it returns truthy or `timeout-ms` elapses."
+  (let [deadline (+ (System/currentTimeMillis) timeout-ms)]
+    (loop []
+      (or (pred)
+          (when (< (System/currentTimeMillis) deadline)
+            (Thread/sleep 1)
+            (recur))))))
+
 (deftest freeze-stops-read-advance-test
   (testing "freeze! prevents read head from advancing"
     (flux/defflux :test/freeze {:steps 8 :init 60
                                  :read {:clock (clock/->Phasor 1 0)}
                                  :output {:target :stdout}})
-    (Thread/sleep 5)   ; let runner start
-    ;; Measure stability after freeze — avoids the race between reading pos-before
-    ;; and calling freeze! (a tick can slip between the two).
+    ;; Wait for at least one advance so we know the runner is live before freezing.
+    (let [p0 (flux/read-pos :test/freeze)]
+      (wait-until #(not= p0 (flux/read-pos :test/freeze)) 500))
     (flux/freeze! :test/freeze)
+    ;; Brief grace period: let any in-flight advance already in progress complete
+    ;; before sampling the "frozen" position.
+    (Thread/sleep 5)
     (let [pos-at-freeze (flux/read-pos :test/freeze)]
-      (Thread/sleep 20)   ; allow several potential advances if freeze were broken
+      (Thread/sleep 50)   ; allow several potential advances if freeze were broken
       (is (= pos-at-freeze (flux/read-pos :test/freeze)) "frozen head did not advance"))
     (flux/unfreeze! :test/freeze)
     (flux/stop! :test/freeze)))
@@ -280,10 +292,8 @@
     (flux/defflux :test/fwd {:steps 4 :init 60
                               :read  {:clock (clock/->Phasor 1 0) :direction :forward}
                               :output {:target :stdout}})
-    (Thread/sleep 5)
-    (let [p0 (flux/read-pos :test/fwd)]
-      (Thread/sleep 5)
-      (let [p1 (flux/read-pos :test/fwd)]
-        ;; >= would fail on a valid modular wrap (e.g. 3→0); just assert movement
-        (is (not= p0 p1) "position advanced (or wrapped)")))
+    ;; Spin-wait for the runner to actually advance rather than sleeping a fixed amount.
+    (let [p0 (flux/read-pos :test/fwd)
+          advanced? (wait-until #(not= p0 (flux/read-pos :test/fwd)) 500)]
+      (is advanced? "position advanced (or wrapped)"))
     (flux/stop! :test/fwd)))

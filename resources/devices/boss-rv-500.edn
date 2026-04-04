@@ -1,0 +1,74 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Boss RV-500 Reverb — cljseq device map
+;;
+;; Source: Boss RV-500 Owner's Manual, MIDI Implementation Chart (Appendix)
+;;         https://www.boss.info/global/support/by_product/rv-500/owners_manuals/
+;;
+;; Confidence: Patch/bank select and bypass CC are confirmed.
+;;             Per-parameter CCs follow the same architecture as DD-500;
+;;             verify exact assignments against official PDF.
+;;
+;; The RV-500 has two independent reverb engines (A and B) with 21 algorithm
+;; types including hall, plate, spring, shimmer, and non-linear. Dual-engine
+;; mode allows a short room reverb (A) under a long hall or shimmer (B),
+;; making it well suited to layered ambient texture automation.
+;;
+;; MIDI via DIN 5-pin and USB. Same patch/bank/bypass architecture as DD-500.
+
+{:device/id           :boss/rv-500
+ :device/name         "Boss RV-500 Reverb"
+ :device/manufacturer "Boss"
+ :device/type         :reverb
+ :device/role         :target
+ :device/connectivity [:din-midi
+                        :usb-midi]
+
+ :midi/channel 1
+
+ :midi/program-change
+ {:supported  true
+  :range      [0 98]
+  :bank-select {:cc-msb 0 :cc-lsb 32}}
+
+ :midi/cc
+ {80 {:label "Bypass"          :range [0 127]
+      :description "0=bypass, 127=effect on"}
+  1  {:label "Expression"      :range [0 127]
+      :description "Expression pedal; assignable target"}
+  7  {:label "Output Level"    :range [0 127]}
+
+  ;; Engine A — reverb parameters (verify CC# from MIDI implementation)
+  16 {:label "A: Reverb Time"  :range [0 127] :description "Engine A decay time"}
+  17 {:label "A: Pre-Delay"    :range [0 127] :description "Engine A pre-delay time"}
+  18 {:label "A: Effect Lvl"  :range [0 127] :description "Engine A wet level"}
+  19 {:label "A: Tone"         :range [0 127] :description "Engine A high-frequency damping"}
+  20 {:label "A: Low Cut"      :range [0 127] :description "Engine A low-frequency cut"}
+  21 {:label "A: Mod Depth"    :range [0 127] :description "Engine A modulation depth"}
+
+  ;; Engine B — reverb parameters (verify CC# from MIDI implementation)
+  48 {:label "B: Reverb Time"  :range [0 127] :description "Engine B decay time"}
+  49 {:label "B: Pre-Delay"    :range [0 127] :description "Engine B pre-delay time"}
+  50 {:label "B: Effect Lvl"  :range [0 127] :description "Engine B wet level"}
+  51 {:label "B: Tone"         :range [0 127] :description "Engine B high-frequency damping"}
+  52 {:label "B: Low Cut"      :range [0 127] :description "Engine B low-frequency cut"}
+  53 {:label "B: Mod Depth"    :range [0 127] :description "Engine B modulation depth"}}
+
+ :midi/clock
+ {:receive false :transmit false}
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes for cljseq integration
+ ;; -------------------------------------------------------------------------
+ ;; Pre-delay and decay are natural parameters for tension/release arcs:
+ ;;   :buildup → decay 40→110 over 8 bars (room grows to cathedral)
+ ;;   :breakdown → mod-depth 0→80 (reverb starts to flutter/oscillate)
+ ;;
+ ;; Shimmer algorithm: when algorithm is set to shimmer, CC 21 (A mod depth)
+ ;; controls shimmer regeneration — identical role to NightSky's :glimmer.
+ ;; A trajectory sweeping both NightSky:glimmer and RV-500:A-mod-depth
+ ;; in parallel creates a thickening shimmer texture.
+
+ :device/firmware-version "1.0"
+ :device/map-source       "Boss RV-500 Owner's Manual MIDI Implementation Chart"
+ :device/map-version      "2026-04-04"}

@@ -1,0 +1,111 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Strymon Volante Magnetic Echo Machine — cljseq device map
+;;
+;; Source: Strymon Volante MIDI Implementation
+;;         https://www.strymon.net/volante-midi-implementation/
+;;
+;; Confidence: Parameter names and roles confirmed. CC numbers are as
+;;             published by Strymon; verify against official implementation
+;;             chart if programming via device-send!.
+;;
+;; The Volante simulates a magnetic tape/drum/studio echo machine with
+;; three selectable machine types (Studio Tape, Drum Echo, Oil Can) and
+;; four independently switchable playback heads. Sound-on-Sound (SOS) mode
+;; adds live layering on top of the echo buffer.
+;;
+;; MIDI via TRS-MIDI (3.5mm Type-A) or USB MIDI. No DIN 5-pin.
+;; MIDI channel: configurable Ch 1–16 or Omni. Default: channel 1.
+;;
+;; The four playback heads each have an independent CC for level, enabling
+;; real-time rhythmic texture programming — a head can be brought in or out
+;; on a beat boundary, giving the Volante conductor-like expressiveness.
+
+{:device/id           :strymon/volante
+ :device/name         "Strymon Volante Magnetic Echo Machine"
+ :device/manufacturer "Strymon"
+ :device/type         :delay
+ :device/role         :target
+ :device/connectivity [:trs-midi-a     ; 3.5mm TRS Type-A (minijack)
+                        :usb-midi]
+
+ :midi/channel 1
+
+ :midi/program-change
+ {:supported   true
+  :range       [0 299]                 ; 300 preset slots (bank A/B/C × 100)
+  :bank-select :cc0}
+
+ :midi/cc
+ {;; Main echo parameters
+  14 {:label "Echo Mix"        :range [0 127] :description "Wet/dry blend"}
+  15 {:label "Tape Speed"      :range [0 127]
+      :description "Echo / delay time (scales with machine type)"}
+  16 {:label "Tape Tension"    :range [0 127]
+      :description "Pitch wobble and flutter amount (tape degradation simulation)"}
+  17 {:label "Feedback"        :range [0 127]
+      :description "Repeat regeneration / echo sustain"}
+  18 {:label "Tone"            :range [0 127]
+      :description "High-frequency rolloff (brightness of repeats)"}
+  19 {:label "Saturation"      :range [0 127]
+      :description "Input saturation / harmonic richness of tape echo"}
+
+  ;; Playback head levels — the Volante's most distinctive automation surface.
+  ;; Each head plays the echo buffer at a different time offset.
+  ;; Setting a head level to 0 effectively mutes that rhythmic echo voice.
+  20 {:label "Head 1 Level"    :range [0 127]
+      :description "Playback head 1 output level (shortest echo time)"}
+  21 {:label "Head 2 Level"    :range [0 127]
+      :description "Playback head 2 output level"}
+  22 {:label "Head 3 Level"    :range [0 127]
+      :description "Playback head 3 output level"}
+  23 {:label "Head 4 Level"    :range [0 127]
+      :description "Playback head 4 output level (longest echo time)"}
+
+  ;; Sound-on-Sound
+  24 {:label "SOS Record"      :range [0 127]
+      :description "Sound-on-Sound record level; 0=off, 127=full record. Latching."}
+  25 {:label "SOS Mix"         :range [0 127]
+      :description "Sound-on-Sound playback mix level"}
+
+  ;; Bypass
+  102 {:label "Bypass"         :range [0 127]
+       :description "0=bypass, 127=effect on; verify CC# from MIDI implementation"}
+
+  ;; Expression
+  7  {:label "Expression"      :range [0 127]
+      :description "Expression/control pedal input; target is configurable"}}
+
+ :midi/clock
+ {:receive true                        ; Tape Speed can sync to MIDI clock
+  :transmit false}
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes for cljseq integration
+ ;; -------------------------------------------------------------------------
+ ;; Head matrix programming:
+ ;;   Each head represents a different echo time offset. Automating head levels
+ ;;   creates evolving rhythmic delay patterns without changing the base tempo.
+ ;;
+ ;;   Example — Berlin School 16th-note staircase:
+ ;;     Head 1 (CC 20): 127 — tight 16th echo
+ ;;     Head 2 (CC 21): 80  — 8th echo (quieter)
+ ;;     Head 3 (CC 22): 50  — quarter echo (quieter still)
+ ;;     Head 4 (CC 23): 0   — mute longest echo (too muddy at fast tempos)
+ ;;
+ ;;   Over a buildup section, gradually bring in Head 4 (CC 23: 0→60) to
+ ;;   add the long spacious echo for the drop.
+ ;;
+ ;; SOS (Sound-on-Sound) as a compositional tool:
+ ;;   - SOS record (CC 24=127) layers the input onto the echo buffer
+ ;;   - Use as a conductor-triggered event: arm SOS at section boundary,
+ ;;     play motif, disarm — motif loops indefinitely under the next section
+ ;;   - Companion namespace `cljseq.volante` should expose (sos-arm!) / (sos-disarm!)
+ ;;
+ ;; Tape degradation arc:
+ ;;   Sweep tension (CC 16) 0→60 and saturation (CC 19) 0→80 simultaneously
+ ;;   over 8 bars to simulate tape aging — a natural tension-building device.
+
+ :device/firmware-version "1.0"
+ :device/map-source       "Strymon Volante MIDI Implementation (strymon.net)"
+ :device/map-version      "2026-04-04"}

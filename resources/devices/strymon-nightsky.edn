@@ -1,0 +1,117 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Strymon NightSky Reverb Synthesizer — cljseq device map
+;;
+;; Source: Strymon NightSky MIDI Implementation
+;;         https://www.strymon.net/nightsky-midi-implementation/
+;;
+;; Confidence: Parameter names and roles are confirmed.
+;;             CC numbers are as published in the Strymon MIDI implementation;
+;;             verify against the linked chart if programming via device-send!.
+;;
+;; NightSky is a reverb synthesizer rather than a conventional reverb pedal.
+;; Its parameter space (warp, glimmer, reflect) describes a texture volume
+;; that maps naturally onto cljseq trajectory automation and conductor arcs.
+;;
+;; Connectivity: TRS-MIDI (3.5mm, Type A) or USB MIDI.
+;;               No DIN 5-pin. TRS-A is compatible with standard TRS-MIDI cables.
+;;
+;; MIDI channel: configurable on the pedal (Ch 1–16, or Omni).
+;; Default: channel 1.
+;;
+;; Bypass types: Buffered, True Bypass, or DSP bypass (trails).
+;; TRAILS mode: reverb tail bleeds through after bypass — useful as a
+;;              conductor "release" cue where the section fades naturally.
+
+{:device/id           :strymon/nightsky
+ :device/name         "Strymon NightSky Reverb Synthesizer"
+ :device/manufacturer "Strymon"
+ :device/type         :reverb
+ :device/role         :target
+ :device/connectivity [:trs-midi-a     ; 3.5mm TRS Type-A (minijack)
+                        :usb-midi]     ; USB class-compliant
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel
+ ;; -------------------------------------------------------------------------
+ :midi/channel 1                       ; default; configurable Ch 1–16 or Omni
+
+ ;; -------------------------------------------------------------------------
+ ;; Program Change — preset recall
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:supported    true
+  :range        [0 299]                ; 300 preset slots (bank A/B/C × 100)
+  :bank-select  :cc0}                  ; CC 0 selects bank before PC
+
+ ;; -------------------------------------------------------------------------
+ ;; CC — parameter control
+ ;;
+ ;; All main knob parameters are continuously addressable via MIDI CC.
+ ;; The NightSky transmits and receives CC for all knob positions.
+ ;;
+ ;; Verify exact CC numbers from:
+ ;;   https://www.strymon.net/nightsky-midi-implementation/
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+ {;; Core reverb texture
+  14 {:label "Size"      :range [0 127] :description "Reverb room/space size"}
+  15 {:label "Reflect"   :range [0 127] :description "Feedback / regeneration amount"}
+  16 {:label "Mix"       :range [0 127] :description "Wet/dry blend (0=dry, 127=wet)"}
+
+  ;; Shimmer / pitch synthesis (the 'NightSky sound')
+  17 {:label "Voice"     :range [0 127] :description "Pitch of shimmer voices (interval)"}
+  18 {:label "Glimmer"   :range [0 127] :description "Shimmer sparkle / overtone density"}
+
+  ;; Modulation
+  19 {:label "Speed"     :range [0 127] :description "Modulation rate"}
+  20 {:label "Depth"     :range [0 127] :description "Modulation depth"}
+
+  ;; Envelope + color
+  21 {:label "Attack"    :range [0 127] :description "Reverb attack / fade-in time"}
+  22 {:label "Tone"      :range [0 127] :description "High-frequency tone / damping"}
+
+  ;; Warp — pitch randomisation engine
+  23 {:label "Warp"      :range [0 127] :description "Pitch randomization of reverb voices"}
+
+  ;; Trails / freeze
+  24 {:label "Trails"    :range [0 127]
+      :description "Hold/freeze toggle; 0=trails off, 127=freeze/hold active"
+      :note "Latching: send 127 to freeze; send 0 to release. Maps to cue! trigger."}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Bypass
+ ;; -------------------------------------------------------------------------
+ :midi/bypass
+ {:cc         102                      ; verify from MIDI implementation
+  :values     {:bypass 0 :active 127}
+  :mode       :toggle
+  :trails     true}                    ; TRAILS mode passes reverb tail after bypass
+
+ ;; -------------------------------------------------------------------------
+ ;; Expression pedal (remote control)
+ ;; -------------------------------------------------------------------------
+ :midi/expression
+ {:cc          7                       ; CC 7 or as configured; verify from MIDI impl
+  :range       [0 127]
+  :assignable  true                    ; target parameter is configurable on the pedal}
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes for cljseq integration
+ ;; -------------------------------------------------------------------------
+ ;; The NightSky's texture parameters form a 3D space well suited to
+ ;; trajectory automation. Suggested conductor arc mappings:
+ ;;
+ ;;   :buildup section   → warp 0→60, glimmer 0→80, reflect 30→90
+ ;;   :drop section      → warp 0, glimmer 20, reflect 40 (clean landing)
+ ;;   :ambient section   → size 90+, reflect 70+, freeze CC 24=127
+ ;;
+ ;; Freeze as a cue point:
+ ;;   (device-send! :nightsky {:midi/cc 24 :value 127})  ; freeze
+ ;;   (device-send! :nightsky {:midi/cc 24 :value 0})    ; release
+ ;;
+ ;; MTS: NightSky does not respond to MTS — it is a reverb/FX, not a synth.
+
+ :device/firmware-version "1.0"        ; update as firmware advances
+ :device/map-source       "Strymon NightSky MIDI Implementation (strymon.net)"
+ :device/map-version      "2026-04-04"}

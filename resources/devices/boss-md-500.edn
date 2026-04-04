@@ -1,0 +1,78 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Boss MD-500 Modulation — cljseq device map
+;;
+;; Source: Boss MD-500 Owner's Manual, MIDI Implementation Chart (Appendix)
+;;         https://www.boss.info/global/support/by_product/md-500/owners_manuals/
+;;
+;; Confidence: Patch/bank select and bypass CC confirmed (shared Boss 500 arch).
+;;             Per-parameter CCs follow same engine A/B layout; verify from PDF.
+;;
+;; 32 modulation algorithm types: chorus, flanger, phaser, tremolo, vibrato,
+;; rotary, ring modulator, pitch shifter, and more. Dual-engine: run two
+;; modulation algorithms simultaneously (e.g. phaser + tremolo for rhythmic
+;; movement, or chorus + pitch for shimmer-without-reverb).
+;;
+;; MIDI via DIN 5-pin and USB.
+
+{:device/id           :boss/md-500
+ :device/name         "Boss MD-500 Modulation"
+ :device/manufacturer "Boss"
+ :device/type         :modulation
+ :device/role         :target
+ :device/connectivity [:din-midi
+                        :usb-midi]
+
+ :midi/channel 1
+
+ :midi/program-change
+ {:supported  true
+  :range      [0 98]
+  :bank-select {:cc-msb 0 :cc-lsb 32}}
+
+ :midi/cc
+ {80 {:label "Bypass"         :range [0 127]
+      :description "0=bypass, 127=effect on"}
+  1  {:label "Expression"     :range [0 127]
+      :description "Expression pedal; assignable target"}
+  7  {:label "Output Level"   :range [0 127]}
+
+  ;; Engine A — modulation parameters (verify CC# from MIDI implementation)
+  ;; Parameter semantics vary by algorithm type (rate/depth are universal;
+  ;; others depend on the selected effect).
+  16 {:label "A: Rate"        :range [0 127] :description "Engine A LFO rate / speed"}
+  17 {:label "A: Depth"       :range [0 127] :description "Engine A modulation depth"}
+  18 {:label "A: Effect Lvl" :range [0 127] :description "Engine A effect level"}
+  19 {:label "A: Tone"        :range [0 127] :description "Engine A tone / resonance"}
+  20 {:label "A: Direct Lvl" :range [0 127] :description "Engine A dry signal level"}
+  21 {:label "A: Param"       :range [0 127]
+      :description "Engine A algorithm-specific parameter (e.g. feedback for flanger/phaser)"}
+
+  ;; Engine B — modulation parameters (verify CC# from MIDI implementation)
+  48 {:label "B: Rate"        :range [0 127]}
+  49 {:label "B: Depth"       :range [0 127]}
+  50 {:label "B: Effect Lvl" :range [0 127]}
+  51 {:label "B: Tone"        :range [0 127]}
+  52 {:label "B: Direct Lvl" :range [0 127]}
+  53 {:label "B: Param"       :range [0 127]}}
+
+ :midi/clock
+ {:receive true                        ; LFO rate can lock to MIDI clock
+  :transmit false}
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes for cljseq integration
+ ;; -------------------------------------------------------------------------
+ ;; Rate and depth are natural trajectory targets for modulation arcs:
+ ;;   :groove-lock section → rate locks to MIDI clock; sweep depth 30→80
+ ;;   :breakdown section   → vibrato algorithm; increase depth over 4 bars
+ ;;
+ ;; Rotary algorithm fast/slow toggle:
+ ;;   The rotary effect has a fast/slow speed toggle. Map to CC 16 with
+ ;;   two target values (e.g. 30=slow, 100=fast) as a binary conductor cue.
+ ;;   (device-send! :md-500 {:midi/cc 16 :value 100})  ; fast
+ ;;   (device-send! :md-500 {:midi/cc 16 :value 30})   ; slow
+
+ :device/firmware-version "1.0"
+ :device/map-source       "Boss MD-500 Owner's Manual MIDI Implementation Chart"
+ :device/map-version      "2026-04-04"}

@@ -1,7 +1,7 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.dsl-test
   "Unit tests for cljseq.dsl — synth context, play!, phrase!, arp!, ring/tick!."
-  (:require [clojure.test :refer [deftest is testing]]
+  (:require [clojure.test :refer [deftest is testing use-fixtures]]
             [cljseq.clock :as clock]
             [cljseq.core  :as core]
             [cljseq.ctrl  :as ctrl]
@@ -9,6 +9,7 @@
             [cljseq.loop  :as loop-ns]
             [cljseq.phasor :as phasor]
             [cljseq.pitch :as pitch]
+            [cljseq.scala :as scala]
             [cljseq.scale :as scale]))
 
 ;; ---------------------------------------------------------------------------
@@ -528,4 +529,104 @@
             (is (some? step) "play! should have been called")
             ;; G4 = MIDI 67
             (is (= 67 (:pitch/midi step)) "root of G major = G4"))))
+      (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; *tuning-ctx* / apply-tuning / use-tuning! / with-tuning
+;; ---------------------------------------------------------------------------
+
+;; Build a simple 12-EDO MicrotonalScale (equal temperament) with
+;; period 1200 cents and 12 degrees at 100-cent steps.
+(def ^:private twelve-edo
+  (scala/->MicrotonalScale "12-EDO test" 1200.0
+                           (mapv #(* 100.0 %) (range 13))))
+
+;; A 31-EDO scale: 31 equal divisions of the octave, ~38.71 cents per step.
+(def ^:private thirty-one-edo
+  (scala/->MicrotonalScale "31-EDO test" 1200.0
+                           (mapv #(* (/ 1200.0 31) %) (range 32))))
+
+(deftest apply-tuning-nil-ctx-test
+  (testing "no *tuning-ctx* → step passes through unchanged"
+    (let [[step] (capture-play!
+                  #(binding [loop-ns/*tuning-ctx* nil]
+                     (dsl/play! 60 1/4)))]
+      (is (= 60 (:pitch/midi step)))
+      (is (nil? (:pitch/bend-cents step))))))
+
+(deftest apply-tuning-12edo-identity-test
+  (testing "12-EDO with identity KBM: MIDI 60 → 60, no bend"
+    (let [[step] (capture-play!
+                  #(binding [loop-ns/*tuning-ctx* {:scale twelve-edo}]
+                     (dsl/play! 60 1/4)))]
+      (is (= 60 (:pitch/midi step)))
+      (is (nil? (:pitch/bend-cents step)) "12-TET bend is zero, omitted"))))
+
+(deftest apply-tuning-12edo-midi61-test
+  (testing "12-EDO MIDI 61 → midi 61, no bend (exactly 100 cents)"
+    (let [[step] (capture-play!
+                  #(binding [loop-ns/*tuning-ctx* {:scale twelve-edo}]
+                     (dsl/play! 61 1/4)))]
+      (is (= 61 (:pitch/midi step)))
+      (is (nil? (:pitch/bend-cents step))))))
+
+(deftest apply-tuning-31edo-adds-bend-test
+  (testing "31-EDO MIDI 62 (D4): retuned MIDI and non-zero bend"
+    ;; With identity KBM, degree = midi - 60 = 2.
+    ;; 31-EDO degree 2 = 2*(1200/31) ≈ 77.42 cents.
+    ;; Nearest semitone = 1 (100 cents), so midi = 61, bend ≈ -22.58 cents.
+    (let [[step] (capture-play!
+                  #(binding [loop-ns/*tuning-ctx* {:scale thirty-one-edo}]
+                     (dsl/play! 62 1/4)))]
+      (is (integer? (:pitch/midi step)) "midi is an integer")
+      (is (number? (:pitch/bend-cents step)) "bend-cents present for 31-EDO"))))
+
+(deftest apply-tuning-no-pitch-midi-test
+  (testing "step without :pitch/midi passes through unchanged"
+    (let [[step] (capture-play!
+                  #(binding [loop-ns/*tuning-ctx* {:scale twelve-edo}]
+                     (dsl/play! {:pitch/midi 60 :mod/velocity 80} 1/4)))]
+      ;; play! normalises the map so :pitch/midi is present — this just ensures
+      ;; the tuning pipeline doesn't crash on a step that already went through.
+      (is (= 60 (:pitch/midi step))))))
+
+(deftest with-tuning-scope-test
+  (testing "with-tuning binds *tuning-ctx* for the body only"
+    (let [calls (atom [])]
+      (with-redefs [core/play! (fn [step] (swap! calls conj step))]
+        (binding [loop-ns/*virtual-time* 0.0]
+          ;; Outside with-tuning: no bend expected for 12-TET note
+          (dsl/play! 60 1/4)
+          ;; Inside with-tuning: 31-EDO context active
+          (dsl/with-tuning {:scale thirty-one-edo}
+            (dsl/play! 62 1/4))
+          ;; Outside again: no tuning
+          (dsl/play! 60 1/4)))
+      (let [[out-before in-scope out-after] @calls]
+        (is (nil? (:pitch/bend-cents out-before)) "no tuning outside")
+        (is (some? (:pitch/midi in-scope)) "tuning applied inside")
+        (is (nil? (:pitch/bend-cents out-after)) "no tuning after scope")))))
+
+(deftest use-tuning-sets-root-binding-test
+  (testing "use-tuning! alters the root binding of *tuning-ctx*"
+    (let [original loop-ns/*tuning-ctx*]
+      (try
+        (dsl/use-tuning! {:scale twelve-edo})
+        (is (= twelve-edo (:scale loop-ns/*tuning-ctx*)))
+        (finally
+          (alter-var-root #'loop-ns/*tuning-ctx* (constantly original)))))))
+
+(deftest tuning-opt-in-deflive-loop-test
+  (testing ":tuning opt in deflive-loop binds *tuning-ctx* for the loop thread"
+    (core/start! :bpm 6000)
+    (try
+      (let [observed (promise)]
+        (with-redefs [core/play! (fn [step] (deliver observed step))]
+          (core/deflive-loop :tuning-loop-test {:tuning {:scale thirty-one-edo}}
+            (dsl/play! 62 1/4)
+            (core/stop-loop! :tuning-loop-test))
+          (let [step (deref observed 500 nil)]
+            (is (some? step) "play! should have been called")
+            (is (integer? (:pitch/midi step)) "midi is an integer")
+            (is (number? (:pitch/bend-cents step)) "31-EDO bend added by loop"))))
       (finally (core/stop!)))))

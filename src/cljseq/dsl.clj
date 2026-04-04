@@ -52,6 +52,7 @@
             [cljseq.loop  :as loop-ns]
             [cljseq.mod   :as mod-ns]
             [cljseq.pitch :as pitch]
+            [cljseq.scala :as scala]
             [cljseq.scale :as scale-ns]))
 
 ;; ---------------------------------------------------------------------------
@@ -380,6 +381,71 @@
         (ctrl/send! path (clock/sample mod beat))))))
 
 ;; ---------------------------------------------------------------------------
+;; Tuning context management (§ microtonal)
+;; *tuning-ctx* is defined in cljseq.loop; dsl provides the user-facing API.
+;; ---------------------------------------------------------------------------
+
+;; Identity KBM: map-size 0 means midi->note uses (degree->note ms middle-note
+;; (- midi middle-note)), mapping the entire MIDI range with C4(60) as origin.
+(def ^:private identity-kbm
+  (scala/->KeyboardMap 0 0 127 60 69 440.0 12 []))
+
+(defn- apply-tuning
+  "Apply *tuning-ctx* to a step map.
+
+  Looks up :pitch/midi in the active KBM+scale and replaces it with the
+  retuned MIDI note, merging :pitch/bend-cents when the tuning deviates from
+  12-TET. Uses an identity KBM when :kbm is absent.
+
+  Returns `step` unchanged when:
+    - *tuning-ctx* is nil
+    - :pitch/midi is absent from the step map
+    - the MIDI note is out of the KBM range or maps to an unmapped (:x) key"
+  [step]
+  (if-let [{:keys [kbm scale]} loop-ns/*tuning-ctx*]
+    (if-let [midi (:pitch/midi step)]
+      (let [effective-kbm (or kbm identity-kbm)
+            result        (scala/midi->step effective-kbm scale (int midi))]
+        (if result
+          (merge step result)
+          step))
+      step)
+    step))
+
+(defn use-tuning!
+  "Set the default microtonal tuning context for subsequent play! calls at the REPL.
+
+  `ctx` should be a map with :scale (MicrotonalScale) and optionally :kbm
+  (KeyboardMap), or nil to disable retuning.
+
+  Example:
+    (use-tuning! {:scale (scala/load-scl \"31edo.scl\")})
+    (use-tuning! {:kbm   (scala/load-kbm \"whitekeys.kbm\")
+                  :scale (scala/load-scl \"pythagorean.scl\")})
+    (use-tuning! nil)   ; back to 12-TET
+
+  Not thread-safe — intended for interactive REPL use only.
+  Inside live loops, use the :tuning key in deflive-loop opts instead."
+  [ctx]
+  (alter-var-root #'loop-ns/*tuning-ctx* (constantly ctx))
+  nil)
+
+(defmacro with-tuning
+  "Execute `body` with `ctx` as the active microtonal tuning context.
+
+  `ctx` is a map with :scale (MicrotonalScale) and optionally :kbm (KeyboardMap),
+  or nil to disable retuning.
+
+  Example:
+    (def ms (scala/load-scl \"31edo.scl\"))
+    (with-tuning {:scale ms}
+      (play! 60)   ; retuned to 31-EDO degree 0
+      (play! 62)   ; retuned to 31-EDO degree 2)"
+  [ctx & body]
+  `(binding [loop-ns/*tuning-ctx* ~ctx]
+     ~@body))
+
+;; ---------------------------------------------------------------------------
 ;; play! — normalises all note forms to a step map, merges synth context
 ;; ---------------------------------------------------------------------------
 
@@ -403,8 +469,13 @@
   ([note dur]
    (let [ctx  loop-ns/*synth-ctx*
          step (cond
-                ;; Pitch record check must precede map? since defrecords are maps
-                (instance? cljseq.pitch.Pitch note) {:pitch/midi (pitch/pitch->midi note)}
+                ;; Pitch record check must precede map? since defrecords are maps.
+               ;; Thread :microtone through as :pitch/bend-cents so play! sends pitch bend.
+                (instance? cljseq.pitch.Pitch note)
+                (let [m  (pitch/pitch->midi note)
+                      mt (double (:microtone note 0))]
+                  (cond-> {:pitch/midi m}
+                    (not (zero? mt)) (assoc :pitch/bend-cents mt)))
                 (map? note)     note
                 (keyword? note) {:pitch/midi (core/keyword->midi note)}
                 (integer? note) {:pitch/midi (long note)}
@@ -415,6 +486,8 @@
                 step)
          ;; Step-mods are highest priority — sample at *virtual-time* and merge.
          step (apply-step-mods step)
+         ;; Tuning: retune :pitch/midi through *tuning-ctx* KBM+scale if active.
+         step (apply-tuning step)
          d    (or (:dur/beats step) dur *default-dur*)]
      (core/play! (assoc step :dur/beats d)))))
 
