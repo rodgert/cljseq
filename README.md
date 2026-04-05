@@ -5,7 +5,7 @@ nREPL; sends MIDI to hardware synthesisers, controllers, and FX units via a
 native real-time sidecar process.
 
 ```clojure
-(require '[cljseq.core :refer :all])
+(require '[cljseq.user :refer :all])
 
 (start! :bpm 120)
 
@@ -122,7 +122,7 @@ lein repl
 ```
 
 ```clojure
-(require '[cljseq.core :refer :all])
+(require '[cljseq.user :refer :all])
 
 ;; Connect MIDI output (by port name substring)
 (start-sidecar! :midi-port "IAC")

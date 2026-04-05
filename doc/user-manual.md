@@ -37,9 +37,16 @@ Version 0.1.0 · April 2026
 **macOS** (recommended): all C++ dependencies are auto-fetched by CMake via
 FetchContent. No Homebrew packages needed beyond Java and Leiningen.
 
-**Linux**: install `libasound2-dev` (ALSA) for MIDI support:
+**Linux**: install ALSA headers and build tools for MIDI support.
+
+Ubuntu / Ubuntu Studio (recommended Linux target):
 ```bash
 sudo apt install libasound2-dev cmake build-essential
+```
+
+Fedora / RHEL / CentOS Stream:
+```bash
+sudo dnf install alsa-lib-devel cmake gcc-c++ make
 ```
 
 **Windows**: use MSVC or clang-cl; MIDI uses WinMM (built-in).
@@ -90,8 +97,8 @@ lein repl
 ```
 
 ```clojure
-;; Load the cljseq API
-(require '[cljseq.core :refer :all])
+;; Load the cljseq API (convenience REPL namespace — exports everything)
+(require '[cljseq.user :refer :all])
 
 ;; Connect MIDI output (opens port 0 by default)
 (start-sidecar!)
@@ -589,10 +596,22 @@ and checkpoints. Bind a physical knob to a named path and read it from any loop.
 ```clojure
 (require '[cljseq.fractal :as fractal])
 
-;; L-system melody: expand from a seed using rewrite rules
-(def axiom [:C4])
-(def rules {:C4 [:C4 :E4 :G4] :E4 [:D4 :F4] :G4 [:G4 :B4]})
-(fractal/expand axiom rules 3)
+;; Build a fractal context: a C-major trunk with a transposed and reversed variant
+(def fctx
+  (atom (fractal/make-fractal-context
+          {:trunk      [{:pitch/midi 60 :dur/beats 1/4}   ; C4
+                        {:pitch/midi 64 :dur/beats 1/4}   ; E4
+                        {:pitch/midi 67 :dur/beats 1/4}   ; G4
+                        {:pitch/midi 71 :dur/beats 1/2}]  ; B4
+           :transforms [:reverse :transpose]
+           :root       60
+           :transpose-semitones 7})))   ; up a fifth
+
+;; Advance step-by-step in a live loop
+(deflive-loop :fractal-mel {}
+  (when-let [step (fractal/next-step! fctx)]
+    (play! step))
+  (sleep! 1/4))
 ```
 
 ### Conductor arcs

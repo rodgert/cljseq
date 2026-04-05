@@ -82,6 +82,8 @@
 ;; Re-export the most-used core API
 ;; ---------------------------------------------------------------------------
 
+(def start!        core/start!)
+(def stop!         core/stop!)
 (def set-bpm!      core/set-bpm!)
 (def get-bpm       core/get-bpm)
 (def play!         core/play!)
@@ -168,6 +170,10 @@
 
 (def with-dur       dsl/with-dur)
 (def use-harmony!   dsl/use-harmony!)
+
+(defmacro with-harmony [scale & body]
+  `(dsl/with-harmony ~scale ~@body))
+
 (def use-chord!     dsl/use-chord!)
 (def use-synth!     dsl/use-synth!)
 (def use-tuning!    dsl/use-tuning!)
@@ -220,8 +226,12 @@
 ;; Sidecar shorthand
 ;; ---------------------------------------------------------------------------
 
-(def list-midi-ports  sidecar/list-midi-ports)
-(def find-midi-port   sidecar/find-midi-port)
+(def list-midi-ports         sidecar/list-midi-ports)
+(def find-midi-port          sidecar/find-midi-port)
+(def send-cc!                sidecar/send-cc!)
+(def send-pitch-bend!        sidecar/send-pitch-bend!)
+(def send-channel-pressure!  sidecar/send-channel-pressure!)
+(def await-midi-message      sidecar/await-midi-message)
 
 (defn start-sidecar!
   "Connect the MIDI sidecar.
