@@ -274,3 +274,15 @@
     (if (.exists user-file)
       (.toURL user-file)
       (io/resource (str "devices/" name)))))
+
+(defn topology-path
+  "Canonical path for the user's studio topology file.
+
+  Default: (user-config-dir)/topology.edn
+  Override: CLJSEQ_TOPOLOGY environment variable.
+
+  The file is not created automatically. Use cljseq.topology/load-topology!
+  to load it; see doc/topology-example.edn for the schema and annotations."
+  ^String []
+  (or (read-env "CLJSEQ_TOPOLOGY")
+      (str (user-config-dir) "/topology.edn")))

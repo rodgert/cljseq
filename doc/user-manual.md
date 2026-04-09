@@ -1,6 +1,6 @@
 # cljseq User Manual
 
-Version 0.1.0 · April 2026
+Version 0.3.0 · April 2026
 
 ---
 
@@ -19,8 +19,12 @@ Version 0.1.0 · April 2026
 11. [FX Automation](#11-fx-automation)
 12. [Control Tree](#12-control-tree)
 13. [Generative Techniques](#13-generative-techniques)
-14. [Bach Corpus (Music21)](#14-bach-corpus-music21)
-15. [Reference: REPL Commands and Step Keys](#15-reference)
+14. [Studio Topology](#14-studio-topology)
+15. [Temporal Buffer](#15-temporal-buffer)
+16. [Threshold Extractor](#16-threshold-extractor)
+17. [Ensemble Harmony](#17-ensemble-harmony)
+18. [Bach Corpus (Music21)](#18-bach-corpus-music21)
+19. [Reference: REPL Commands and Step Keys](#19-reference)
 
 ---
 
@@ -265,15 +269,16 @@ new body starts.
 
 ;; Identify what chord a set of MIDI notes forms
 (identify-chord [60 64 67 71])
-;; => {:root :C :quality :maj7 :degree 1 :in-key? true}
+;; => {:root :C :root-pc 0 :quality :maj7 :inversion 0 :score 1.0}
 
-;; Roman numeral analysis
+;; Roman numeral analysis — returns a map, :roman is a keyword
 (chord->roman c-major (make-chord :G 4 :dom7))
-;; => "V7"
+;; => {:root :G :root-pc 7 :quality :dom7 :inversion 0 :score 1.0
+;;     :degree 4 :roman :V :in-key? true}
 
 ;; Suggest scales that fit a set of pitch classes
 (suggest-scales [0 2 4 5 7 9 11])
-;; => [{:root :C :mode :major :score 1.0} ...]
+;; => [{:root :C :mode :major :fitness 1.0} ...]
 ```
 
 ### Key detection and analysis
@@ -283,20 +288,26 @@ new body starts.
 (detect-key [0 2 4 5 7 9 11])
 ;; => {:root :C :mode :major :score 0.95}
 
-;; Analyze a progression
+;; Analyze a progression — each result is a chord->roman map
 (analyze-progression c-major
   [(make-chord :C 4 :major) (make-chord :F 4 :major)
    (make-chord :G 4 :dom7)  (make-chord :C 4 :major)])
-;; => [{:chord ... :roman "I"} {:chord ... :roman "IV"}
-;;     {:chord ... :roman "V7"} {:chord ... :roman "I"}]
+;; => [{:root :C :quality :major :roman :I  :degree 0 :in-key? true ...}
+;;     {:root :F :quality :major :roman :IV :degree 3 :in-key? true ...}
+;;     {:root :G :quality :dom7  :roman :V  :degree 4 :in-key? true ...}
+;;     {:root :C :quality :major :roman :I  :degree 0 :in-key? true ...}]
 ```
 
 ### Tension and progression suggestion
 
 ```clojure
-;; Score the tension of a chord (0.0 = stable, 1.0 = maximum tension)
-(tension-score (make-chord :B 4 :diminished))  ; => 1.0
-(tension-score (make-chord :C 4 :major))        ; => 0.0
+;; Score the tension of an analyzed chord (0.0 = stable, 1.0 = maximum tension)
+;; tension-score takes a chord->roman result map, not a Chord record
+(tension-score (chord->roman c-major (make-chord :G 4 :dom7)))  ; => 0.9  (V7)
+(tension-score (chord->roman c-major (make-chord :C 4 :major))) ; => 0.0  (I)
+;; or pass a bare map with :degree and :quality:
+(tension-score {:degree 4 :quality :dom7})   ; => 0.9  (V7)
+(tension-score {:degree nil :quality :major}) ; => 0.85 (chromatic — degree unknown)
 
 ;; Generate a progression matching a tension arc (4 chords)
 (suggest-progression c-major [0.0 0.3 0.7 0.0])
@@ -633,7 +644,530 @@ and checkpoints. Bind a physical knob to a named path and read it from any loop.
 
 ---
 
-## 14. Bach Corpus (Music21)
+## 14. Studio Topology
+
+The studio topology file declares the logical layout of your MIDI studio --
+which synthesizers, controllers, and FX units you have, and which substring
+of the OS MIDI port name to use to find each one. This decouples cljseq
+scripts from fragile port indices that change across reboots and USB reconnects.
+
+### Creating your topology file
+
+Copy the schema reference and fill in your hardware:
+
+```bash
+# Linux / macOS (XDG default)
+cp doc/topology-example.edn ~/.config/cljseq/topology.edn
+```
+
+The path can also be set explicitly:
+
+```bash
+export CLJSEQ_TOPOLOGY=/path/to/my-studio.edn
+```
+
+### Loading and using the topology
+
+```clojure
+(require '[cljseq.topology :as topology])
+
+;; Load from default path (~/.config/cljseq/topology.edn or CLJSEQ_TOPOLOGY)
+(topology/load-topology!)
+
+;; Or load from an explicit path
+(topology/load-topology! "path/to/my-studio.edn")
+
+;; Start the sidecar targeting a named device
+(topology/start-sidecar! :poly-synth)
+
+;; Output to one device, monitor MIDI input from another
+(topology/start-sidecar! :poly-synth :input :keyboard)
+
+;; Show what is loaded
+(topology/print-topology)
+
+;; Query individual devices
+(topology/device-info :poly-synth)
+;; => {:port-pattern "PolySynth" :midi/channel 1 :role :synth ...}
+
+(topology/device-ids)
+;; => [:bass-synth :cv-bridge :iac :keyboard :poly-synth :reverb]
+```
+
+### Topology file schema
+
+See `doc/topology-example.edn` for a fully-annotated example. The essential
+structure:
+
+```edn
+{:topology/id      :my-studio
+ :topology/version "0.1.0"
+
+ :devices
+ {:poly-synth  {:port-pattern "PolySynth"
+                :midi/channel  1
+                :role          :synth}
+
+  :keyboard    {:port-pattern "KeyboardCtrl Out"
+                :in-pattern   "KeyboardCtrl In"  ; optional: separate input name
+                :midi/channel  1
+                :role          :controller}
+
+  :reverb      {:port-pattern "ReverbFX"
+                :midi/channel  1
+                :role          :fx}}
+
+ ;; Optional: document your interfaces and hosts (used in Layer 2+ routing)
+ :interfaces  {:hub-1 {:manufacturer "Example" :model "USB Hub" ...}}
+ :hosts       {:main {:role :cljseq-host :os :macos}}}
+```
+
+`port-pattern` is matched case-insensitively as a substring of the OS MIDI
+port name -- the same semantics as `(start-sidecar! :midi-port "substring")`.
+Run `(list-midi-ports)` to see what port names your system reports.
+
+---
+
+## 15. Temporal Buffer
+
+The Temporal Buffer is a beat-timestamped event store that replays events
+from a sliding window of recent history. It is inspired by loop-and-modify
+hardware (Mimeophon, Morphagene, Make Noise Phonogene) but operates in the
+MIDI note-event domain rather than audio.
+
+### Zones
+
+Eight overlapping zones define the depth of history available for playback:
+
+| Zone | Depth | Character |
+|------|-------|-----------|
+| `:z0` | 0.5 beats | Micro-repeat / flutter |
+| `:z1` | 1 beat | Sixteenth note echo |
+| `:z2` | 2 beats | Eighth note repeat |
+| `:z3` | 8 beats | Short phrase (default) |
+| `:z4` | 16 beats | Bar loop |
+| `:z5` | 32 beats | Double bar |
+| `:z6` | 64 beats | Four bars |
+| `:z7` | 128 beats | Long form / ambient |
+
+### Quick start
+
+```clojure
+(require '[cljseq.temporal-buffer :as tbuf])
+
+;; Create a buffer with default settings (zone :z3, 8 beats deep)
+(tbuf/deftemporal-buffer :echo)
+
+;; Send events into the buffer from a live loop
+(deflive-loop :melody {}
+  (tbuf/temporal-buffer-send! :echo {:pitch/midi 60 :dur/beats 1/4})
+  (sleep! 1/4))
+
+;; Stop the buffer
+(tbuf/stop! :echo)
+```
+
+### Built-in presets
+
+Presets configure zone, rate, color, feedback and halo together:
+
+```clojure
+;; Start from a named preset
+(tbuf/deftemporal-buffer-preset :my-buf :cosmos)
+
+;; Available presets:
+;;   :flux       -- dry passthrough, no processing
+;;   :tape-echo  -- warm repeat with gentle feedback
+;;   :looper     -- tight clocked loop with high feedback
+;;   :cosmos     -- drifting ambient with warm color
+;;   :mimeophon  -- dual-cursor Mimeophon-style with skew
+```
+
+### Rate and Doppler
+
+Rate multiplies the playback cycle. Values above 1.0 speed up repetition
+and pitch up (like tape); values below 1.0 slow down and pitch down.
+
+```clojure
+;; Half speed (and an octave down via Doppler)
+(tbuf/temporal-buffer-rate! :echo 0.5)
+
+;; Double speed
+(tbuf/temporal-buffer-rate! :echo 2.0)
+
+;; Clocked mode: rate affects timing only, pitch is frozen
+(tbuf/temporal-buffer-clocked! :echo true)
+
+;; Control the pitch coupling strength (cents per rate unit, default 1200)
+(tbuf/temporal-buffer-tape-scale! :echo 80.0)  ; subtle Doppler
+```
+
+### Color
+
+Color applies a per-pass transform to velocity, duration and pitch drift:
+
+```clojure
+;; Set color by preset keyword
+(tbuf/temporal-buffer-color! :echo :warm)
+
+;; Available presets:
+;;   :dark      -- quieter, longer, slightly flat
+;;   :warm      -- gentle fade, slight stretch
+;;   :neutral   -- unmodified (default)
+;;   :tape      -- slight random pitch wobble
+;;   :bright    -- shorter, slightly sharp
+;;   :crisp     -- short and bright (delay-like)
+
+;; Or supply a custom fn [ev] -> ev
+(tbuf/temporal-buffer-color! :echo
+  (fn [ev] (update ev :mod/velocity #(max 0 (- % 5)))))
+```
+
+### Feedback
+
+Feedback re-injects events back into the buffer after each playback pass:
+
+```clojure
+;; Gentle echo tail
+(tbuf/temporal-buffer-feedback! :echo {:amount 0.4 :max-generation 6
+                                        :velocity-floor 8})
+;; :amount          -- re-injection probability per event (0.0-1.0)
+;; :max-generation  -- stop feeding back after N passes
+;; :velocity-floor  -- drop events quieter than this (prevents infinite tail)
+```
+
+### Halo
+
+Halo generates temporal neighbor copies of each emitted event, creating a
+smear or reverb-wash effect:
+
+```clojure
+(tbuf/temporal-buffer-halo! :echo
+  {:amount 0.2 :copies 3 :spread 0.08 :pitch-spread 5
+   :feedback-threshold 0.7 :max-halo-depth 4})
+;; :amount              -- probability of generating halo copies
+;; :copies              -- neighbor copies per emitted event
+;; :spread              -- +/- beat offset range for copies
+;; :pitch-spread        -- +/- cents range for copy pitch
+;; :feedback-threshold  -- above this, copies enter the feedback buffer
+;; :max-halo-depth      -- generation limit (prevents runaway wash)
+```
+
+### Hold (loop slice)
+
+In Hold mode, large zones (`:z4`-`:z7`) lock a fixed window of the buffer
+rather than following the rolling cursor:
+
+```clojure
+;; Freeze current 16-beat window and loop it
+(tbuf/temporal-buffer-hold! :echo true)
+
+;; Choose which beat offset to anchor the slice at
+(tbuf/temporal-buffer-slice-start! :echo 4.0)
+
+;; Unfreeze
+(tbuf/temporal-buffer-hold! :echo false)
+```
+
+### Other controls
+
+```clojure
+;; Flip playback direction (retrograde)
+(tbuf/temporal-buffer-flip! :echo true)
+
+;; Change the active zone live
+(tbuf/temporal-buffer-zone! :echo :z5)
+
+;; Query buffer state
+(tbuf/temporal-buffer-info :echo)
+
+;; List all active buffers
+(tbuf/buffer-names)
+```
+
+### trajectory integration
+
+`temporal-buffer-set!` is a trajectory-compatible setter that lets conductor
+arcs and trajectory curves drive buffer parameters live:
+
+```clojure
+;; Drive rate from a trajectory curve over 16 bars
+(tbuf/temporal-buffer-set! :echo :rate
+  (trajectory :smooth-step {:bars 16 :range [0.5 2.0]}))
+```
+
+---
+
+## 16. Threshold Extractor
+
+The Threshold Extractor watches a continuously varying value and fires note
+or CC events whenever the value crosses a boundary. Rhythm emerges from the
+*motion* of the source curve rather than from a pattern or random process.
+
+Inspired by the MakeNoise GTE (Gestural Time Extractor), but operating in the
+note-event domain with scale awareness and harmony integration.
+
+### Core concept
+
+A threshold comb of N-1 evenly-spaced boundaries divides the `[0.0, 1.0]`
+source range into N channels. Crossing a boundary fires an `:on-cross` event.
+The crossing rate is the rhythmic density; the current channel is the pitch
+or routing target.
+
+```
+Source:   0.0 ─────────────────────────────── 1.0
+               |      |      |      |      |
+Channels: ch1    ch2    ch3    ch4    ch5    ch6
+```
+
+### Quick start
+
+```clojure
+(require '[cljseq.extractor :as ext])
+
+;; A phasor cycling every 4 beats crosses 7 thresholds per cycle
+(def my-phasor (make-phasor {:cycle-beats 4}))
+
+(ext/defthreshold-extractor :rhythm
+  {:source-fn  (fn [beat] (my-phasor beat))
+   :channels   8
+   :on-cross   {:type :note :pitch 60 :velocity 80 :duration 0.1
+                :midi-channel 1}})
+
+;; Stop it
+(ext/extractor-stop! :rhythm)
+```
+
+### Source function
+
+Any function `f(beat) -> [0.0, 1.0]` can serve as a source:
+
+```clojure
+;; Trajectory curve as source
+(ext/defthreshold-extractor :tension-rhythm
+  {:source-fn  (fn [b] ((trajectory :smooth-step {:bars 32}) b))
+   :channels   8
+   :on-cross   {:type :note :pitch 60 :velocity 80 :duration 0.05}})
+
+;; Sine LFO
+(ext/defthreshold-extractor :lfo-rhythm
+  {:source-fn  (fn [b] (/ (inc (Math/sin (* 2 Math/PI (/ b 4.0)))) 2.0))
+   :channels   4
+   :on-cross   {:type :cc :cc 48 :value 127 :midi-channel 1}})
+```
+
+### Space parameter
+
+`space` controls what fraction of `[0.0, 1.0]` the comb spans.
+`space-center` sets the midpoint (default 0.5).
+
+```clojure
+;; Tight window: hypersensitive to small gestures in the center
+(ext/defthreshold-extractor :sensitive
+  {:source-fn  my-source
+   :channels   8
+   :space      0.3   ; comb spans 30% of the range
+   :space-center 0.5
+   :on-cross   {:type :note :pitch 60}})
+
+;; Adjust space live
+(ext/extractor-set! :sensitive :space 0.6)
+(ext/extractor-set! :sensitive :space-center 0.7)
+```
+
+### Direction filter
+
+```clojure
+;; Only fire on rising crossings (source moving up)
+(ext/defthreshold-extractor :rising-only
+  {:source-fn  my-source
+   :channels   4
+   :direction  :rising    ; :both (default), :rising, :falling
+   :on-cross   {:type :note :pitch 60}})
+```
+
+### Hysteresis
+
+Hysteresis prevents rapid re-triggering when the source hovers near a
+threshold boundary. The dead-zone is `hysteresis` x the inter-threshold spacing.
+
+```clojure
+;; Default hysteresis=0.01 (1% of spacing) — usually fine
+;; Increase for a jittery source
+(ext/defthreshold-extractor :noisy
+  {:source-fn  noisy-fn
+   :channels   8
+   :hysteresis 0.05   ; 5% dead-zone
+   :on-cross   {:type :note :pitch 60}})
+```
+
+### Arbitrary event dispatch
+
+`:type :fn` gives full control over the output:
+
+```clojure
+(ext/defthreshold-extractor :custom
+  {:source-fn my-source
+   :channels  8
+   :on-cross  {:type :fn
+               :f    (fn [ch prev-ch direction beat]
+                       ;; ch          -- new channel (1..N)
+                       ;; prev-ch     -- prior channel
+                       ;; direction   -- :rising or :falling
+                       ;; beat        -- beat of crossing
+                       (device/device-send! :boss/dd-500
+                                           [:engine-a :feedback]
+                                           (* ch 16)))}})
+```
+
+### Live mutation
+
+All parameters can be changed on a running extractor:
+
+```clojure
+;; Replace source function
+(ext/extractor-set! :rhythm :source-fn new-source-fn)
+
+;; Replace on-cross config
+(ext/extractor-set! :rhythm :on-cross {:type :note :pitch 64})
+
+;; Query current state
+(ext/extractor-status :rhythm)
+;; => {:source-fn #fn :channels 8 :thresholds [...] :running? true ...}
+
+;; Stop all extractors (called automatically by stop!)
+(ext/extractor-stop-all!)
+```
+
+---
+
+## 17. Ensemble Harmony
+
+`cljseq.ensemble` provides a shared harmonic context derived from what the
+music is actually playing, rather than what the programmer has declared in
+advance. A background *harmony ear* watches a named Temporal Buffer, analyzes
+its note content on a phrase boundary, and publishes an `ImprovisationContext`
+map to `*harmony-ctx*` so that all live loops can read it.
+
+### ImprovisationContext
+
+The context is a plain Clojure map, inspectable and composable at the REPL:
+
+```clojure
+{:harmony/key       (scale/scale :D 3 :dorian)  ; detected or pinned Scale
+ :harmony/chord     {:root :A :quality :min7
+                     :roman :V :tension 0.65}    ; chord->roman result
+ :harmony/tension   0.65   ; float [0.0, 1.0] — harmonic tension level
+ :harmony/mode-conf 0.82   ; key-detection confidence (Krumhansl-Schmuckler)
+ :harmony/ks-score  0.91   ; raw K-S Pearson correlation
+ :harmony/pcs       {2 4, 9 3, 0 2}  ; pitch-class distribution in window
+ :ensemble/register :mid   ; :low | :mid | :high — tessiture of the window
+ :ensemble/density  0.4}   ; note events per beat in the active zone window
+```
+
+When `*harmony-ctx*` holds an `ImprovisationContext`, all DSL functions that
+previously required a plain Scale record (`root`, `fifth`, `scale-degree`,
+`in-key?`) still work — they extract `:harmony/key` automatically. Existing
+loops using `:harmony (scale/scale ...)` are unaffected.
+
+### Quick start
+
+```clojure
+(require '[cljseq.ensemble :as ensemble]
+         '[cljseq.temporal-buffer :refer [deftemporal-buffer
+                                          temporal-buffer-send!]])
+
+;; 1. A Temporal Buffer accumulates what you play
+(deftemporal-buffer :main {:active-zone :z3})  ; 8-beat window
+
+;; 2. Start the ear — opt-in; nothing runs automatically
+(ensemble/start-harmony-ear! :main)
+
+;; 3. Live loops now see an ImprovisationContext in *harmony-ctx*
+(deflive-loop :melody {}
+  (play! (scale-degree (rand-int 7)) 1/4)  ; scale-degree uses detected key
+  (sleep! 1/4))
+```
+
+### Manual snapshot
+
+`analyze-buffer` performs a single analysis without starting the background
+loop. Useful for one-shot inspection or for driving your own scheduling logic:
+
+```clojure
+(ensemble/analyze-buffer :main)
+;; => {:harmony/key #Scale{...} :harmony/tension 0.3 :ensemble/density 1.25 ...}
+
+;; With a key hint — skip detection, derive chord/tension on top of the hint:
+(ensemble/analyze-buffer :main :key-scale (scale/scale :D 3 :dorian))
+```
+
+Key detection requires at least 3 distinct pitch classes in the window. Below
+that threshold `:harmony/key`, `:harmony/chord`, and `:harmony/tension` are
+omitted; the rest of the map is still populated.
+
+### Ear options
+
+```clojure
+;; Phrase-length cadence (default 4 beats):
+(ensemble/start-harmony-ear! :main :cadence 8)
+
+;; Pin a key — skip auto-detection, still derive chord and tension:
+(ensemble/start-harmony-ear! :main
+  :key-scale (scale/scale :D 3 :dorian))
+
+;; Transform the context before publishing (ctx → ctx):
+(ensemble/start-harmony-ear! :main
+  :transform (fn [ctx]
+    ;; Fall back to a known key when confidence is low
+    (if (< (:harmony/mode-conf ctx 0.0) 0.6)
+      (assoc ctx :harmony/key (scale/scale :G 4 :major))
+      ctx)))
+
+;; Side-effect hook — called after each publish:
+(ensemble/start-harmony-ear! :main
+  :on-ctx (fn [ctx]
+    (println "Key:" (get-in ctx [:harmony/key :root])
+             "Tension:" (:harmony/tension ctx))))
+
+;; Compose transforms with comp:
+(ensemble/start-harmony-ear! :main
+  :transform (comp pin-key-when-unsure add-session-data))
+
+;; Stop the ear:
+(ensemble/stop-harmony-ear!)
+```
+
+The ear registers as the live loop `:harmony-ear` and participates fully in
+the loop lifecycle — `stop-loop!`, hot-swap on re-eval, and Link phase sync
+all apply. `start!` must have been called first.
+
+### Reading context in loops
+
+```clojure
+(deflive-loop :context-aware {}
+  (let [ctx  loop-ns/*harmony-ctx*   ; may be Scale or ImprovisationContext
+        t    (:harmony/tension ctx 0.0)
+        reg  (:ensemble/register ctx :mid)]
+    ;; Play a longer note when tension is high
+    (play! (root) (if (> t 0.7) 1/2 1/4))
+    ;; Drop an octave if the ensemble is playing high
+    (when (= reg :high)
+      (play! (- (pitch/pitch->midi (root)) 12) 1/4)))
+  (sleep! 1/2))
+```
+
+### Empty buffer behaviour
+
+When the Temporal Buffer has no events in the active zone window (e.g. during
+a rest phrase), the ear retains the previous context unchanged. This means the
+key and tension are never forgotten mid-performance due to silence. On the very
+first call before any events have arrived, `analyze-buffer` returns nil.
+
+---
+
+## 18. Bach Corpus (Music21)
+
 
 cljseq integrates with [Music21](https://web.mit.edu/music21/) for the Bach
 chorale corpus. Requires Python 3.x with `music21` installed:
@@ -670,7 +1204,7 @@ to disk in `~/.local/share/cljseq/corpora/m21/`.
 
 ---
 
-## 15. Reference
+## 19. Reference
 
 ### REPL commands
 

@@ -1,0 +1,134 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; doc/topology-example.edn -- cljseq studio topology schema reference
+;;
+;; This file is a fully-annotated example topology. Copy it to
+;;
+;;   ~/.config/cljseq/topology.edn       (Linux / macOS XDG default)
+;;   ~/Library/Application Support/cljseq/topology.edn  (macOS native)
+;;
+;; and edit it to describe your own studio. The path can be overridden with
+;; the CLJSEQ_TOPOLOGY environment variable.
+;;
+;; Usage in the REPL:
+;;
+;;   (require '[cljseq.topology :as topology])
+;;   (topology/load-topology!)                    ;; load from default path
+;;   (topology/load-topology! "/path/to/my.edn")  ;; explicit path
+;;   (topology/start-sidecar! :main-synth)
+;;   (topology/start-sidecar! :main-synth :input :controller)
+;;   (topology/print-topology)                    ;; show what is loaded
+;;
+;; -----------------------------------------------------------------------
+;; Schema reference
+;; -----------------------------------------------------------------------
+;;
+;; Top-level keys:
+;;
+;;   :topology/id          keyword   Unique name for this topology.
+;;   :topology/version     string    Semver or date string for your own tracking.
+;;   :topology/description string    Free-form description.
+;;   :devices              map       Logical device aliases (see below).
+;;   :interfaces           map       MIDI interfaces (informational, Layer 1).
+;;   :hosts                map       Studio hosts (informational, Layer 1).
+;;
+;; Each :devices entry (alias -> descriptor):
+;;
+;;   :port-pattern  string   Substring matched (case-insensitively) against the
+;;                           OS MIDI output port name. Same semantics as
+;;                           (start-sidecar! :midi-port "substring").
+;;   :in-pattern    string   Substring for MIDI input port. Defaults to
+;;                           :port-pattern when absent.
+;;   :device-id     keyword  References a device map in resources/devices/ or
+;;                           ~/.local/share/cljseq/devices/.
+;;   :midi/channel  int      Default MIDI channel (1-16).
+;;   :role          keyword  :synth :controller :fx :midi-to-cv :looper :virtual
+;;
+;; -----------------------------------------------------------------------
+
+{:topology/id          :example-studio
+ :topology/version     "0.1.0"
+ :topology/description "Example 2-synth + controller + FX chain"
+
+ ;; -----------------------------------------------------------------------
+ ;; Devices
+ ;;
+ ;; Replace these with your actual hardware. The :port-pattern string is what
+ ;; your OS reports as the MIDI port name -- run (list-midi-ports) in the REPL
+ ;; to see what is available on your system.
+ ;; -----------------------------------------------------------------------
+
+ :devices
+ {;; A polyphonic synthesizer on MIDI channel 1.
+  ;; OS port name contains "PolySynth" (case-insensitive substring).
+  :poly-synth
+  {:device-id    :example/poly-synth
+   :port-pattern "PolySynth"
+   :midi/channel  1
+   :role          :synth}
+
+  ;; A bass/mono synthesizer on a separate channel.
+  :bass-synth
+  {:device-id    :example/bass-synth
+   :port-pattern "BassSynth"
+   :midi/channel  2
+   :role          :synth}
+
+  ;; A keyboard controller with a separate input port name.
+  ;; :in-pattern overrides :port-pattern for MIDI input resolution.
+  :keyboard
+  {:port-pattern "KeyboardCtrl Out"
+   :in-pattern   "KeyboardCtrl In"
+   :midi/channel  1
+   :role          :controller}
+
+  ;; A multi-effects unit controlled via MIDI CC.
+  :reverb
+  {:device-id    :example/reverb-unit
+   :port-pattern "ReverbFX"
+   :midi/channel  1
+   :role          :fx}
+
+  ;; A software synth or DAW track reachable through the IAC Driver
+  ;; (macOS virtual MIDI bus) or a virtual MIDI port on Linux/Windows.
+  :iac
+  {:port-pattern "IAC Driver"
+   :midi/channel  1
+   :role          :virtual
+   :note          "Route to DAW or software synth via virtual MIDI bus"}
+
+  ;; A semi-modular or Eurorack-adjacent device receiving MIDI for CV conversion.
+  :cv-bridge
+  {:device-id    :example/midi-to-cv
+   :port-pattern "CVBridge"
+   :midi/channel  1
+   :role          :midi-to-cv}}
+
+ ;; -----------------------------------------------------------------------
+ ;; MIDI interfaces (informational in Layer 1)
+ ;;
+ ;; Describe the hardware that connects your devices to your computer.
+ ;; Used for documentation and future multi-host routing (Layer 2).
+ ;; -----------------------------------------------------------------------
+
+ :interfaces
+ {:usb-hub-1
+  {:manufacturer "Example Co"
+   :model        "USB MIDI Hub"
+   :port-pattern "Example MIDI Hub"
+   :host         :main-machine
+   :note         "4-port USB MIDI interface; connects synths and controller"}}
+
+ ;; -----------------------------------------------------------------------
+ ;; Hosts (informational in Layer 1)
+ ;;
+ ;; For single-machine setups this section will have one entry.
+ ;; Multi-machine studios (separate DAW, performance, or CV hosts) can
+ ;; list each here. Used for distributed ctrl tree routing in Layer 2+.
+ ;; -----------------------------------------------------------------------
+
+ :hosts
+ {:main-machine
+  {:role :cljseq-host
+   :os   :macos
+   :note "Primary machine running the cljseq REPL and sidecar"}}}

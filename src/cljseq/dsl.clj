@@ -260,12 +260,33 @@
 ;; ---------------------------------------------------------------------------
 ;; Harmony context management (§4.3)
 ;; *harmony-ctx* is defined in cljseq.loop; dsl provides the user-facing API.
+;;
+;; *harmony-ctx* may hold either:
+;;   - a cljseq.scale/Scale record  (classic per-loop binding)
+;;   - an ImprovisationContext map   (from cljseq.ensemble/start-harmony-ear!)
+;;     which carries :harmony/key (Scale), :harmony/tension, :harmony/chord etc.
+;;
+;; ->harmony-scale extracts the Scale from either form so that dsl consumers
+;; remain backward-compatible without knowing which shape is active.
 ;; ---------------------------------------------------------------------------
+
+(defn- ->harmony-scale
+  "Extract a Scale record from *harmony-ctx*, which may be a Scale record
+  directly or an ImprovisationContext map with a :harmony/key entry.
+
+  Clojure records are maps, so we check the concrete type first."
+  [ctx]
+  (cond
+    (nil? ctx)                           nil
+    (instance? cljseq.scale.Scale ctx)   ctx              ; Scale record — classic path
+    (map? ctx)                           (:harmony/key ctx) ; ImprovisationContext — ensemble path
+    :else                                nil))
 
 (defn use-harmony!
   "Set the default harmonic context for the REPL session.
 
-  `s` should be a cljseq.scale/Scale record, or nil to clear.
+  `s` may be a cljseq.scale/Scale record, an ImprovisationContext map
+  (from cljseq.ensemble/analyze-buffer), or nil to clear.
 
   Example:
     (use-harmony! (scale/scale :C 4 :major))
@@ -280,7 +301,8 @@
 (defmacro with-harmony
   "Execute `body` with `s` as the active harmonic context.
 
-  `s` — a cljseq.scale/Scale record (from cljseq.scale/scale).
+  `s` — a cljseq.scale/Scale record (from cljseq.scale/scale) or an
+  ImprovisationContext map (from cljseq.ensemble/analyze-buffer).
 
   Example:
     (with-harmony (scale/scale :C 4 :major)
@@ -294,7 +316,7 @@
   "Return the root Pitch of the current harmonic context (*harmony-ctx*).
   Throws if no harmonic context is active."
   []
-  (if-let [s loop-ns/*harmony-ctx*]
+  (if-let [s (->harmony-scale loop-ns/*harmony-ctx*)]
     (:root s)
     (throw (ex-info "root: no *harmony-ctx* active" {}))))
 
@@ -302,7 +324,7 @@
   "Return the fifth-degree Pitch of the current harmonic context.
   Throws if no harmonic context is active."
   []
-  (if-let [s loop-ns/*harmony-ctx*]
+  (if-let [s (->harmony-scale loop-ns/*harmony-ctx*)]
     (scale-ns/pitch-at s 4)
     (throw (ex-info "fifth: no *harmony-ctx* active" {}))))
 
@@ -311,7 +333,7 @@
   Negative degrees and degrees beyond the octave are supported.
   Throws if no harmonic context is active."
   [n]
-  (if-let [s loop-ns/*harmony-ctx*]
+  (if-let [s (->harmony-scale loop-ns/*harmony-ctx*)]
     (scale-ns/pitch-at s n)
     (throw (ex-info "scale-degree: no *harmony-ctx* active" {}))))
 
@@ -319,7 +341,7 @@
   "Return true if pitch `p` (Pitch, keyword, or MIDI int) is in the current
   harmonic context. Throws if no harmonic context is active."
   [p]
-  (if-let [s loop-ns/*harmony-ctx*]
+  (if-let [s (->harmony-scale loop-ns/*harmony-ctx*)]
     (scale-ns/in-scale? s (pitch/->pitch p))
     (throw (ex-info "in-key?: no *harmony-ctx* active" {}))))
 
