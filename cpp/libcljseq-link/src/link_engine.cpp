@@ -13,6 +13,7 @@
 
 #include <cljseq/link_engine.h>
 
+#include <cstddef>
 #include <cstdio>
 
 namespace cljseq {

@@ -40,7 +40,7 @@ jobs:
           restore-keys: ${{ runner.os }}-maven-
 
       - name: Install Leiningen
-        uses: DeLaGuardo/setup-clojure@12
+        uses: DeLaGuardo/setup-clojure@13.6.0
         with:
           lein: latest
 

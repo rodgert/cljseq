@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: LGPL-2.1-or-later
 #pragma once
+#include <cstddef>
 #include <cstdint>
 
 /// Open the MIDI output port at `port_index` (0-based).

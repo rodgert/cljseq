@@ -8,6 +8,7 @@
 #include "midi_dispatch.h"
 
 #include <RtMidi.h>
+#include <cstddef>
 #include <cstdio>
 #include <memory>
 #include <vector>

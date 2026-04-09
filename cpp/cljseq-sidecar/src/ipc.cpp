@@ -30,8 +30,9 @@
 
 #include <asio.hpp>
 #include <array>
-#include <vector>
+#include <cstddef>
 #include <memory>
+#include <vector>
 #include <mutex>
 #include <cstdio>
 #include <cstring>
