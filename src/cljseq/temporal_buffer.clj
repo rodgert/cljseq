@@ -882,3 +882,27 @@
   "Return a seq of registered temporal buffer names."
   []
   (keys @registry))
+
+(defn temporal-buffer-snapshot
+  "Return the events in `buf-name` that fall within the active zone window.
+
+  The window is [current-beat − zone-depth, current-beat]. Events are
+  returned as a vector of maps; each map contains at minimum :pitch/midi,
+  :beat, :dur/beats, :mod/velocity, :midi/channel.
+
+  Returns nil when the buffer is not registered.
+  Returns an empty vector when the buffer exists but has no events in window.
+
+  Intended for analysis consumers (e.g. cljseq.ensemble/analyze-buffer)
+  that need a point-in-time pitch snapshot without touching internal state."
+  [buf-name]
+  (when-let [entry (get @registry buf-name)]
+    (let [state     @(:state-atom entry)
+          buf       @(:buffer-atom entry)
+          zone      (get zone-table (:active-zone state :z3))
+          depth     (double (:depth zone 8.0))
+          now-beat  (current-beat)
+          win-start (- now-beat depth)]
+      (filterv (fn [ev]
+                 (>= (double (:beat ev 0.0)) win-start))
+               buf))))

@@ -1,6 +1,6 @@
 # cljseq User Manual
 
-Version 0.2.0 · April 2026
+Version 0.3.0 · April 2026
 
 ---
 
@@ -22,8 +22,9 @@ Version 0.2.0 · April 2026
 14. [Studio Topology](#14-studio-topology)
 15. [Temporal Buffer](#15-temporal-buffer)
 16. [Threshold Extractor](#16-threshold-extractor)
-17. [Bach Corpus (Music21)](#17-bach-corpus-music21)
-18. [Reference: REPL Commands and Step Keys](#18-reference)
+17. [Ensemble Harmony](#17-ensemble-harmony)
+18. [Bach Corpus (Music21)](#18-bach-corpus-music21)
+19. [Reference: REPL Commands and Step Keys](#19-reference)
 
 ---
 
@@ -1033,7 +1034,133 @@ All parameters can be changed on a running extractor:
 
 ---
 
-## 17. Bach Corpus (Music21)
+## 17. Ensemble Harmony
+
+`cljseq.ensemble` provides a shared harmonic context derived from what the
+music is actually playing, rather than what the programmer has declared in
+advance. A background *harmony ear* watches a named Temporal Buffer, analyzes
+its note content on a phrase boundary, and publishes an `ImprovisationContext`
+map to `*harmony-ctx*` so that all live loops can read it.
+
+### ImprovisationContext
+
+The context is a plain Clojure map, inspectable and composable at the REPL:
+
+```clojure
+{:harmony/key       (scale/scale :D 3 :dorian)  ; detected or pinned Scale
+ :harmony/chord     {:root :A :quality :min7
+                     :roman :V :tension 0.65}    ; chord->roman result
+ :harmony/tension   0.65   ; float [0.0, 1.0] — harmonic tension level
+ :harmony/mode-conf 0.82   ; key-detection confidence (Krumhansl-Schmuckler)
+ :harmony/ks-score  0.91   ; raw K-S Pearson correlation
+ :harmony/pcs       {2 4, 9 3, 0 2}  ; pitch-class distribution in window
+ :ensemble/register :mid   ; :low | :mid | :high — tessiture of the window
+ :ensemble/density  0.4}   ; note events per beat in the active zone window
+```
+
+When `*harmony-ctx*` holds an `ImprovisationContext`, all DSL functions that
+previously required a plain Scale record (`root`, `fifth`, `scale-degree`,
+`in-key?`) still work — they extract `:harmony/key` automatically. Existing
+loops using `:harmony (scale/scale ...)` are unaffected.
+
+### Quick start
+
+```clojure
+(require '[cljseq.ensemble :as ensemble]
+         '[cljseq.temporal-buffer :refer [deftemporal-buffer
+                                          temporal-buffer-send!]])
+
+;; 1. A Temporal Buffer accumulates what you play
+(deftemporal-buffer :main {:active-zone :z3})  ; 8-beat window
+
+;; 2. Start the ear — opt-in; nothing runs automatically
+(ensemble/start-harmony-ear! :main)
+
+;; 3. Live loops now see an ImprovisationContext in *harmony-ctx*
+(deflive-loop :melody {}
+  (play! (scale-degree (rand-int 7)) 1/4)  ; scale-degree uses detected key
+  (sleep! 1/4))
+```
+
+### Manual snapshot
+
+`analyze-buffer` performs a single analysis without starting the background
+loop. Useful for one-shot inspection or for driving your own scheduling logic:
+
+```clojure
+(ensemble/analyze-buffer :main)
+;; => {:harmony/key #Scale{...} :harmony/tension 0.3 :ensemble/density 1.25 ...}
+
+;; With a key hint — skip detection, derive chord/tension on top of the hint:
+(ensemble/analyze-buffer :main :key-scale (scale/scale :D 3 :dorian))
+```
+
+Key detection requires at least 3 distinct pitch classes in the window. Below
+that threshold `:harmony/key`, `:harmony/chord`, and `:harmony/tension` are
+omitted; the rest of the map is still populated.
+
+### Ear options
+
+```clojure
+;; Phrase-length cadence (default 4 beats):
+(ensemble/start-harmony-ear! :main :cadence 8)
+
+;; Pin a key — skip auto-detection, still derive chord and tension:
+(ensemble/start-harmony-ear! :main
+  :key-scale (scale/scale :D 3 :dorian))
+
+;; Transform the context before publishing (ctx → ctx):
+(ensemble/start-harmony-ear! :main
+  :transform (fn [ctx]
+    ;; Fall back to a known key when confidence is low
+    (if (< (:harmony/mode-conf ctx 0.0) 0.6)
+      (assoc ctx :harmony/key (scale/scale :G 4 :major))
+      ctx)))
+
+;; Side-effect hook — called after each publish:
+(ensemble/start-harmony-ear! :main
+  :on-ctx (fn [ctx]
+    (println "Key:" (get-in ctx [:harmony/key :root])
+             "Tension:" (:harmony/tension ctx))))
+
+;; Compose transforms with comp:
+(ensemble/start-harmony-ear! :main
+  :transform (comp pin-key-when-unsure add-session-data))
+
+;; Stop the ear:
+(ensemble/stop-harmony-ear!)
+```
+
+The ear registers as the live loop `:harmony-ear` and participates fully in
+the loop lifecycle — `stop-loop!`, hot-swap on re-eval, and Link phase sync
+all apply. `start!` must have been called first.
+
+### Reading context in loops
+
+```clojure
+(deflive-loop :context-aware {}
+  (let [ctx  loop-ns/*harmony-ctx*   ; may be Scale or ImprovisationContext
+        t    (:harmony/tension ctx 0.0)
+        reg  (:ensemble/register ctx :mid)]
+    ;; Play a longer note when tension is high
+    (play! (root) (if (> t 0.7) 1/2 1/4))
+    ;; Drop an octave if the ensemble is playing high
+    (when (= reg :high)
+      (play! (- (pitch/pitch->midi (root)) 12) 1/4)))
+  (sleep! 1/2))
+```
+
+### Empty buffer behaviour
+
+When the Temporal Buffer has no events in the active zone window (e.g. during
+a rest phrase), the ear retains the previous context unchanged. This means the
+key and tension are never forgotten mid-performance due to silence. On the very
+first call before any events have arrived, `analyze-buffer` returns nil.
+
+---
+
+## 18. Bach Corpus (Music21)
+
 
 cljseq integrates with [Music21](https://web.mit.edu/music21/) for the Bach
 chorale corpus. Requires Python 3.x with `music21` installed:
@@ -1070,7 +1197,7 @@ to disk in `~/.local/share/cljseq/corpora/m21/`.
 
 ---
 
-## 18. Reference
+## 19. Reference
 
 ### REPL commands
 
