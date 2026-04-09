@@ -1,0 +1,79 @@
+# SPDX-License-Identifier: EPL-2.0
+#
+# cljseq CI — Clojure tests + C++ sidecar build
+# Runs on push/PR to main across Ubuntu and macOS.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Clojure test suite
+  # ---------------------------------------------------------------------------
+  clojure:
+    name: Clojure tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          java-version: '21'
+          distribution: 'temurin'
+
+      - name: Cache Maven repository
+        uses: actions/cache@v4
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('project.clj') }}
+          restore-keys: ${{ runner.os }}-maven-
+
+      - name: Install Leiningen
+        uses: DeLaGuardo/setup-clojure@12
+        with:
+          lein: latest
+
+      - name: Run test suite
+        run: lein test
+
+  # ---------------------------------------------------------------------------
+  # C++ sidecar build (no Ableton Link — LGPL-only binary)
+  # ---------------------------------------------------------------------------
+  cpp:
+    name: C++ build (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ALSA headers (Linux — required by RtMidi)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y libasound2-dev
+
+      - name: Cache cmake FetchContent dependencies
+        uses: actions/cache@v4
+        with:
+          path: build/_deps
+          key: ${{ runner.os }}-cmake-deps-${{ hashFiles('CMakeLists.txt') }}
+          restore-keys: ${{ runner.os }}-cmake-deps-
+
+      - name: Configure (Link disabled — LGPL binary)
+        run: cmake -B build -DCLJSEQ_ENABLE_LINK=OFF -DCLJSEQ_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
