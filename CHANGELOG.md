@@ -10,6 +10,23 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.1.1] — 2026-04-08
+
+### Fixed
+
+- **C++ build on GCC/Linux**: `midi_dispatch.h` was not included in
+  `ipc.cpp`, causing `midi_send_sysex` (added in 0.1.0 for MTS/SysEx
+  support) to be undeclared. Apple clang accepted it via transitive
+  includes; GCC correctly rejects it. Found during Ubuntu Studio
+  clean-clone verification.
+
+### Verified
+
+- Clean-clone build and full test suite (886 tests, 5718 assertions,
+  0 failures) confirmed on Ubuntu Studio 24.04 LTS.
+
+---
+
 ## [0.1.0] — 2026-04-04
 
 First public MVP release. macOS is the primary tested platform for this release;
