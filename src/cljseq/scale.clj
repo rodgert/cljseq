@@ -54,7 +54,9 @@
 
 (def ^:private scale-library
   {:major              [2 2 1 2 2 2 1]
+   :ionian             [2 2 1 2 2 2 1]   ; alias for major
    :natural-minor      [2 1 2 2 1 2 2]
+   :aeolian            [2 1 2 2 1 2 2]   ; alias for natural-minor
    :harmonic-minor     [2 1 2 2 1 3 1]
    :melodic-minor      [2 1 2 2 2 2 1]   ; ascending form
    :dorian             [2 1 2 2 2 1 2]

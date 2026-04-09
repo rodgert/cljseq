@@ -212,11 +212,86 @@ def _handle_shutdown(_req):
     return {"status": "ok", "__shutdown": True}
 
 
+# ---------------------------------------------------------------------------
+# MIDI file parsing — for midi-repair pipeline
+# ---------------------------------------------------------------------------
+
+def _midi_note_to_edn(n, offset_beats, tempo_bpm):
+    """Render a music21 Note as an EDN step map string."""
+    midi = n.pitch.midi
+    dur  = float(n.quarterLength)
+    vel  = n.volume.velocity if n.volume.velocity else 64
+    chan = (n.activeSite.id if hasattr(n.activeSite, 'id') else 0) or 0
+    return _edn_map([
+        (":pitch/midi",  midi),
+        (":start/beats", round(float(offset_beats), 6)),
+        (":dur/beats",   round(dur, 6)),
+        (":velocity",    vel),
+        (":channel",     chan),
+    ])
+
+
+def _handle_parse_midi(req):
+    """Parse a MIDI file and return all note events as EDN.
+
+    Request:  {"op":"parse-midi","path":"/abs/path/to/file.mid"}
+    Response: {"status":"ok","notes":"[{:pitch/midi 60 ...} ...]",
+               "tempo":120.0,"time-sig":"4/4","bars":32}
+    """
+    path = req.get("path", "")
+    if not path:
+        return {"status": "error", "message": "parse-midi requires 'path'"}
+    try:
+        from music21 import converter as m21conv, tempo as m21tempo, meter
+        import os
+        if not os.path.isfile(path):
+            return {"status": "error", "message": f"file not found: {path}"}
+
+        score = m21conv.parse(path)
+        flat  = score.flatten()
+
+        # Extract tempo
+        tempos = flat.getElementsByClass(m21tempo.MetronomeMark)
+        bpm    = float(tempos[0].number) if tempos else 120.0
+
+        # Extract time signature
+        tsigs  = flat.getElementsByClass(meter.TimeSignature)
+        tsig   = tsigs[0].ratioString if tsigs else "4/4"
+
+        # Extract all notes (not rests) with beat offsets
+        notes_edn = []
+        for n in flat.notes:
+            if hasattr(n, 'pitch'):                   # Note
+                notes_edn.append(_midi_note_to_edn(n, n.offset, bpm))
+            elif hasattr(n, 'pitches') and n.pitches: # Chord
+                for p in n.pitches:
+                    import music21.note as m21note
+                    fake = m21note.Note(p)
+                    fake.quarterLength = n.quarterLength
+                    fake.volume        = n.volume
+                    notes_edn.append(_midi_note_to_edn(fake, n.offset, bpm))
+
+        # Total bars (quarterLength / beats-per-bar)
+        beats_per_bar = float(tsigs[0].numerator) if tsigs else 4.0
+        total_beats   = float(score.highestTime)
+        total_bars    = int(total_beats / beats_per_bar) + 1
+
+        edn = "[" + " ".join(notes_edn) + "]"
+        return {"status":   "ok",
+                "notes":    edn,
+                "tempo":    bpm,
+                "time-sig": tsig,
+                "bars":     total_bars}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
 _HANDLERS = {
-    "load":     _handle_load,
-    "list":     _handle_list,
-    "ping":     _handle_ping,
-    "shutdown": _handle_shutdown,
+    "load":        _handle_load,
+    "list":        _handle_list,
+    "ping":        _handle_ping,
+    "shutdown":    _handle_shutdown,
+    "parse-midi":  _handle_parse_midi,
 }
 
 # ---------------------------------------------------------------------------

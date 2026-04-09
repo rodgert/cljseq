@@ -272,6 +272,23 @@ pre-populate the FetchContent cache by running the build on a connected machine
 and copying `build/_deps/` to the target machine before running CMake.
 Set `-DFETCHCONTENT_UPDATES_DISCONNECTED=ON` (it is on by default).
 
+**`lein` fails with `No such program: java` or `JAVA_HOME not set`**
+Leiningen requires `JAVA_HOME` to be set if `java` is not on your `PATH`, or if
+multiple JVMs are installed and the wrong one is selected. Set it dynamically
+rather than hardcoding a path:
+
+```bash
+# macOS (uses system Java discovery tool)
+export JAVA_HOME=$(/usr/libexec/java_home)
+
+# Linux
+export JAVA_HOME=$(dirname $(dirname $(readlink -f $(which java))))
+```
+
+Add the appropriate line to your shell profile (`~/.zshrc`, `~/.bashrc`) to
+make it permanent. Do not hardcode a version-specific path — it will break
+when the JDK is updated.
+
 **Clojure tests fail with `java.net.ConnectException`**
 Integration tests spawn the sidecar on a random port. If the port is blocked
 by a firewall, all connections are to `127.0.0.1` and only need the loopback
