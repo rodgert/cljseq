@@ -482,3 +482,102 @@
     (tbuf/temporal-buffer-send! :p3-hold-fb {:pitch/midi 60})
     (is (= before (:event-count (tbuf/temporal-buffer-info :p3-hold-fb)))))
   (tbuf/stop! :p3-hold-fb))
+
+;; ---------------------------------------------------------------------------
+;; Phase 4 — Halo helpers (via private var access)
+;; ---------------------------------------------------------------------------
+
+(def ^:private generate-halo-copies @#'tbuf/generate-halo-copies)
+
+(deftest generate-halo-copies-count
+  (let [ev     {:pitch/midi 60 :dur/beats 0.25 :mod/velocity 80
+                :beat 4.0 :generation 0 :halo-depth 0}
+        halo   {:copies 3 :spread 0.1 :pitch-spread 5}
+        copies (generate-halo-copies ev 4.0 halo)]
+    (testing "generates exactly :copies neighbors"
+      (is (= 3 (count copies))))
+    (testing "each copy has halo-depth 1"
+      (is (every? #(= 1 (:halo-depth %)) copies)))
+    (testing "each copy is near play-beat (within ±spread)"
+      (doseq [c copies]
+        (is (< (Math/abs (- 4.0 (double (:beat c)))) 0.15))))
+    (testing "each copy has a valid MIDI note"
+      (doseq [c copies]
+        (is (<= 0 (:pitch/midi c) 127))))))
+
+(deftest generate-halo-copies-halo-depth-increments
+  (let [ev     {:pitch/midi 60 :dur/beats 0.25 :mod/velocity 80
+                :beat 0.0 :generation 2 :halo-depth 2}
+        halo   {:copies 2 :spread 0.05 :pitch-spread 3}
+        copies (generate-halo-copies ev 0.0 halo)]
+    (testing "halo-depth increments from parent value"
+      (is (every? #(= 3 (:halo-depth %)) copies)))
+    (testing "generation is inherited from parent"
+      (is (every? #(= 2 (:generation %)) copies)))))
+
+(deftest generate-halo-copies-zero-spread
+  (let [ev     {:pitch/midi 60 :dur/beats 0.25 :mod/velocity 80
+                :beat 4.0 :generation 0 :halo-depth 0}
+        halo   {:copies 2 :spread 0.0 :pitch-spread 0}
+        copies (generate-halo-copies ev 4.0 halo)]
+    (testing "zero spread → copies land exactly on play-beat"
+      (doseq [c copies]
+        (is (== 4.0 (double (:beat c))))))
+    (testing "zero pitch-spread → pitch unchanged"
+      (doseq [c copies]
+        (is (= 60 (:pitch/midi c)))))))
+
+;; ---------------------------------------------------------------------------
+;; Phase 4 — State API
+;; ---------------------------------------------------------------------------
+
+(deftest phase4-halo-default-nil
+  (tbuf/deftemporal-buffer :p4-def {})
+  (testing "halo defaults to nil"
+    (is (nil? (:halo (tbuf/temporal-buffer-info :p4-def)))))
+  (tbuf/stop! :p4-def))
+
+(deftest phase4-halo-opts-at-creation
+  (let [halo-cfg {:amount 0.3 :copies 4 :spread 0.05 :pitch-spread 8
+                  :feedback-threshold 0.7 :max-halo-depth 3}]
+    (tbuf/deftemporal-buffer :p4-opts {:halo halo-cfg})
+    (let [info (tbuf/temporal-buffer-info :p4-opts)]
+      (testing "halo from opts"
+        (is (= halo-cfg (:halo info)))))
+    (tbuf/stop! :p4-opts)))
+
+(deftest phase4-halo-mutation
+  (tbuf/deftemporal-buffer :p4-mut {})
+  (testing "temporal-buffer-halo! sets halo config"
+    (tbuf/temporal-buffer-halo! :p4-mut {:amount 0.5 :copies 2 :spread 0.1
+                                         :pitch-spread 5 :feedback-threshold 0.7
+                                         :max-halo-depth 4})
+    (is (= 0.5 (:amount (:halo (tbuf/temporal-buffer-info :p4-mut))))))
+  (testing "temporal-buffer-halo! clears halo with nil"
+    (tbuf/temporal-buffer-halo! :p4-mut nil)
+    (is (nil? (:halo (tbuf/temporal-buffer-info :p4-mut)))))
+  (testing "temporal-buffer-halo! on unknown buf is safe"
+    (is (nil? (tbuf/temporal-buffer-halo! :no-such {:amount 0.3}))))
+  (tbuf/stop! :p4-mut))
+
+(deftest phase4-regression-all-prior-features-intact
+  ;; Regression: Phase 4 additions do not break Phase 1–3 state
+  (tbuf/deftemporal-buffer :p4-reg
+    {:active-zone :z2
+     :rate        1.5
+     :color       :warm
+     :feedback    {:amount 0.5}
+     :halo        {:amount 0.2 :copies 2 :spread 0.05 :pitch-spread 3
+                   :feedback-threshold 0.7 :max-halo-depth 2}})
+  (let [info (tbuf/temporal-buffer-info :p4-reg)]
+    (testing "zone preserved"
+      (is (= :z2 (:active-zone info))))
+    (testing "rate preserved"
+      (is (== 1.5 (:rate info))))
+    (testing "color preserved"
+      (is (= :warm (:color info))))
+    (testing "feedback preserved"
+      (is (== 0.5 (get-in info [:feedback :amount]))))
+    (testing "halo present"
+      (is (= 0.2 (:amount (:halo info))))))
+  (tbuf/stop! :p4-reg))

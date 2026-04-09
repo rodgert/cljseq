@@ -262,6 +262,35 @@
           (shift-pitch drift)))))
 
 ;; ---------------------------------------------------------------------------
+;; Phase 4 — Halo helpers
+;; ---------------------------------------------------------------------------
+
+(defn- generate-halo-copies
+  "Generate temporal neighbor copies of `ev` scheduled around `play-beat`.
+
+  Each copy receives:
+  - :beat   — play-beat ± random offset within ±spread beats
+  - pitch   — shifted by random ±pitch-spread cents
+  - :halo-depth — parent's halo-depth + 1
+
+  `halo-cfg` keys:
+    :copies       — number of neighbor copies (default 3)
+    :spread       — ± beat offset range (default 0.1)
+    :pitch-spread — ± cents range (default 5)"
+  [ev ^double play-beat halo-cfg]
+  (let [copies       (int (:copies halo-cfg 3))
+        spread       (double (:spread halo-cfg 0.1))
+        pitch-spread (double (:pitch-spread halo-cfg 5))
+        hd           (inc (int (:halo-depth ev 0)))]
+    (for [_ (range copies)]
+      (let [beat-offset  (* spread (- (* 2.0 (rand)) 1.0))   ; uniform ±spread
+            pitch-cents  (* pitch-spread (- (* 2.0 (rand)) 1.0))]  ; uniform ±pitch-spread
+        (-> ev
+            (assoc :beat play-beat :halo-depth hd)
+            (update :beat + beat-offset)
+            (shift-pitch pitch-cents))))))
+
+;; ---------------------------------------------------------------------------
 ;; Playback runner
 ;; ---------------------------------------------------------------------------
 
@@ -270,6 +299,7 @@
 
   Phase 2 additions: Rate/Doppler, clocked mode, Skew (cursor A / B).
   Phase 3 additions: Color per-pass transform, Feedback re-injection.
+  Phase 4 additions: Halo temporal neighbor generation + threshold injection.
 
   Each cycle:
   1. Determine zone depth D and effective rate R for this cursor.
@@ -277,11 +307,13 @@
   3. Park until next cycle boundary (cycle-start + P).
   4. Collect events written during [cycle-start, cycle-start + P).
   5. Apply Doppler pitch shift; emit in forward or retrograde order.
-  6. If feedback is active, apply Color to each event and re-inject into
-     buffer at play-beat (lands in next cycle's window) with generation+1.
-     Events exceeding max-generation or below velocity-floor are dropped.
-  7. Prune buffer of events beyond max-depth.
-  8. Advance cycle-start by P."
+  6. If feedback is active, apply Color and re-inject events (generation+1).
+  7. If Halo is active, generate neighbor copies per emitted event:
+     - amount < feedback-threshold → emit copies directly (output smear)
+     - amount ≥ feedback-threshold → inject copies into buffer (feedback wash)
+     Events at max-halo-depth do not spawn further copies.
+  8. Prune buffer of events beyond max-depth.
+  9. Advance cycle-start by P."
   [buf-name running? cursor]
   (loop [cycle-start (current-beat)]
     (when @running?
@@ -347,7 +379,26 @@
                       (swap! (:buffer-atom entry)
                              (fn [buf]
                                (filterv #(>= (double (:beat % 0.0)) (- cb md))
-                                        buf))))))))
+                                        buf)))))
+                ;; Phase 4: Halo neighbor generation
+                (let [halo-cfg (:halo state')]
+                  (when halo-cfg
+                    (let [halo-amt  (double (:amount halo-cfg 0.0))
+                          fb-thresh (double (:feedback-threshold halo-cfg 0.7))
+                          max-hd    (int (:max-halo-depth halo-cfg 4))]
+                      (when (pos? halo-amt)
+                        (doseq [ev ordered]
+                          (when (< (int (:halo-depth ev 0)) max-hd)
+                            (let [rel-offset (- (double (:beat ev 0.0)) cycle-start)
+                                  play-beat  (+ next-wake rel-offset)
+                                  copies     (generate-halo-copies ev play-beat halo-cfg)]
+                              (if (>= halo-amt fb-thresh)
+                                ;; Above threshold: copies enter feedback buffer
+                                (doseq [copy copies]
+                                  (swap! (:buffer-atom entry) conj copy))
+                                ;; Below threshold: copies are direct output smear
+                                (doseq [copy copies]
+                                  (emit-event! copy (double (:beat copy play-beat)))))))))))))))
             (recur next-wake)))))))
 
 ;; ---------------------------------------------------------------------------
@@ -383,6 +434,15 @@
                     :max-generation 8     ; stop feedback after N generations
                     :velocity-floor 5}    ; drop events below this velocity
 
+  Phase 4 options:
+    :halo        — temporal neighbor smear config, or nil (default nil = off)
+                   {:amount           0.0  ; [0.0, 1.0] — Halo intensity
+                    :copies           3    ; neighbor copies per emitted event
+                    :spread           0.1  ; ± beat offset range for copies
+                    :pitch-spread     5    ; ± cents range for copy pitch
+                    :feedback-threshold 0.7 ; above this, copies enter buffer
+                    :max-halo-depth   4}   ; max copy generations (prevents explosion
+
   Re-evaluating with the same name stops the prior instance and starts fresh.
 
   Returns `buf-name`."
@@ -399,6 +459,7 @@
          skew        (:skew opts)
          color       (or (:color opts) :neutral)
          feedback    (or (:feedback opts) {:amount 0.0})
+         halo        (:halo opts)
          state-atom  (atom {:active-zone active-zone
                             :hold?       false
                             :flip?       false
@@ -408,7 +469,8 @@
                             :clocked?    clocked?
                             :skew        skew
                             :color       color
-                            :feedback    feedback})
+                            :feedback    feedback
+                            :halo        halo})
          buffer-atom (atom [])
          running?    (atom true)
          entry       {:opts        opts
@@ -598,6 +660,31 @@
     (swap! (:state-atom entry) assoc :feedback feedback-map))
   nil)
 
+(defn temporal-buffer-halo!
+  "Set or clear the Halo configuration for `buf-name`.
+
+  `halo-map` — nil (disables Halo) or:
+    {:amount           0.3  ; [0.0, 1.0] — Halo intensity
+     :copies           3    ; neighbor copies per emitted event
+     :spread           0.1  ; ± beat offset range for copy timing
+     :pitch-spread     5    ; ± cents range for copy pitch (microtonal blur)
+     :feedback-threshold 0.7 ; threshold for structural mode change:
+                            ;   amount < threshold → copies emitted directly
+                            ;   amount ≥ threshold → copies enter feedback buffer
+     :max-halo-depth   4}   ; max copy generation depth (prevents explosion)
+
+  Below threshold: Halo adds temporal smear to the output — each emitted event
+  is accompanied by N slightly offset copies at ±spread beat / ±pitch-spread
+  cents. Copies are not fed back and do not accumulate across cycles.
+
+  Above threshold: The copies enter the feedback buffer. They will be played on
+  the next cycle, subject to Color transformation, and can generate their own
+  copies — creating exponentially growing density (reverb-like wash)."
+  [buf-name halo-map]
+  (when-let [entry (get @registry buf-name)]
+    (swap! (:state-atom entry) assoc :halo halo-map))
+  nil)
+
 (defn temporal-buffer-skew!
   "Set or clear the Skew configuration for `buf-name`.
 
@@ -632,6 +719,7 @@
      :skew        nil
      :color       :neutral
      :feedback    {:amount 0.0 :max-generation 8 :velocity-floor 5}
+     :halo        nil
      :event-count 42
      :oldest-beat 34.375}"
   [buf-name]
