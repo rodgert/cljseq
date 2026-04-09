@@ -1,0 +1,282 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; ASM (Ashun Sound Machines) Leviasynth — cljseq device map
+;;
+;; Sources:
+;;   ASM Leviasynth Desktop Owner's Manual:
+;;     https://files.kraftmusic.com/media/ownersmanual/ASM_Leviasynth_Desktop_Owners_Manual.pdf
+;;   pencilresearch/midi CC dataset (CC-BY-SA 4.0):
+;;     https://github.com/pencilresearch/midi/tree/main/ASM
+;;   Cross-validated against midi.guide:
+;;     https://midi.guide/d/asm/leviasynth/
+;; Confidence: High for CC map. SysEx manufacturer ID provisional (F0 00 20 2B
+;; reported by community; not confirmed from a published primary specification).
+;;
+;; Architecture overview:
+;;   - 8 operators (oscillators) per voice, up to 16 voices
+;;   - 7 synthesis modes per operator: Phase Mod (PM), Freq Mod (FM), PW Mod (PWM),
+;;     Hard-Thru-Zero Sync (HTE), PD-Square, PD-Saw, PD-Saw Pulse
+;;   - 144 preset algorithms + Morph (blend up to 8 algorithms) + Custom user algorithm
+;;   - 300+ waveforms per oscillator; 18 digital filter modes
+;;   - Dual filter: digital (multi-mode) + analog (4-pole 24dB/oct LP)
+;;   - 5 global envelopes (ENV 1–5) + per-OSC amplitude envelopes (not in MIDI map)
+;;   - 5 syncable LFOs; 32-slot mod matrix (170 sources, 290+ destinations)
+;;   - On-board sequencer: 3 tracks + arpeggiator + Entropy variation engine
+;;   - Full MPE; 61-key Polytouch PolyAT keybed (Keyboard) or 16 Polytouch pads (Desktop)
+;;
+;; Key MIDI caveats:
+;;   - CC-ONLY: no NRPN map. Per-OSC Ratio, Synthesis Mode, Waveform, and Algorithm
+;;     selection are NOT in the MIDI map — these are panel/touchscreen or SysEx only.
+;;   - OSC Pitch CCs (33–41) are centered: 64 = unity/no detune.
+;;   - CC 38 is absent from the map (NRPN Data Entry LSB conflict; same issue as
+;;     Novation Summit). OSC Pitch is CC 33–37 for OSC 1–5, then CC 39–41 for OSC 6–8.
+;;   - ENV 3 ADSR is non-contiguous: Attack=89, Decay=90, Sustain=96, Release=97.
+;;   - Default values not published; shown as :default :unknown in this map.
+;;   - SysEx patch dump/restore supported; format is proprietary and not publicly
+;;     documented for either Leviasynth or Hydrasynth.
+
+{:device/id           :asm/leviasynth
+ :device/name         "ASM Leviasynth"
+ :device/manufacturer "Ashun Sound Machines"
+ :device/type         :synthesizer
+ :device/voices       16
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1
+ :midi/poly-mode      :poly
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes
+ ;; -------------------------------------------------------------------------
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on true :note-off false}
+  :aftertouch {:channel-pressure true :poly-key-pressure true}}
+
+ ;; -------------------------------------------------------------------------
+ ;; MPE
+ ;; -------------------------------------------------------------------------
+ :midi/mpe
+ {:supported        true
+  :manager-channel  0         ; ch 1 (0-indexed) = MPE Zone Manager
+  :member-channels  [1 15]    ; ch 2–16 = member channels
+  :x                :pitch-bend
+  :y                :cc74      ; Brightness / timbre
+  :z                :channel-pressure
+  :note "Full MPE; per-note pitch bend, timbre, and pressure; PolyAT keybed on Keyboard variant"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Pitch bend
+ ;; -------------------------------------------------------------------------
+ :midi/pitch-bend
+ {:default-semitones 2
+  :configurable true}
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive true
+  :send    true
+  :uses    [:lfo-sync :arpeggiator :sequencer]}
+
+ ;; -------------------------------------------------------------------------
+ ;; Program change
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:receive    true
+  :send       true
+  :range      [0 127]
+  :bank-select true
+  :bank-msb   0
+  :bank-lsb   32}
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x2B]   ; Provisional — not confirmed from primary spec
+  :purpose         [:patch-dump :patch-load]
+  :note "Patch dump/restore supported; SysEx format is proprietary and not publicly documented"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Control Change map
+ ;;
+ ;; Orientation:
+ ;;   :centered — 64 = center/unity (e.g. OSC Pitch, Balance)
+ ;;   :0-based  — 0 = minimum (standard unipolar range)
+ ;;
+ ;; :default :unknown — ASM has not published default values for any parameter.
+ ;; Determine by recalling an init patch and observing transmitted CC values.
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+
+ [;; --- Global --------------------------------------------------------------
+  {:cc 0   :path [:bank-select :msb]      :range [0 127] :cc-type :global}
+  {:cc 1   :path [:mod-wheel]             :range [0 127] :default 0   :cc-type :global}
+  {:cc 7   :path [:master :volume]        :range [0 127] :default :unknown :cc-type :global}
+  {:cc 8   :path [:multi-edit :balance]   :range [0 127] :default 64  :cc-type :fixed :bipolar true :center 64}
+  {:cc 11  :path [:expression]            :range [0 127] :default 0   :cc-type :global}
+  {:cc 32  :path [:bank-select :lsb]      :range [0 127] :cc-type :global}
+  {:cc 64  :path [:sustain]               :range [0 127] :default 0   :cc-type :global}
+  {:cc 123 :path [:channel-mode :all-notes-off] :range [0 127] :cc-type :global}
+
+  ;; --- Voice ---------------------------------------------------------------
+  {:cc 5   :path [:voice :glide-time]     :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 9   :path [:voice :polyphony]      :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 10  :path [:voice :density]        :range [0 127] :default :unknown :cc-type :fixed
+   :note "Unison density — how many oscillator layers per note"}
+  {:cc 65  :path [:voice :glide-toggle]   :range [0 127] :default :unknown :cc-type :fixed
+   :note "0–63 = off; 64–127 = on"}
+  {:cc 95  :path [:voice :detune]         :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- Macro controls (user-assignable) ------------------------------------
+  {:cc 16  :path [:macro 1 :value]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 17  :path [:macro 2 :value]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 18  :path [:macro 3 :value]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 19  :path [:macro 4 :value]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 20  :path [:macro 5 :value]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 21  :path [:macro 6 :value]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 22  :path [:macro 7 :value]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 23  :path [:macro 8 :value]        :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- VCA -----------------------------------------------------------------
+  {:cc 2   :path [:vca :level]            :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 3   :path [:vca :lfo3-amount]      :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- Oscillator initial levels (OSC 1–8) ---------------------------------
+  {:cc 24  :path [:osc 1 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 25  :path [:osc 2 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 26  :path [:osc 3 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 27  :path [:osc 4 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 28  :path [:osc 5 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 29  :path [:osc 6 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 30  :path [:osc 7 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 31  :path [:osc 8 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- Oscillator pitch (OSC 1–8, centered; CC 38 absent — NRPN conflict) -
+  {:cc 33  :path [:osc 1 :pitch]          :range [0 127] :default 64  :cc-type :fixed :bipolar true :center 64}
+  {:cc 34  :path [:osc 2 :pitch]          :range [0 127] :default 64  :cc-type :fixed :bipolar true :center 64}
+  {:cc 35  :path [:osc 3 :pitch]          :range [0 127] :default 64  :cc-type :fixed :bipolar true :center 64}
+  {:cc 36  :path [:osc 4 :pitch]          :range [0 127] :default 64  :cc-type :fixed :bipolar true :center 64}
+  {:cc 37  :path [:osc 5 :pitch]          :range [0 127] :default 64  :cc-type :fixed :bipolar true :center 64}
+  ;; CC 38 absent — reserved for NRPN Data Entry LSB
+  {:cc 39  :path [:osc 6 :pitch]          :range [0 127] :default 64  :cc-type :fixed :bipolar true :center 64}
+  {:cc 40  :path [:osc 7 :pitch]          :range [0 127] :default 64  :cc-type :fixed :bipolar true :center 64}
+  {:cc 41  :path [:osc 8 :pitch]          :range [0 127] :default 64  :cc-type :fixed :bipolar true :center 64}
+
+  ;; --- Oscillator feedback (OSC 1–8) ---------------------------------------
+  {:cc 42  :path [:osc 1 :feedback]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 43  :path [:osc 2 :feedback]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 44  :path [:osc 3 :feedback]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 45  :path [:osc 4 :feedback]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 46  :path [:osc 5 :feedback]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 47  :path [:osc 6 :feedback]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 48  :path [:osc 7 :feedback]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 49  :path [:osc 8 :feedback]       :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- Digital filter ------------------------------------------------------
+  {:cc 50  :path [:digital-filter :morph]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 51  :path [:digital-filter :keytrack]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 52  :path [:digital-filter :lfo1-amount]     :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 53  :path [:digital-filter :vel>env]         :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 54  :path [:digital-filter :env1-amount]     :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 55  :path [:digital-filter :cutoff]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 56  :path [:digital-filter :resonance]       :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- Analog filter (4-pole 24dB/oct LP, self-oscillation, pre-drive) ----
+  {:cc 57  :path [:analog-filter :pre-drive]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 58  :path [:analog-filter :keytrack]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 59  :path [:analog-filter :lfo2-amount]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 60  :path [:analog-filter :vel>env]           :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 61  :path [:analog-filter :env2-amount]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 71  :path [:analog-filter :resonance]         :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 74  :path [:analog-filter :cutoff]            :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- ENVs 1–5 (ENV 3 ADSR is non-contiguous: S=96 R=97) -----------------
+  {:cc 81  :path [:env 1 :attack]         :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 82  :path [:env 1 :decay]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 83  :path [:env 1 :sustain]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 84  :path [:env 1 :release]        :range [0 127] :default :unknown :cc-type :fixed}
+
+  {:cc 85  :path [:env 2 :attack]         :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 86  :path [:env 2 :decay]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 87  :path [:env 2 :sustain]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 88  :path [:env 2 :release]        :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; ENV 3: Attack/Decay contiguous but Sustain/Release jump to 96/97
+  {:cc 89  :path [:env 3 :attack]         :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 90  :path [:env 3 :decay]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 96  :path [:env 3 :sustain]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 97  :path [:env 3 :release]        :range [0 127] :default :unknown :cc-type :fixed}
+
+  {:cc 102 :path [:env 4 :attack]         :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 103 :path [:env 4 :decay]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 104 :path [:env 4 :sustain]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 105 :path [:env 4 :release]        :range [0 127] :default :unknown :cc-type :fixed}
+
+  {:cc 106 :path [:env 5 :attack]         :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 107 :path [:env 5 :decay]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 108 :path [:env 5 :sustain]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 109 :path [:env 5 :release]        :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- LFOs 1–5 ------------------------------------------------------------
+  {:cc 70  :path [:lfo 1 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 72  :path [:lfo 1 :rate]           :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 110 :path [:lfo 1 :waveform]       :range [0 127] :default :unknown :cc-type :fixed}
+
+  {:cc 4   :path [:lfo 2 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 73  :path [:lfo 2 :rate]           :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 111 :path [:lfo 2 :waveform]       :range [0 127] :default :unknown :cc-type :fixed}
+
+  {:cc 75  :path [:lfo 3 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 76  :path [:lfo 3 :rate]           :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 112 :path [:lfo 3 :waveform]       :range [0 127] :default :unknown :cc-type :fixed}
+
+  {:cc 77  :path [:lfo 4 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 78  :path [:lfo 4 :rate]           :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 113 :path [:lfo 4 :waveform]       :range [0 127] :default :unknown :cc-type :fixed}
+
+  {:cc 79  :path [:lfo 5 :level]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 80  :path [:lfo 5 :rate]           :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 114 :path [:lfo 5 :waveform]       :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- FX: Pre-FX / Post-FX (assignable effect slots) ---------------------
+  {:cc 12  :path [:pre-fx :param1]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 13  :path [:pre-fx :param2]        :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 93  :path [:pre-fx :dry-wet]       :range [0 127] :default :unknown :cc-type :fixed}
+
+  {:cc 68  :path [:post-fx :param1]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 69  :path [:post-fx :param2]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 94  :path [:post-fx :dry-wet]      :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- FX: Delay -----------------------------------------------------------
+  {:cc 14  :path [:delay :feedback]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 15  :path [:delay :time]           :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 62  :path [:delay :feedback-tone]  :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 63  :path [:delay :wet-tone]       :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 92  :path [:delay :dry-wet]        :range [0 127] :default :unknown :cc-type :fixed}
+
+  ;; --- FX: Reverb ----------------------------------------------------------
+  {:cc 66  :path [:reverb :time]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 67  :path [:reverb :tone]          :range [0 127] :default :unknown :cc-type :fixed}
+  {:cc 91  :path [:reverb :dry-wet]       :range [0 127] :default :unknown :cc-type :fixed}]
+
+ ;; -------------------------------------------------------------------------
+ ;; NRPN
+ ;; No NRPN map. Per-OSC Ratio, Synthesis Mode, Waveform, and Algorithm selection
+ ;; are not exposed via MIDI CC or NRPN — panel/touchscreen or SysEx only.
+ ;; -------------------------------------------------------------------------
+ :midi/nrpn []
+
+ ;; -------------------------------------------------------------------------
+ ;; Metadata
+ ;; -------------------------------------------------------------------------
+ :device/firmware-version "1.0"   ; initial release firmware
+ :device/map-source       "ASM Leviasynth Desktop Owner's Manual — files.kraftmusic.com; pencilresearch/midi CC-BY-SA 4.0"
+ :device/map-version      "2026-04-05"
+ :device/map-confidence   :medium}  ; SysEx ID provisional; default values unknown

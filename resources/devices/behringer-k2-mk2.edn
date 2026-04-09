@@ -1,0 +1,65 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Behringer K-2 MK II — cljseq device map
+;; (Also covers K-2 MK I; only difference: MK II adds 16-voice poly chain)
+;;
+;; Korg MS-20 clone. Zero MIDI CC support. Zero SysEx parameter control.
+;; Pure pitch/gate device: MIDI note → KBD CV OUT + TRIG OUT for patching.
+;; No MIDI OUT port — only MIDI THRU.
+;;
+;; Source: Behringer K-2 QSG (2019) + K-2 MK II QSG (2022) — behringer.com
+;; Confidence: High (confirmed: no CC, no SysEx; Note/Bend/Gate only)
+
+{:device/id           :behringer/k2-mk2
+ :device/name         "Behringer K-2 MK II"
+ :device/aliases      ["Behringer K-2"]
+ :device/manufacturer "Behringer"
+ :device/type         :semi-modular
+ :device/voices       1
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ :midi/channel        1             ; set via 4 rear DIP switches (ch 1–16)
+
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on false :note-off false}
+  :aftertouch {:channel-pressure false :poly-key-pressure false}}
+
+ :midi/pitch-bend
+ {:receive true
+  :note    "Range fixed; not configurable via MIDI (physical portamento slider only)"}
+
+ :midi/clock {:receive false :send false}
+
+ :midi/program-change {:receive false :send false}
+
+ ;; No MIDI CC whatsoever — confirmed by official QSG MIDI implementation table
+ ;; and third-party Ctrlr panel docs: "does not support NRPN/CC/SysEx messages"
+ :midi/cc []
+
+ :midi/sysex nil   ; no SysEx support
+
+ ;; MIDI OUT: not present — only MIDI THRU (passes through MIDI IN data)
+ :midi/ports
+ {:din-in   true
+  :din-thru true
+  :din-out  false
+  :usb      true}   ; class-compliant, no driver required
+
+ ;; CV/gate outputs driven by MIDI
+ :device/cv-outputs
+ {:kbd-cv   {:signal :1v-oct  :jack "3.5mm TS"  :note "1V/oct from MIDI note; drives VCO1+2 internally and available as KBD CV OUT"}
+  :trig-out {:signal :trigger :jack "3.5mm TS"  :note "Trigger from MIDI Note On; drives EGs internally and available as TRIG OUT"}}
+
+ :device/modes
+ {:mono       {:voices 1  :note "Default — single voice"}
+  :poly-chain {:max 16    :note "MK II only — multiple K-2 MK II units chained via MIDI THRU"}}
+
+ :device/mk-differences
+ {:mk1 {:poly-chain false :note "Original K-2; no poly chain"}
+  :mk2 {:poly-chain true  :note "Adds 16-voice poly chain; MIDI implementation otherwise identical"}}
+
+ :device/map-source    "Behringer K-2 QSG (2019) + K-2 MK II QSG (2022) — behringer.com"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

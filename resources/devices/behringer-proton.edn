@@ -1,0 +1,103 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Behringer Proton — cljseq device map
+;;
+;; Dual-voice semi-modular analog synthesizer (original Behringer design).
+;; Two complete signal paths: OSC1+VCF1+ADSR1/ASR1, OSC2+VCF2+ADSR2/ASR2.
+;; Two independent ASSIGN outputs. Paraphonic: two fully independent voices.
+;; Minimal MIDI CC (3 entries). Parameter control via SysEx SSPKT system.
+;; Primary cljseq use: MIDI note → pitch CVs + gate for semi-modular patching.
+;;
+;; Source: Behringer Proton User Manual (March 2025) — behringer.com
+;; SysEx: Behringer ID [0x00 0x20 0x32], model [0x00 0x01], device ID default 0x25 (37)
+;; Confidence: High (CC table complete; SysEx SSPKT codes from official manual)
+
+{:device/id           :behringer/proton
+ :device/name         "Behringer Proton"
+ :device/manufacturer "Behringer"
+ :device/type         :semi-modular
+ :device/voices       2             ; dual paraphonic (2 independent signal paths)
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ :midi/channel        1             ; set via 4 rear DIP switches (ch 1–16)
+
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on false :note-off false}   ; not velocity sensitive
+  :aftertouch {:channel-pressure false :poly-key-pressure false}}
+
+ :midi/pitch-bend
+ {:default-semitones 2
+  :configurable      true
+  :configure-via     :sysex}
+
+ :midi/clock
+ {:receive true
+  :send    false
+  :uses    [:lfo-sync]}
+
+ :midi/program-change {:receive false :send false}
+
+ :midi/cc
+ [{:cc 1   :path [:mod-wheel]      :range [0 127] :cc-type :global
+   :note "Routable to ASSIGN 1 or ASSIGN 2 output via SysEx SSPKT 0x17/0x18"}
+  {:cc 33  :path [:mod-wheel :lsb] :cc-lsb true   :cc-type :global}
+  {:cc 64  :path [:sustain-pedal]  :range [0 127] :cc-type :global
+   :note "≥64 = on"}]
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx — SSPKT (Sub-System Packet) configuration system
+ ;; Format: F0 00 20 32 00 01 <dev-id> <pkt> <sspkt> <value> F7
+ ;; Default device ID: 0x25 (decimal 37)
+ ;; Factory reset: F0 00 20 32 00 01 25 00 7D F7
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x32]
+  :model-id        [0x00 0x01]
+  :default-device-id 0x25          ; decimal 37
+  :frame           "F0 00 20 32 00 01 <dev-id> <pkt> <sspkt> <value> F7"
+  :factory-reset   "F0 00 20 32 00 01 25 00 7D F7"
+  :sspkt-commands
+  [{:sspkt 0x0F :name :poly-chain        :range [0 1]  :values {0 :off 1 :on}}
+   {:sspkt 0x10 :name :dip-sw-enable     :range [0 1]  :values {0 :dip-switch 1 :software-channel}}
+   {:sspkt 0x11 :name :midi-channel      :range [0 15] :note "0=ch1…15=ch16"}
+   {:sspkt 0x13 :name :mono-key-priority :range [0 2]  :values {0 :low 1 :high 2 :last}}
+   {:sspkt 0x14 :name :para-key-priority :range [0 2]  :values {0 :low 1 :high 2 :last}}
+   {:sspkt 0x17 :name :assign-out-1      :range [0 4]  :values {0 :osc1-cv 1 :osc2-cv 2 :velocity 3 :mod-wheel 4 :aftertouch}}
+   {:sspkt 0x18 :name :assign-out-2      :range [0 4]  :values {0 :osc1-cv 1 :osc2-cv 2 :velocity 3 :mod-wheel 4 :aftertouch}}
+   {:sspkt 0x1D :name :forward-midi-clk  :range [0 1]  :values {0 :off 1 :on}}
+   {:sspkt 0x1E :name :assign-in-dest    :range [0 6]  :values {0 :none 1 :osc1 2 :osc2 3 :osc1+2 4 :vcf1 5 :vcf2 6 :vcf1+2}}
+   {:sspkt 0x21 :name :local-control     :range [0 1]  :values {0 :off 1 :on}}
+   {:sspkt 0x26 :name :vcf1-mode         :range [0 2]  :values {0 :hp 1 :bp 2 :lp}}
+   {:sspkt 0x27 :name :vcf1-mod-source   :range [0 3]  :values {0 :none 1 :velocity 2 :mod-wheel 3 :aftertouch}}
+   {:sspkt 0x28 :name :vcf1-mod-depth    :range [0 252]}
+   {:sspkt 0x2A :name :vcf2-mode         :range [0 2]  :values {0 :hp 1 :bp 2 :lp}}
+   {:sspkt 0x2B :name :vcf2-mod-source   :range [0 3]  :values {0 :none 1 :velocity 2 :mod-wheel 3 :aftertouch}}
+   {:sspkt 0x2C :name :vcf2-mod-depth    :range [0 252]}
+   {:sspkt 0x46 :name :osc-sync          :range [0 1]  :values {0 :off 1 :on}}
+   {:sspkt 0x47 :name :paraphonic        :range [0 1]  :values {0 :mono 1 :paraphonic}}
+   {:sspkt 0x48 :name :osc-key-split     :range [0 96] :note "0=no split; 0x0C–0x60=split note#"}
+   {:sspkt 0x4A :name :osc1-range        :range [0 3]  :values {0 :8-foot 1 :16-foot 2 :32-foot 3 :free}}
+   {:sspkt 0x55 :name :osc1-portamento   :range [0 24] :note "0x0C=no glide (default)"}
+   {:sspkt 0x56 :name :osc2-range        :range [0 3]  :values {0 :8-foot 1 :16-foot 2 :32-foot 3 :free}}
+   {:sspkt 0x61 :name :osc2-portamento   :range [0 24] :note "0x0C=no glide (default)"}
+   {:sspkt 0x63 :name :env-speed         :range [0 1]  :values {0 :fast 1 :slow}}
+   {:sspkt 0x64 :name :env-retrigger     :range [0 1]  :values {0 :off 1 :on}}
+   {:sspkt 0x65 :name :env-retrigger-mode :range [0 1] :values {0 :neutron-mode 1 :proton-mode}}]}
+
+ :device/cv-outputs
+ {:osc1-pitch  {:signal :1v-oct  :note "Voice 1 pitch CV from MIDI note"}
+  :osc2-pitch  {:signal :1v-oct  :note "Voice 2 pitch CV from MIDI note (paraphonic)"}
+  :adsr1       {:signal :trigger :note "Envelope 1 — triggered by MIDI Note On"}
+  :adsr2       {:signal :trigger :note "Envelope 2 — independent in paraphonic mode"}
+  :assign-out-1 {:signal :selectable :note "OSC1 CV, OSC2 CV, velocity, mod wheel, or aftertouch"}
+  :assign-out-2 {:signal :selectable :note "Same options as ASSIGN 1"}}
+
+ :device/modes
+ {:paraphonic {:voices 2    :note "Two MIDI notes → independent OSC+VCF+ADSR chains"}
+  :poly-chain {:max 16      :note "Multiple Protons chained via MIDI THRU; paraphonic unit = 2 voices"}}
+
+ :device/map-source    "Behringer Proton User Manual (March 2025) — behringer.com"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

@@ -1,0 +1,417 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Elektron Analog Heat +FX — cljseq device map
+;;
+;; Sources:
+;;   Elektron Analog Heat +FX User Manual OS1.01:
+;;     https://www.elektron.se/wp-content/uploads/2024/09/Analog_Heat_FX_User_Manual_ENG_OS1.01_240325.pdf
+;; Confidence: High.
+;;
+;; Architecture overview:
+;;   - Mono/stereo analog distortion and filter unit (Heat section)
+;;   - 8 analog circuit modes (Clean Boost, Saturation, Enhancement, Clip, Fold,
+;;     Fuzz, Medium Overdrive, High Overdrive)
+;;   - Multimode analog filter (14 modes) with self-oscillation and pre-drive
+;;   - 3-band EQ; Envelope follower; 3 LFOs; 2 CV/expression inputs
+;;   - Gate (noise gate)
+;;   - Dual digital FX section (separate MIDI channel):
+;;     Bits (SRR/BR), Chorus, Delay, Reverb, Compressor, Warble, Bass Focus
+;;
+;; Dual MIDI channel architecture (critical):
+;;   - MIDI CHANNEL (MAIN): receives CC and NRPN for the Heat section
+;;     (Character, EQ, Filter, Envelope, LFO 1–3, Controls, Gate, Preset Volume)
+;;   - FX MIDI CHANNEL:    receives CC and NRPN for the FX section
+;;     (Bits, Chorus, Delay, Reverb, Compressor, Warble, Bass Focus)
+;;   Both channels are user-configurable in MIDI › CHANNELS (manual §6.6.3).
+;;   OS 1.01 release notes: bug fixed where only default MIDI channels worked.
+;;
+;; CC annotation:
+;;   :midi-context :main  — send to MIDI CHANNEL (Heat section)
+;;   :midi-context :fx    — send to FX MIDI CHANNEL (FX section)
+;;
+;; 14-bit CCs: :cc-lsb is the paired LSB CC (typically MSB + 32).
+;;   Max value 16256 or 16320 in the manual reflects 14-bit precision.
+;;   In this map :range shows [0 127] for 7-bit and [0 16383] for 14-bit entries.
+;;
+;; Default values: not published by Elektron.
+
+{:device/id           :elektron/analog-heat-fx
+ :device/name         "Elektron Analog Heat +FX"
+ :device/manufacturer "Elektron Music Machines"
+ :device/type         :effects-processor
+ :device/voices       1
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel — dual-channel architecture; both user-configurable
+ ;; -------------------------------------------------------------------------
+ :midi/channel        {:main 1    ; Heat section (Character, Filter, EQ, Env, LFOs, Gate)
+                        :fx   2}   ; FX section (Bits, Chorus, Delay, Reverb, Compressor, Warble, Bass Focus)
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive true
+  :send    true
+  :uses    [:lfo-sync]}
+
+ ;; -------------------------------------------------------------------------
+ ;; Program change
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:receive true
+  :send    true
+  :range   [0 127]
+  :bank-select false}
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x3C]   ; Elektron Music Machines AB (shared by all Elektron devices)
+  :purpose         [:patch-dump :patch-load :firmware-update]
+  :note "SysEx format not publicly documented; use Elektron Transfer application"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Control Change map
+ ;;
+ ;; :midi-context :main — send to MIDI CHANNEL (Heat section)
+ ;; :midi-context :fx   — send to FX MIDI CHANNEL (digital FX section)
+ ;;
+ ;; 14-bit entries have :cc-lsb (LSB CC = MSB + 32 convention).
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+
+ [;; === HEAT SECTION (MAIN MIDI CHANNEL) ====================================
+
+  ;; --- Character (circuit / drive / level / mix) ---------------------------
+  {:cc 108 :path [:character :circuit]  :range [0 7]    :default :unknown :cc-type :fixed :midi-context :main
+   :values [{:value 0 :label :clean-boost}
+            {:value 1 :label :saturation}
+            {:value 2 :label :enhancement}
+            {:value 3 :label :clip}
+            {:value 4 :label :fold}
+            {:value 5 :label :fuzz}
+            {:value 6 :label :medium-overdrive}
+            {:value 7 :label :high-overdrive}]}
+  {:cc 109 :path [:character :drive]    :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 37}
+  {:cc 110 :path [:character :level]    :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 39}
+  {:cc 111 :path [:character :mix]      :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 40}
+
+  ;; --- EQ ------------------------------------------------------------------
+  {:cc 28  :path [:eq :low]             :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 41}
+  {:cc 29  :path [:eq :high]            :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 42}
+
+  ;; --- Filter --------------------------------------------------------------
+  {:cc 30  :path [:filter :mode]        :range [0 13]   :default :unknown :cc-type :fixed :midi-context :main
+   :note "14 filter modes (0–13)"}
+  {:cc 22  :path [:filter :frequency]   :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 43}
+  {:cc 26  :path [:filter :freq-pan]    :range [0 127]  :default 64  :cc-type :fixed :midi-context :main :cc-lsb 47
+   :bipolar true :center 64}
+  {:cc 23  :path [:filter :resonance]   :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 44}
+  {:cc 27  :path [:filter :dirt]        :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 24  :path [:filter :env-amount]  :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 45}
+  {:cc 25  :path [:filter :lfo1-amount] :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 46}
+
+  ;; --- Envelope ------------------------------------------------------------
+  {:cc 17  :path [:envelope :mode]      :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 13  :path [:envelope :attack]    :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 14  :path [:envelope :release]   :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 12  :path [:envelope :trig-level] :range [0 127] :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 32}
+  {:cc 15  :path [:envelope :base]      :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 16  :path [:envelope :width]     :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 18  :path [:envelope :destination]  :range [0 112] :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 19  :path [:envelope :depth]     :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main :cc-lsb 33}
+  {:cc 20  :path [:envelope :destination-2] :range [0 112] :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 21  :path [:envelope :depth-2]   :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+
+  ;; --- LFO 1 ---------------------------------------------------------------
+  {:cc 66  :path [:lfo 1 :waveform]     :range [0 6]    :default :unknown :cc-type :fixed :midi-context :main
+   :note "7 waveforms (0–6)"}
+  {:cc 70  :path [:lfo 1 :mode]         :range [0 4]    :default :unknown :cc-type :fixed :midi-context :main
+   :note "5 modes (0–4)"}
+  {:cc 67  :path [:lfo 1 :speed]        :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 68  :path [:lfo 1 :multiplier]   :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 69  :path [:lfo 1 :fade]         :range [0 127]  :default 64  :cc-type :fixed :midi-context :main
+   :bipolar true :center 64}
+  {:cc 71  :path [:lfo 1 :start-phase]  :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 72  :path [:lfo 1 :destination]  :range [0 112]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 73  :path [:lfo 1 :depth]        :range [0 127]  :default 64  :cc-type :fixed :midi-context :main :cc-lsb 34
+   :bipolar true :center 64}
+  {:cc 74  :path [:lfo 1 :destination-2] :range [0 112] :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 75  :path [:lfo 1 :depth-2]      :range [0 127]  :default 64  :cc-type :fixed :midi-context :main
+   :bipolar true :center 64}
+
+  ;; --- LFO 2 ---------------------------------------------------------------
+  {:cc 76  :path [:lfo 2 :waveform]     :range [0 6]    :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 80  :path [:lfo 2 :mode]         :range [0 4]    :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 77  :path [:lfo 2 :speed]        :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 78  :path [:lfo 2 :multiplier]   :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 79  :path [:lfo 2 :fade]         :range [0 127]  :default 64  :cc-type :fixed :midi-context :main
+   :bipolar true :center 64}
+  {:cc 81  :path [:lfo 2 :start-phase]  :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 82  :path [:lfo 2 :destination]  :range [0 112]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 83  :path [:lfo 2 :depth]        :range [0 127]  :default 64  :cc-type :fixed :midi-context :main :cc-lsb 35
+   :bipolar true :center 64}
+  {:cc 84  :path [:lfo 2 :destination-2] :range [0 112] :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 85  :path [:lfo 2 :depth-2]      :range [0 127]  :default 64  :cc-type :fixed :midi-context :main
+   :bipolar true :center 64}
+
+  ;; --- LFO 3 ---------------------------------------------------------------
+  {:cc 86  :path [:lfo 3 :waveform]     :range [0 6]    :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 90  :path [:lfo 3 :mode]         :range [0 4]    :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 87  :path [:lfo 3 :speed]        :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 88  :path [:lfo 3 :multiplier]   :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 89  :path [:lfo 3 :fade]         :range [0 127]  :default 64  :cc-type :fixed :midi-context :main
+   :bipolar true :center 64}
+  {:cc 91  :path [:lfo 3 :start-phase]  :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 92  :path [:lfo 3 :destination]  :range [0 112]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 93  :path [:lfo 3 :depth]        :range [0 127]  :default 64  :cc-type :fixed :midi-context :main :cc-lsb 36
+   :bipolar true :center 64}
+  {:cc 94  :path [:lfo 3 :destination-2] :range [0 112] :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 95  :path [:lfo 3 :depth-2]      :range [0 127]  :default 64  :cc-type :fixed :midi-context :main
+   :bipolar true :center 64}
+
+  ;; --- Controls (CV and expression inputs) ---------------------------------
+  {:cc 100 :path [:cv-a :destination]   :range [0 112]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 101 :path [:cv-a :depth]         :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 102 :path [:expr-a :destination] :range [0 112]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 103 :path [:expr-a :depth]       :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 104 :path [:cv-b :destination]   :range [0 112]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 105 :path [:cv-b :depth]         :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 106 :path [:expr-b :destination] :range [0 112]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 107 :path [:expr-b :depth]       :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+
+  ;; --- Gate ----------------------------------------------------------------
+  {:cc 113 :path [:gate :threshold]     :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 114 :path [:gate :hold]          :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 115 :path [:gate :release]       :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+  {:cc 116 :path [:gate :range]         :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+
+  ;; --- Preset Volume -------------------------------------------------------
+  {:cc 112 :path [:preset :volume]      :range [0 127]  :default :unknown :cc-type :fixed :midi-context :main}
+
+  ;; === FX SECTION (FX MIDI CHANNEL) ========================================
+
+  ;; --- Bits (sample-rate and bit-depth reduction) --------------------------
+  {:cc 88  :path [:bits :srr]           :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx
+   :note "SRR = Sample Rate Reduction"}
+  {:cc 89  :path [:bits :br]            :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx
+   :note "BR = Bit Reduction"}
+  {:cc 90  :path [:bits :filter]        :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 91  :path [:bits :mix]           :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+
+  ;; --- Chorus --------------------------------------------------------------
+  {:cc 102 :path [:chorus :depth]       :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx :cc-lsb 36}
+  {:cc 103 :path [:chorus :speed]       :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx :cc-lsb 37}
+  {:cc 105 :path [:chorus :width]       :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 106 :path [:chorus :mix]         :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+
+  ;; --- Delay ---------------------------------------------------------------
+  {:cc 107 :path [:delay :time]         :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx :cc-lsb 39}
+  {:cc 108 :path [:delay :pingpong]     :range [0 1]    :default :unknown :cc-type :fixed :midi-context :fx
+   :note "0 = off; 1 = on"}
+  {:cc 109 :path [:delay :width]        :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 110 :path [:delay :feedback]     :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 111 :path [:delay :highpass]     :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx :cc-lsb 40}
+  {:cc 112 :path [:delay :lowpass]      :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx :cc-lsb 41}
+  {:cc 113 :path [:delay :amount]       :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 114 :path [:delay :mode]         :range [0 2]    :default :unknown :cc-type :fixed :midi-context :fx
+   :note "3 modes (0–2)"}
+
+  ;; --- Reverb --------------------------------------------------------------
+  {:cc 12  :path [:reverb :predelay]    :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 13  :path [:reverb :decay-time]  :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 14  :path [:reverb :frequency]   :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 15  :path [:reverb :gain]        :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 16  :path [:reverb :highpass]    :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 17  :path [:reverb :lowpass]     :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 18  :path [:reverb :amount]      :range [0 127]  :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 19  :path [:reverb :mode]        :range [0 2]    :default :unknown :cc-type :fixed :midi-context :fx
+   :note "3 modes (0–2)"}
+
+  ;; --- Compressor ----------------------------------------------------------
+  {:cc 20  :path [:compressor :threshold]   :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 21  :path [:compressor :attack]      :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 22  :path [:compressor :release]     :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 23  :path [:compressor :makeup-gain] :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 24  :path [:compressor :ratio]       :range [0 7]   :default :unknown :cc-type :fixed :midi-context :fx
+   :note "8 discrete ratios (0–7)"}
+  {:cc 26  :path [:compressor :sidechain-filter] :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 27  :path [:compressor :mix]         :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+
+  ;; --- Warble (wow/flutter + noise) ----------------------------------------
+  {:cc 28  :path [:warble :mix]          :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 29  :path [:warble :depth]        :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 30  :path [:warble :speed]        :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 31  :path [:warble :base]         :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 32  :path [:warble :width]        :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 33  :path [:warble :stereo]       :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 34  :path [:warble :noise-level]  :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 35  :path [:warble :noise-hpf]    :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+
+  ;; --- Bass Focus (crossover / low shelf) ----------------------------------
+  {:cc 115 :path [:bass-focus :xfreq]    :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx
+   :note "Crossover frequency"}
+  {:cc 116 :path [:bass-focus :hp-level] :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 117 :path [:bass-focus :lp-level] :range [0 127] :default :unknown :cc-type :fixed :midi-context :fx}
+  {:cc 118 :path [:bass-focus :bass-on]  :range [0 1]   :default :unknown :cc-type :fixed :midi-context :fx
+   :note "0 = off; 1 = on"}]
+
+ ;; -------------------------------------------------------------------------
+ ;; NRPN map
+ ;;
+ ;; NRPN MSB = 1 → Heat section (received on MAIN MIDI CHANNEL)
+ ;; NRPN MSB = 2 → FX section   (received on FX MIDI CHANNEL)
+ ;; -------------------------------------------------------------------------
+ :midi/nrpn
+
+ [;; === NRPN MSB 1: Heat section (MAIN MIDI CHANNEL) ========================
+
+  ;; Envelope
+  {:nrpn [1 12]  :path [:envelope :trig-level]   :range [0 16383] :midi-context :main}
+  {:nrpn [1 13]  :path [:envelope :attack]        :range [0 127]  :midi-context :main}
+  {:nrpn [1 14]  :path [:envelope :release]       :range [0 127]  :midi-context :main}
+  {:nrpn [1 15]  :path [:envelope :base]          :range [0 127]  :midi-context :main}
+  {:nrpn [1 16]  :path [:envelope :width]         :range [0 127]  :midi-context :main}
+  {:nrpn [1 17]  :path [:envelope :mode]          :range [0 127]  :midi-context :main}
+  {:nrpn [1 18]  :path [:envelope :destination]   :range [0 112]  :midi-context :main}
+  {:nrpn [1 19]  :path [:envelope :depth]         :range [0 16383] :midi-context :main}
+  {:nrpn [1 20]  :path [:envelope :destination-2] :range [0 112]  :midi-context :main}
+  {:nrpn [1 21]  :path [:envelope :depth-2]       :range [0 127]  :midi-context :main}
+
+  ;; Filter
+  {:nrpn [1 22]  :path [:filter :frequency]       :range [0 16383] :midi-context :main}
+  {:nrpn [1 23]  :path [:filter :resonance]        :range [0 16383] :midi-context :main}
+  {:nrpn [1 24]  :path [:filter :env-amount]       :range [0 16383] :midi-context :main}
+  {:nrpn [1 25]  :path [:filter :lfo1-amount]      :range [0 16383] :midi-context :main}
+  {:nrpn [1 26]  :path [:filter :freq-pan]         :range [0 16383] :midi-context :main}
+  {:nrpn [1 27]  :path [:filter :dirt]             :range [0 127]  :midi-context :main}
+  {:nrpn [1 28]  :path [:eq :low]                  :range [0 16383] :midi-context :main}
+  {:nrpn [1 29]  :path [:eq :high]                 :range [0 16383] :midi-context :main}
+  {:nrpn [1 30]  :path [:filter :mode]             :range [0 13]   :midi-context :main}
+
+  ;; LFO 1
+  {:nrpn [1 66]  :path [:lfo 1 :waveform]          :range [0 6]    :midi-context :main}
+  {:nrpn [1 67]  :path [:lfo 1 :speed]             :range [0 127]  :midi-context :main}
+  {:nrpn [1 68]  :path [:lfo 1 :multiplier]        :range [0 127]  :midi-context :main}
+  {:nrpn [1 69]  :path [:lfo 1 :fade]              :range [0 16383] :midi-context :main}
+  {:nrpn [1 70]  :path [:lfo 1 :mode]              :range [0 4]    :midi-context :main}
+  {:nrpn [1 71]  :path [:lfo 1 :start-phase]       :range [0 127]  :midi-context :main}
+  {:nrpn [1 72]  :path [:lfo 1 :destination]       :range [0 112]  :midi-context :main}
+  {:nrpn [1 73]  :path [:lfo 1 :depth]             :range [0 16383] :midi-context :main}
+  {:nrpn [1 74]  :path [:lfo 1 :destination-2]     :range [0 112]  :midi-context :main}
+  {:nrpn [1 75]  :path [:lfo 1 :depth-2]           :range [0 127]  :midi-context :main}
+
+  ;; LFO 2
+  {:nrpn [1 76]  :path [:lfo 2 :waveform]          :range [0 6]    :midi-context :main}
+  {:nrpn [1 77]  :path [:lfo 2 :speed]             :range [0 127]  :midi-context :main}
+  {:nrpn [1 78]  :path [:lfo 2 :multiplier]        :range [0 127]  :midi-context :main}
+  {:nrpn [1 79]  :path [:lfo 2 :fade]              :range [0 16383] :midi-context :main}
+  {:nrpn [1 80]  :path [:lfo 2 :mode]              :range [0 4]    :midi-context :main}
+  {:nrpn [1 81]  :path [:lfo 2 :start-phase]       :range [0 127]  :midi-context :main}
+  {:nrpn [1 82]  :path [:lfo 2 :destination]       :range [0 112]  :midi-context :main}
+  {:nrpn [1 83]  :path [:lfo 2 :depth]             :range [0 16383] :midi-context :main}
+  {:nrpn [1 84]  :path [:lfo 2 :destination-2]     :range [0 112]  :midi-context :main}
+  {:nrpn [1 85]  :path [:lfo 2 :depth-2]           :range [0 127]  :midi-context :main}
+
+  ;; LFO 3
+  {:nrpn [1 86]  :path [:lfo 3 :waveform]          :range [0 6]    :midi-context :main}
+  {:nrpn [1 87]  :path [:lfo 3 :speed]             :range [0 127]  :midi-context :main}
+  {:nrpn [1 88]  :path [:lfo 3 :multiplier]        :range [0 127]  :midi-context :main}
+  {:nrpn [1 89]  :path [:lfo 3 :fade]              :range [0 16383] :midi-context :main}
+  {:nrpn [1 90]  :path [:lfo 3 :mode]              :range [0 4]    :midi-context :main}
+  {:nrpn [1 91]  :path [:lfo 3 :start-phase]       :range [0 127]  :midi-context :main}
+  {:nrpn [1 92]  :path [:lfo 3 :destination]       :range [0 112]  :midi-context :main}
+  {:nrpn [1 93]  :path [:lfo 3 :depth]             :range [0 16383] :midi-context :main}
+  {:nrpn [1 94]  :path [:lfo 3 :destination-2]     :range [0 112]  :midi-context :main}
+  {:nrpn [1 95]  :path [:lfo 3 :depth-2]           :range [0 127]  :midi-context :main}
+
+  ;; Controls
+  {:nrpn [1 102] :path [:cv-a :destination]        :range [0 112]  :midi-context :main}
+  {:nrpn [1 103] :path [:cv-a :depth]              :range [0 127]  :midi-context :main}
+  {:nrpn [1 104] :path [:expr-a :destination]      :range [0 112]  :midi-context :main}
+  {:nrpn [1 105] :path [:expr-a :depth]            :range [0 127]  :midi-context :main}
+  {:nrpn [1 106] :path [:cv-b :destination]        :range [0 112]  :midi-context :main}
+  {:nrpn [1 107] :path [:cv-b :depth]              :range [0 127]  :midi-context :main}
+
+  ;; Character
+  {:nrpn [1 108] :path [:character :circuit]       :range [0 7]    :midi-context :main}
+  {:nrpn [1 109] :path [:character :drive]         :range [0 16383] :midi-context :main}
+  {:nrpn [1 110] :path [:character :level]         :range [0 16383] :midi-context :main}
+  {:nrpn [1 111] :path [:character :mix]           :range [0 16383] :midi-context :main}
+
+  ;; Preset / Gate
+  {:nrpn [1 112] :path [:preset :volume]           :range [0 127]  :midi-context :main}
+  {:nrpn [1 113] :path [:gate :threshold]          :range [0 127]  :midi-context :main}
+  {:nrpn [1 114] :path [:gate :hold]               :range [0 127]  :midi-context :main}
+  {:nrpn [1 115] :path [:gate :release]            :range [0 127]  :midi-context :main}
+  {:nrpn [1 116] :path [:gate :range]              :range [0 127]  :midi-context :main}
+
+  ;; === NRPN MSB 2: FX section (FX MIDI CHANNEL) ===========================
+
+  ;; Reverb
+  {:nrpn [2 12]  :path [:reverb :predelay]         :range [0 127]  :midi-context :fx}
+  {:nrpn [2 13]  :path [:reverb :decay-time]       :range [0 127]  :midi-context :fx}
+  {:nrpn [2 14]  :path [:reverb :frequency]        :range [0 127]  :midi-context :fx}
+  {:nrpn [2 15]  :path [:reverb :gain]             :range [0 127]  :midi-context :fx}
+  {:nrpn [2 16]  :path [:reverb :highpass]         :range [0 127]  :midi-context :fx}
+  {:nrpn [2 17]  :path [:reverb :lowpass]          :range [0 127]  :midi-context :fx}
+  {:nrpn [2 18]  :path [:reverb :amount]           :range [0 127]  :midi-context :fx}
+  {:nrpn [2 19]  :path [:reverb :mode]             :range [0 2]    :midi-context :fx}
+
+  ;; Compressor
+  {:nrpn [2 20]  :path [:compressor :threshold]    :range [0 127]  :midi-context :fx}
+  {:nrpn [2 21]  :path [:compressor :attack]       :range [0 127]  :midi-context :fx}
+  {:nrpn [2 22]  :path [:compressor :release]      :range [0 127]  :midi-context :fx}
+  {:nrpn [2 23]  :path [:compressor :makeup-gain]  :range [0 127]  :midi-context :fx}
+  {:nrpn [2 24]  :path [:compressor :ratio]        :range [0 7]    :midi-context :fx}
+  {:nrpn [2 26]  :path [:compressor :sidechain-filter] :range [0 127] :midi-context :fx}
+  {:nrpn [2 27]  :path [:compressor :mix]          :range [0 127]  :midi-context :fx}
+
+  ;; Warble
+  {:nrpn [2 28]  :path [:warble :mix]              :range [0 127]  :midi-context :fx}
+  {:nrpn [2 29]  :path [:warble :depth]            :range [0 127]  :midi-context :fx}
+  {:nrpn [2 30]  :path [:warble :speed]            :range [0 127]  :midi-context :fx}
+  {:nrpn [2 31]  :path [:warble :base]             :range [0 127]  :midi-context :fx}
+  {:nrpn [2 32]  :path [:warble :width]            :range [0 127]  :midi-context :fx}
+  {:nrpn [2 33]  :path [:warble :stereo]           :range [0 127]  :midi-context :fx}
+  {:nrpn [2 34]  :path [:warble :noise-level]      :range [0 127]  :midi-context :fx}
+  {:nrpn [2 35]  :path [:warble :noise-hpf]        :range [0 127]  :midi-context :fx}
+
+  ;; Bits
+  {:nrpn [2 88]  :path [:bits :srr]                :range [0 127]  :midi-context :fx}
+  {:nrpn [2 89]  :path [:bits :br]                 :range [0 127]  :midi-context :fx}
+  {:nrpn [2 90]  :path [:bits :filter]             :range [0 127]  :midi-context :fx}
+  {:nrpn [2 91]  :path [:bits :mix]                :range [0 127]  :midi-context :fx}
+
+  ;; Chorus
+  {:nrpn [2 102] :path [:chorus :depth]            :range [0 16383] :midi-context :fx}
+  {:nrpn [2 103] :path [:chorus :speed]            :range [0 16383] :midi-context :fx}
+  {:nrpn [2 105] :path [:chorus :width]            :range [0 127]  :midi-context :fx}
+  {:nrpn [2 106] :path [:chorus :mix]              :range [0 127]  :midi-context :fx}
+
+  ;; Delay
+  {:nrpn [2 107] :path [:delay :time]              :range [0 16383] :midi-context :fx}
+  {:nrpn [2 108] :path [:delay :pingpong]          :range [0 1]    :midi-context :fx}
+  {:nrpn [2 109] :path [:delay :width]             :range [0 127]  :midi-context :fx}
+  {:nrpn [2 110] :path [:delay :feedback]          :range [0 127]  :midi-context :fx}
+  {:nrpn [2 111] :path [:delay :highpass]          :range [0 16383] :midi-context :fx}
+  {:nrpn [2 112] :path [:delay :lowpass]           :range [0 16383] :midi-context :fx}
+  {:nrpn [2 113] :path [:delay :amount]            :range [0 127]  :midi-context :fx}
+  {:nrpn [2 114] :path [:delay :mode]              :range [0 2]    :midi-context :fx}
+
+  ;; Bass Focus
+  {:nrpn [2 115] :path [:bass-focus :xfreq]        :range [0 127]  :midi-context :fx}
+  {:nrpn [2 116] :path [:bass-focus :hp-level]     :range [0 127]  :midi-context :fx}
+  {:nrpn [2 117] :path [:bass-focus :lp-level]     :range [0 127]  :midi-context :fx}
+  {:nrpn [2 118] :path [:bass-focus :bass-on]      :range [0 1]    :midi-context :fx}]
+
+ ;; -------------------------------------------------------------------------
+ ;; Metadata
+ ;; -------------------------------------------------------------------------
+ :device/firmware-version "OS1.01"
+ :device/map-source       "Elektron Analog Heat +FX User Manual OS1.01 — elektron.se"
+ :device/map-version      "2026-04-05"}

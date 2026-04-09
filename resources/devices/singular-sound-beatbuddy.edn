@@ -1,0 +1,129 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Singular Sound BeatBuddy — cljseq device map
+;;
+;; Drum machine / beat pedal with full MIDI I/O + merge. Designed to anchor
+;; the Singular Sound ecosystem: BeatBuddy MIDI OUT merges with MIDI Maestro
+;; OUT so Aeros Looper can receive tempo + song-structure cues from both.
+;;
+;; Ecosystem chain: MIDI Maestro OUT → BeatBuddy MIDI IN
+;;                  BeatBuddy MIDI OUT (merge) → Aeros Looper MIDI IN
+;;
+;; Key behaviors:
+;;   - CC 102: Part-change notification (BeatBuddy sends value = part# when part changes)
+;;   - Compound PC: Bank MSB (CC 0) + Bank LSB (CC 32) + PC selects a song
+;;   - MIDI clock: sends 24ppq when playing; configurable start/stop
+;;   - MIDI merge on OUT: BeatBuddy merges its own + incoming MIDI Maestro traffic
+;;
+;; Source: Singular Sound BeatBuddy MIDI Settings & Specifications — singularsound.com
+;; Confidence: High (CC table from official MIDI spec PDF; ecosystem chain documented)
+
+{:device/id           :singular-sound/beatbuddy
+ :device/name         "Singular Sound BeatBuddy"
+ :device/manufacturer "Singular Sound"
+ :device/type         :drum-machine
+ :device/role         :both   ; sends clock/CC; receives control CC from MIDI Maestro
+ :device/connectivity [:din-midi]
+
+ :midi/channel        1    ; configurable; factory default = 1
+
+ :midi/clock
+ {:receive true
+  :send    true
+  :ppq     24
+  :note    "Sends 24ppq when playing; can slave to external clock; sends START/STOP/CONTINUE"}
+
+ :midi/program-change
+ {:receive true
+  :send    false
+  :note    "Song select via CC 0 (Bank MSB) + CC 32 (Bank LSB) + PC# — 3-message compound select"}
+
+ :midi/sysex nil
+
+ :midi/ports
+ {:din-in   true
+  :din-thru false
+  :din-out  true   ; MIDI OUT with merge: BeatBuddy + MIDI Maestro traffic merged here
+  :usb      true}  ; USB MIDI for BeatBuddy Manager software
+
+ :midi/cc
+
+ [;; --- Song / Folder Navigation ------------------------------------------
+  {:cc 0   :path [:bank-select-msb]   :range [0 127]  :cc-type :global
+   :note "Bank select MSB; combine with CC 32 (LSB) + PC for song selection"}
+  {:cc 32  :path [:bank-select-lsb]   :range [0 127]  :cc-type :global
+   :note "Bank select LSB; combine with CC 0 (MSB) + PC for song selection"}
+
+  ;; --- Playback Control --------------------------------------------------
+  {:cc 41  :path [:playback :start]   :range [0 127]
+   :note "Start / resume beat playback; value ignored"}
+  {:cc 42  :path [:playback :stop]    :range [0 127]
+   :note "Stop beat playback; value ignored"}
+  {:cc 43  :path [:playback :pause]   :range [0 127]
+   :note "Toggle pause"}
+
+  ;; --- Part / Transition Control -----------------------------------------
+  {:cc 102 :path [:part :change]      :range [0 127]
+   :note "BeatBuddy SENDS this when part changes (value = part number 0-based). Also RECEIVES to force part change. Aeros listens to this CC to sync song parts."}
+  {:cc 103 :path [:part :transition]  :range [0 127]
+   :note "Queues a transition fill before next part; fires at end of current loop"}
+  {:cc 104 :path [:part :fill]        :range [0 127]
+   :note "Triggers a one-shot fill without part change"}
+
+  ;; --- Intro / Outro -----------------------------------------------------
+  {:cc 100 :path [:song :intro]       :range [0 127]
+   :note "Trigger intro fill at song start"}
+  {:cc 101 :path [:song :outro]       :range [0 127]
+   :note "Trigger outro (ending) fill; stops after completion"}
+
+  ;; --- Tempo / Volume ----------------------------------------------------
+  {:cc 106 :path [:tempo :tap]        :range [0 127]
+   :note "Tap tempo input; sends repeated CC 106 to tap BPM"}
+  {:cc 107 :path [:tempo :value]      :range [40 300]
+   :note "Set BPM directly; value maps 0=40BPM … 127=300BPM (approximate)"}
+  {:cc 108 :path [:mixer :drum-volume]  :range [0 127]
+   :note "Main drum mix volume; 0=min 127=max"}
+  {:cc 109 :path [:mixer :accent]       :range [0 127]
+   :note "Accent hit velocity offset"}
+
+  ;; --- Navigation (folder/song browse) -----------------------------------
+  {:cc 110 :path [:nav :folder-up]    :range [0 127]}
+  {:cc 111 :path [:nav :folder-down]  :range [0 127]}
+  {:cc 112 :path [:nav :song-up]      :range [0 127]}
+  {:cc 113 :path [:nav :song-down]    :range [0 127]}
+
+  ;; --- Drum Kit ----------------------------------------------------------
+  {:cc 114 :path [:kit :select]       :range [0 127]
+   :note "Select active drum kit by index"}
+
+  ;; --- Half/Double Tempo -------------------------------------------------
+  {:cc 115 :path [:tempo :half]       :range [0 127]
+   :note "Engage half-time mode"}
+  {:cc 116 :path [:tempo :double]     :range [0 127]
+   :note "Engage double-time mode"}
+
+  ;; --- Looper control (when Aeros connected in ecosystem) ----------------
+  {:cc 117 :path [:looper :start-stop] :range [0 127]
+   :note "Forwarded to Aeros via MIDI merge; triggers Aeros record/play/overdub"}
+  {:cc 118 :path [:looper :undo]       :range [0 127]
+   :note "Forwarded to Aeros via merge"}
+
+  ;; --- Misc / Special ----------------------------------------------------
+  {:cc 119 :path [:midi :ignore-next]  :range [0 127]
+   :note "Causes BeatBuddy to ignore next footswitch input (for sync scenarios)"}]
+
+ :device/ecosystem
+ {:role    :hub
+  :chain   "MIDI Maestro OUT → BeatBuddy IN; BeatBuddy MIDI OUT (merge) → Aeros IN"
+  :cc-102-sync "BeatBuddy emits CC 102 (value = part#) on every part change; Aeros uses this to sync its song parts"
+  :clock-source "BeatBuddy is authoritative clock source in standard ecosystem config; Aeros slaves to BeatBuddy clock"}
+
+ :device/notes
+ {:midi-merge     "BeatBuddy MIDI OUT merges its own output with incoming MIDI IN traffic — enables daisy-chain without dedicated merge box"
+  :song-select    "Full song select requires 3-message sequence: CC 0 (MSB) → CC 32 (LSB) → PC; shorthand PC alone selects within current bank"
+  :cc-102         "CC 102 is bidirectional: BeatBuddy sends it, Aeros and cljseq can also send it to force part selection"
+  :midi-maestro   "MIDI Maestro has NO MIDI IN — it can only transmit. Chain topology is critical: MM OUT → BB IN → BB MIDI merge OUT → Aeros IN"}
+
+ :device/map-source    "Singular Sound BeatBuddy MIDI Settings & Specifications — singularsound.com"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

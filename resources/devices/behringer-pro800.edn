@@ -1,0 +1,302 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Behringer PRO-800 — cljseq device map
+;;
+;; Sources:
+;;   PRO-800 Quick Start Guide v1.4.6:
+;;     https://www.behringer.com (CDN: cdn.mediavalet.com/aunsw/musictribe)
+;;     QSG_BE_0718-ABF_PRO-800_WW.pdf
+;;   PRO-800 Preset Structure Document v1.0:
+;;     Preset-Structure-Document_BE_0718-ABF_PRO800.pdf
+;;   Firmware Release Notes v1.4.6:
+;;     Release-Notes_BE_0718-ABF_PRO-800_v1-4-6.pdf
+;; Confidence: High.
+;;
+;; Architecture overview:
+;;   - 8-voice analog synthesizer; inspired by Sequential Circuits Prophet-600
+;;   - 2 DCOs per voice (OSC A + B): Saw / Triangle / Square / Sync
+;;   - Classic 24dB/oct Curtis filter (VCF) + VCA
+;;   - PolyMod: VCF envelope → OSC A freq, OSC B → OSC A freq (classic P-5/P-600 trick)
+;;   - Single LFO: Tri / Square / Random / Sin / Noise / Saw; 6 target assignments
+;;   - Keyboard modes: Polyphonic (8-voice), Unison (all 8 on one note), Chord (stored shape)
+;;   - Arpeggiator: Off / Up / Down / UpDown / Up+Down / Random / Assign
+;;   - 400 presets: Banks A–D, 100 presets per bank
+;;
+;; 14-bit CC pairs:
+;;   Behringer uses a non-standard +38 offset for fine LSBs, not the usual +32.
+;;   Fine LSB CC = coarse CC + 38 (applies to CCs 10–27; coarse range maps to 48–65).
+;;   Additional fine pairs for CCs 28–31 at CCs 96–101 (offsets vary).
+;;   See :cc-lsb on each entry for the correct pairing.
+;;
+;; Stepped / switch parameters share CC numbers with the fine column in the document's
+;; 3-column format. Where ambiguity exists, parameters have been assigned to the
+;; interpretation consistent with their functional type (continuous vs. switched).
+;;
+;; Note on Prophet-600 compatibility:
+;;   The PRO-800 CC map was designed by Behringer; it does NOT match the original
+;;   Prophet-600 sparse MIDI implementation (which had no CC support). The PRO-800
+;;   MIDI CC implementation is far richer than the original.
+;;
+;; Stereo pair note:
+;;   See behringer-pro800-stereo-pair.edn for the virtual bitimbral device that
+;;   models two PRO-800 units panned hard L/R as a single addressable instrument.
+
+{:device/id           :behringer/pro800
+ :device/name         "Behringer PRO-800"
+ :device/manufacturer "Behringer / Music Tribe"
+ :device/type         :synthesizer
+ :device/voices       8
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1
+ :midi/poly-mode      :poly
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes
+ ;; -------------------------------------------------------------------------
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on true :note-off false}
+  :aftertouch {:channel-pressure true :poly-key-pressure false}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Pitch bend
+ ;; -------------------------------------------------------------------------
+ :midi/pitch-bend
+ {:default-semitones 12
+  :max-semitones     31
+  :bend-target-cc    63     ; CC 63: 0=Off 1=VCO 2=VCF
+  :bend-range-cc     42}    ; CC 42 coarse / CC 117 fine
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive true
+  :send    false
+  :uses    [:arpeggiator]}
+
+ ;; -------------------------------------------------------------------------
+ ;; Program change
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:receive     true
+  :send        true
+  :range       [0 99]       ; 100 presets per bank
+  :bank-select true
+  :bank-count  4            ; Banks A–D
+  :bank-msb    0            ; CC 0: A=0 B=1 C=2 D=3
+  :bank-lsb    32}          ; CC 32 (standard bank LSB)
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x32]   ; Music Tribe / Behringer
+  :product-id      [0x00 0x01]
+  :cpu-id          0x24
+  :purpose         [:patch-dump :patch-load :firmware-update]
+  :address-range   [0 399]            ; Bank*100 + Preset, encoded as 7-bit pairs
+  :cmd-write       0x78
+  :cmd-read        0x77
+  :note "Full preset dump via F0 00 20 32 00 01 24 00 <cmd> <addr_lo> <addr_hi> [data] F7"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Control Change map
+ ;;
+ ;; 14-bit continuous parameters: :cc-lsb gives the fine LSB CC.
+ ;; Stepped/switch parameters: :values lists the discrete steps.
+ ;; :bipolar true :center 64 on parameters with a center-off or neutral point.
+ ;;
+ ;; Fine LSB offset = +38 from coarse (PRO-800 specific; non-standard).
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+
+ [;; --- Standard ------------------------------------------------------------
+  {:cc 1   :path [:mod-wheel]              :range [0 127] :default 0   :cc-type :global}
+  {:cc 2   :path [:breath]                 :range [0 127] :default 0   :cc-type :global}
+  {:cc 3   :path [:master-tune]            :range [0 127] :default 64  :cc-type :global :bipolar true :center 64}
+  {:cc 7   :path [:volume]                 :range [0 127] :default 100 :cc-type :fixed}
+  {:cc 64  :path [:sustain]                :range [0 127] :default 0   :cc-type :global}
+  {:cc 120 :path [:channel-mode :all-sounds-off] :range [0 127] :cc-type :global}
+  {:cc 123 :path [:channel-mode :all-notes-off]  :range [0 127] :cc-type :global}
+
+  ;; --- OSC A ---------------------------------------------------------------
+  {:cc 10  :path [:osc-a :freq]            :range [0 127] :default 64  :cc-type :fixed :cc-lsb 48}
+  {:cc 11  :path [:osc-a :volume]          :range [0 127] :default 100 :cc-type :fixed :cc-lsb 49}
+  {:cc 12  :path [:osc-a :pw]              :range [0 127] :default 64  :cc-type :fixed :cc-lsb 50}
+
+  ;; OSC A waveform (switches; multiple can be on simultaneously)
+  {:cc 40  :path [:osc-a :waveform :saw]      :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]}
+  {:cc 41  :path [:osc-a :waveform :triangle] :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]}
+  {:cc 48  :path [:osc-a :waveform :square]   :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]
+   :note "CC 48 also acts as fine LSB for CC 10 (OSC A Freq) in 14-bit mode — context-dependent"}
+
+  ;; --- OSC B ---------------------------------------------------------------
+  {:cc 13  :path [:osc-b :freq]            :range [0 127] :default 64  :cc-type :fixed :cc-lsb 51}
+  {:cc 14  :path [:osc-b :volume]          :range [0 127] :default 100 :cc-type :fixed :cc-lsb 52}
+  {:cc 15  :path [:osc-b :pw]              :range [0 127] :default 64  :cc-type :fixed :cc-lsb 53}
+  {:cc 16  :path [:osc-b :fine]            :range [0 127] :default 64  :cc-type :fixed :cc-lsb 54
+   :bipolar true :center 64
+   :note "Fine detune of OSC B relative to OSC A; 64 = unison"}
+
+  ;; OSC B waveform switches + Sync
+  {:cc 49  :path [:osc-b :waveform :saw]      :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]}
+  {:cc 50  :path [:osc-b :waveform :triangle] :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]}
+  {:cc 51  :path [:osc-b :waveform :square]   :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]}
+  {:cc 52  :path [:osc-b :sync]               :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]
+   :note "Hard sync of OSC B to OSC A"}
+
+  ;; --- PolyMod (modulation from VCF env and OSC B to OSC A) ----------------
+  ;; PolyMod is the PRO-800's version of the Prophet-5's polyphonic modulation
+  {:cc 28  :path [:polymod :filter-env-amount] :range [0 127] :default 0 :cc-type :fixed :cc-lsb 98}
+  {:cc 29  :path [:polymod :osc-b-amount]      :range [0 127] :default 0 :cc-type :fixed :cc-lsb 99}
+  {:cc 53  :path [:polymod :freq-a]            :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]
+   :note "PolyMod destination: modulate OSC A frequency"}
+  {:cc 54  :path [:polymod :vcf]               :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]
+   :note "PolyMod destination: modulate VCF cutoff"}
+
+  ;; --- VCF (filter) --------------------------------------------------------
+  {:cc 17  :path [:filter :cutoff]         :range [0 127] :default 64  :cc-type :fixed :cc-lsb 55}
+  {:cc 18  :path [:filter :resonance]      :range [0 127] :default 0   :cc-type :fixed :cc-lsb 56}
+  {:cc 19  :path [:filter :env-amount]     :range [0 127] :default 64  :cc-type :fixed :cc-lsb 57
+   :bipolar true :center 64}
+  {:cc 58  :path [:filter :keyboard-mod]   :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 1 :label :half} {:value 2 :label :full}]}
+  {:cc 59  :path [:filter-eg :curve]       :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :linear} {:value 1 :label :exponential}]}
+  {:cc 60  :path [:filter-eg :time-mode]   :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :slow} {:value 1 :label :fast}]}
+
+  ;; VCF envelope
+  {:cc 23  :path [:filter-eg :attack]      :range [0 127] :default 0   :cc-type :fixed :cc-lsb 61}
+  {:cc 22  :path [:filter-eg :decay]       :range [0 127] :default 64  :cc-type :fixed :cc-lsb 60}
+  {:cc 21  :path [:filter-eg :sustain]     :range [0 127] :default 64  :cc-type :fixed :cc-lsb 59}
+  {:cc 20  :path [:filter-eg :release]     :range [0 127] :default 32  :cc-type :fixed :cc-lsb 58}
+
+  ;; VCF velocity / aftertouch
+  {:cc 104 :path [:filter :vel-sensitivity]   :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 111 :path [:filter :aftertouch-amount] :range [0 127] :default 0  :cc-type :fixed}
+
+  ;; --- VCA (amplifier) -----------------------------------------------------
+  {:cc 61  :path [:amp-eg :curve]          :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :linear} {:value 1 :label :exponential}]}
+  {:cc 69  :path [:amp-eg :time-mode]      :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :slow} {:value 1 :label :fast}]}
+
+  ;; VCA envelope
+  {:cc 27  :path [:amp-eg :attack]         :range [0 127] :default 0   :cc-type :fixed :cc-lsb 97}
+  {:cc 26  :path [:amp-eg :decay]          :range [0 127] :default 64  :cc-type :fixed :cc-lsb 96}
+  {:cc 25  :path [:amp-eg :sustain]        :range [0 127] :default 64  :cc-type :fixed :cc-lsb 63}
+  {:cc 24  :path [:amp-eg :release]        :range [0 127] :default 32  :cc-type :fixed :cc-lsb 62}
+
+  ;; VCA velocity / aftertouch
+  {:cc 103 :path [:amp :vel-sensitivity]     :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 110 :path [:amp :aftertouch-amount]   :range [0 127] :default 0  :cc-type :fixed}
+
+  ;; --- LFO -----------------------------------------------------------------
+  {:cc 30  :path [:lfo :freq]              :range [0 127] :default 32  :cc-type :fixed :cc-lsb 100}
+  {:cc 31  :path [:lfo :amount]            :range [0 127] :default 0   :cc-type :fixed :cc-lsb 101}
+  {:cc 55  :path [:lfo :shape]             :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :square}
+            {:value 1 :label :triangle}
+            {:value 2 :label :random}
+            {:value 3 :label :sine}
+            {:value 4 :label :noise}
+            {:value 5 :label :saw}]}
+  {:cc 56  :path [:lfo :speed-mode]        :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :low} {:value 64 :label :high}]}
+
+  ;; LFO target routing (CC 57 encodes as bitmask; also addressable as individual CCs below)
+  {:cc 57  :path [:lfo :targets-bitmask]   :range [0 127] :cc-type :fixed
+   :note "Bit 0=Mod, Bit 1=Filter, Bit 2=PW, Bit 3=A only, Bit 4=B only, Bit 5=A+B+VCA"}
+  {:cc 72  :path [:lfo :dest-freq]         :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]}
+  {:cc 73  :path [:lfo :dest-filter]       :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]}
+  {:cc 74  :path [:lfo :dest-pwm]          :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 64 :label :on}]}
+  {:cc 112 :path [:lfo :aftertouch-amount] :range [0 127] :default 0  :cc-type :fixed}
+
+  ;; --- Modwheel and vibrato -----------------------------------------------
+  {:cc 65  :path [:mod-wheel :range]       :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :min} {:value 1 :label :low} {:value 2 :label :high} {:value 3 :label :full}]}
+  {:cc 68  :path [:mod-wheel :target]      :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :lfo} {:value 1 :label :vibrato}]}
+  {:cc 106 :path [:vibrato :freq]          :range [0 127] :default 64 :cc-type :fixed}
+  {:cc 107 :path [:vibrato :amount]        :range [0 127] :default 0  :cc-type :fixed}
+  {:cc 105 :path [:vibrato :delay]         :range [0 127] :default 0  :cc-type :fixed
+   :note "Delay before vibrato onset after key press"}
+
+  ;; --- Glide (portamento) --------------------------------------------------
+  {:cc 102 :path [:glide :rate]            :range [0 127] :default 0  :cc-type :fixed}
+  {:cc 79  :path [:glide :mode]            :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :time} {:value 1 :label :speed}]
+   :note "Time = fixed duration; Speed = fixed rate (constant pitch-change rate)"}
+
+  ;; --- Unison mode ---------------------------------------------------------
+  {:cc 62  :path [:unison :on]             :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 108 :path [:unison :detune]         :range [0 127] :default 0  :cc-type :fixed
+   :note "Voice detuning amount in Unison mode; 0 = unison, higher = wider spread"}
+
+  ;; --- Noise ---------------------------------------------------------------
+  {:cc 109 :path [:noise :level]           :range [0 127] :default 0  :cc-type :fixed}
+
+  ;; --- Pitch bend ----------------------------------------------------------
+  {:cc 42  :path [:pitch-bend :range]      :range [0 127] :default 64 :cc-type :fixed :cc-lsb 117
+   :note "0–31 semitones; value divided by 2^11 internally; default ≈ 12 semitones"}
+  {:cc 63  :path [:pitch-bend :target]     :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 1 :label :vco} {:value 2 :label :vcf}]}
+
+  ;; --- Arpeggiator ---------------------------------------------------------
+  {:cc 70  :path [:arpeggiator :mode]      :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off}
+            {:value 1 :label :up}
+            {:value 2 :label :down}
+            {:value 3 :label :up-down}
+            {:value 4 :label :up+down}
+            {:value 5 :label :random}
+            {:value 6 :label :assign}]}
+
+  ;; --- OSC A chromatic pitch mode ------------------------------------------
+  {:cc 66  :path [:osc-a :pitch-mode]      :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :free} {:value 1 :label :semi} {:value 2 :label :oct} {:value 3 :label :fixed}]}
+  {:cc 67  :path [:osc-b :pitch-mode]      :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :free} {:value 1 :label :semi} {:value 2 :label :oct} {:value 3 :label :fixed}]}
+
+  ;; --- Voice spread and keyboard tracking (firmware v1.3.7+) --------------
+  {:cc 77  :path [:voice-spread :on]       :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :off} {:value 1 :label :on}]
+   :note "Distributes voices across stereo image; added firmware v1.3.7"}
+  {:cc 78  :path [:keyboard-tracking :ref-note] :range [0 127] :cc-type :fixed
+   :values [{:value 0 :label :c1} {:value 1 :label :c2} {:value 2 :label :c3} {:value 3 :label :c4}]
+   :note "Added firmware v1.3.7"}]
+
+ ;; -------------------------------------------------------------------------
+ ;; NRPN
+ ;; NRPN mechanism is supported (via CC 99/98/6/38) but no published
+ ;; NRPN-to-parameter table exists in the official documents. NRPN appears
+ ;; to be the carrier for SysEx-addressable preset parameters.
+ ;; -------------------------------------------------------------------------
+ :midi/nrpn []
+
+ ;; -------------------------------------------------------------------------
+ ;; Metadata
+ ;; -------------------------------------------------------------------------
+ :device/firmware-version "1.4.6"
+ :device/map-source       "Behringer PRO-800 Quick Start Guide v1.4.6 + Preset Structure Document v1.0 — behringer.com CDN"
+ :device/map-version      "2026-04-05"}

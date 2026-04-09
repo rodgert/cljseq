@@ -1,0 +1,129 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Intellijel Cascadia — cljseq device map
+;;
+;; Semi-modular synthesizer with full MPE support, two learnable CC jacks,
+;; and 58 Eurorack-compatible patchbay jacks. No NRPNs, no program change,
+;; no SysEx. Configured via USB + Cascadia Config App (desktop/web).
+;;
+;; MPE configuration:
+;;   Lower Zone (default): master ch 1, members ch 2-16
+;;   Upper Zone: master ch 16, members ch 1-15
+;;   X (pitch bend): ±48 semitones default (MPE+ style wide range)
+;;   Y (timbre): CC 74 per-note
+;;   Z (pressure): channel pressure per-note
+;;
+;; Fixed CCs:
+;;   CC 5  = Portamento Time (global)
+;;   CC 65 = Portamento On/Off (global; ≥64 = on)
+;;
+;; Learnable CC jacks:
+;;   MIDI CC jack: listens for any CC; default = CC 2 (breath)
+;;   MIDI MOD jack: listens for any CC; default = CC 1 (mod wheel)
+;;   Assignment via Cascadia Config App or MIDI learn on device
+;;
+;; Source: Intellijel Cascadia User Manual + MIDI Implementation — intellijel.com
+;; Confidence: High (fixed CC + MPE spec from official manual; learnable CCs confirmed)
+
+{:device/id           :intellijel/cascadia
+ :device/name         "Intellijel Cascadia"
+ :device/manufacturer "Intellijel"
+ :device/type         :semi-modular
+ :device/voices       1             ; monophonic (1 voice); MPE = per-note expression on single voice
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; MIDI channel: configurable; default = 1 (single-channel) or MPE zone master
+ :midi/channel        1
+
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on true :note-off false}
+  :aftertouch {:channel-pressure true :poly-key-pressure false}}
+
+ :midi/pitch-bend
+ {:receive           true
+  :mpe-range         48     ; ±48 semitones in MPE mode (MPE+ default)
+  :non-mpe-range     2      ; ±2 semitones in standard mode
+  :configurable      true
+  :configure-via     :config-app}
+
+ :midi/clock  {:receive false :send false}
+
+ :midi/program-change {:receive false :send false}
+
+ :midi/sysex  nil   ; no SysEx — all configuration via USB + Cascadia Config App
+
+ :midi/ports
+ {:din-in   true
+  :din-thru false
+  :din-out  false
+  :usb      true}   ; class-compliant; config app uses USB
+
+ ;; MPE
+ :midi/mpe
+ {:supported    true
+  :mpe-version  :mpe-plus     ; MPE+ extended pitch-bend range
+  :zones
+  {:lower {:master-channel 1  :member-channels [2 3 4 5 6 7 8 9 10 11 12 13 14 15 16]
+           :note "Default MPE configuration"}
+   :upper {:master-channel 16 :member-channels [1 2 3 4 5 6 7 8 9 10 11 12 13 14 15]}}
+  :dimensions
+  {:x {:name :pitch-bend     :cc :pitch-bend  :range-semitones 48 :note "Per-note pitch deviation ±48st default"}
+   :y {:name :timbre         :cc 74           :range [0 127]      :note "Per-note timbre/brightness (CC 74 = filter cutoff convention)"}
+   :z {:name :pressure       :cc :channel-pressure :range [0 127] :note "Per-note pressure → channel pressure on member channel"}}
+  :configure-via :config-app}
+
+ ;; FIXED CCs (received regardless of MPE mode)
+ :midi/cc
+ [{:cc 5   :path [:portamento :time]    :range [0 127]  :cc-type :global
+   :note "Portamento / glide time; 0=fastest 127=slowest"}
+  {:cc 65  :path [:portamento :on-off]  :range [0 1]    :cc-type :global
+   :values [{:value 0 :label :off} {:value 1 :label :on}]
+   :note "0-63=off, 64-127=on"}
+
+  ;; --- Learnable CC jacks (defaults; reassignable via Config App or MIDI learn) ---
+  {:cc 2   :path [:midi-cc-jack]        :range [0 127]
+   :note "MIDI CC jack default = CC 2 (breath controller); reassignable to any CC 0-127 via Config App"}
+  {:cc 1   :path [:midi-mod-jack]       :range [0 127]
+   :note "MIDI MOD jack default = CC 1 (mod wheel); reassignable to any CC 0-127 via Config App"}]
+
+ ;; NRPNs — none
+ :midi/nrpn []
+
+ ;; CV OUTPUTS
+ :device/cv-outputs
+ {:pitch-cv     {:signal :1v-oct  :jack "3.5mm" :note "1V/oct from MIDI note / MPE pitch"}
+  :gate         {:signal :gate    :jack "3.5mm" :voltage "+5V"  :note "MIDI Note On → gate"}
+  :velocity-cv  {:signal :cv      :jack "3.5mm" :note "Note velocity → CV"}
+  :pressure-cv  {:signal :cv      :jack "3.5mm" :note "Channel pressure (MPE Z) → CV; 0-5V"}
+  :timbre-cv    {:signal :cv      :jack "3.5mm" :note "MPE Y (CC 74) → CV; useful for filter sweep"}
+  :pitch-bend-cv {:signal :cv     :jack "3.5mm" :note "Pitch bend → CV; tracks MPE X dimension"}
+  :mod-cc-cv    {:signal :cv      :jack "3.5mm" :note "MIDI MOD jack CC → CV (default CC 1)"}
+  :breath-cc-cv {:signal :cv      :jack "3.5mm" :note "MIDI CC jack CC → CV (default CC 2)"}
+  :lfo-out      {:signal :lfo     :jack "3.5mm" :note "Internal LFO CV output"}
+  :env-1        {:signal :env     :jack "3.5mm" :note "Envelope 1 output"}
+  :env-2        {:signal :env     :jack "3.5mm" :note "Envelope 2 output"}}
+
+ ;; PATCHBAY
+ :device/patchbay
+ {:jacks  58
+  :format "Eurorack-compatible 3.5mm TS"
+  :note   "Full semi-modular patchbay; all internal signal paths normalled but patchable"}
+
+ ;; VOICES / MODES
+ :device/modes
+ {:mono         {:note "Default: single voice, last/low/high priority configurable"}
+  :mpe          {:note "MPE mode: per-note pitch, timbre, pressure; each note on separate channel"}}
+
+ :device/notes
+ {:mpe-use       "Primary expressive cljseq use: MPE pitch bend for microtonal playing via LinnStrument or Hydrasynth; Y→filter, Z→VCA"
+  :learnable-cc  "MIDI CC and MIDI MOD jack assignments survive power cycle; configure once via Config App or MIDI learn"
+  :no-nrpn       "No NRPNs — Cascadia uses CV patching rather than MIDI parameter control for synthesis routing"
+  :no-sysex      "No SysEx; Cascadia Config App communicates over USB MIDI using a proprietary protocol"
+  :arp-2600-note "Cascadia is a spiritual successor to the ARP 2600 in Intellijel's design philosophy — both have patch-programmable signal flow"
+  :config-app    "Cascadia Config App (desktop + web) sets: MPE zone, pitch bend range, CC jack assignments, MIDI channel, voice priority"}
+
+ :device/map-source    "Intellijel Cascadia User Manual + MIDI Implementation — intellijel.com"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

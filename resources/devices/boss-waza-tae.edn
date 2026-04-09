@@ -1,0 +1,86 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Boss WAZA-TAE (Tube Amp Expander) — cljseq device map
+;;
+;; Power attenuator + cabinet simulation + reactive load + MIDI control.
+;; Captures speaker cab response and redirects to XLR + headphones outputs.
+;; 10 RIG memories. MIDI controls 7 on/off parameters via assignable CCs.
+;;
+;; CC RESTRICTION: Only CC#1-31 and CC#64-95 are accepted. CC#32-63 and
+;; CC#96-127 are NOT received. Values 0-63 = off; 64-127 = on (binary only).
+;; No continuous MIDI control — all MIDI-controllable parameters are on/off.
+;;
+;; Source: Boss WAZA-TAE Owner's Manual — boss.info
+;; Confidence: High (CC range restriction + 7-slot assign system from official manual)
+
+{:device/id           :boss/waza-tae
+ :device/name         "Boss WAZA Tube Amp Expander"
+ :device/aliases      ["Boss WAZA-TAE" "Boss TAE"]
+ :device/manufacturer "Boss"
+ :device/type         :power-attenuator
+ :device/role         :target
+ :device/connectivity [:din-midi]
+
+ :midi/channel        1    ; configurable 1-16; factory default = 1
+
+ :midi/program-change
+ {:receive true
+  :send    false
+  :range   [1 10]
+  :note    "PC 1-10 selects RIG 1-10"}
+
+ :midi/clock  {:receive false :send false}
+ :midi/sysex  nil
+
+ :midi/ports
+ {:din-in   true
+  :din-thru false
+  :din-out  false
+  :usb      false}
+
+ ;; No fixed CC map — 7 user-assignable on/off slots
+ :midi/cc-architecture :assign-system
+
+ ;; ASSIGN SYSTEM
+ ;; 7 slots; each maps one incoming CC to one on/off target parameter.
+ ;; CC restriction: only CC#1-31 and CC#64-95 are received (CC#32-63 / CC#96-127 ignored).
+ ;; Value threshold: 0-63 = off/disable, 64-127 = on/enable (no continuous control).
+ :waza-tae/assign-system
+ {:slots          7
+  :cc-range       [[1 31] [64 95]]    ; CC#32-63 and CC#96-127 NOT received
+  :value-map      {:off [0 63] :on [64 127]}
+  :target-parameters
+  [{:id :power-soak        :note "Power reduction stage on/off"}
+   {:id :line-out          :note "LINE OUT (DI) send on/off"}
+   {:id :phones-out        :note "Headphone output on/off"}
+   {:id :air-feel          :note "Speaker air simulation on/off"}
+   {:id :resonance         :note "Low-end resonance enhancement on/off"}
+   {:id :presence          :note "High-frequency presence enhancement on/off"}
+   {:id :tone-modify       :note "Tone Modify circuit (tone shaping) on/off"}]}
+
+ ;; RIG MEMORIES
+ :waza-tae/rigs
+ {:count    10
+  :select-via [:program-change :front-panel]
+  :note     "Each RIG stores: attenuation level, EQ settings, cab sim settings, assign config"}
+
+ ;; PHYSICAL — signal chain
+ :waza-tae/signal-chain
+ {:amp-input      "Speaker output from tube amp (8Ω or 16Ω)"
+  :speaker-output "Thru to real speaker cabinet (passthrough)"
+  :xlr-out        "XLR balanced line output → console/interface/DAW"
+  :phones-out     "1/4\" stereo headphone output with cab simulation"
+  :reactive-load  true
+  :cab-sim        true
+  :power-rating   "Up to 150W"}
+
+ :device/notes
+ {:cc-range-restriction "Only CC#1-31 and CC#64-95 received; CC#32-63 and CC#96-127 are silently ignored"
+  :binary-only          "All MIDI-controllable parameters are on/off only; no continuous MIDI control"
+  :no-sysex             "No SysEx implementation; no parameter dump/restore"
+  :analog-controls      "Attenuation level knob (0dB/-3/-6/-10/-20/-30/-40dB) is hardware-only; not MIDI controllable"
+  :with-es8             "In ES-8 loop: ES-8 bypass = amp direct to cabinet; WAZA-TAE MIDI = parameter control. Assign CCs must be in the allowed CC#1-31/CC#64-95 ranges."}
+
+ :device/map-source    "Boss WAZA-TAE Owner's Manual — boss.info"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

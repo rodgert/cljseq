@@ -1,0 +1,153 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Two Notes Torpedo Captor X — cljseq device map
+;;
+;; Reactive load box + cabinet IR simulation + MIDI control.
+;; In the studio: DeLisle attenuator loop → Captor X → line level mix.
+;; MIDI via 1/8" TRS jack (Type A wiring; supplied TRS→DIN adapter).
+;; No SysEx; no MIDI Thru port. Channel 1-16 or Omni (default unspecified).
+;;
+;; Source: Two Notes Torpedo Captor X User Manual — wiki.two-notes.com
+;; Confidence: High (full CC table extracted from official wiki manual)
+;;
+;; Key quirks:
+;;   - Attenuation level switch (Full / -20dB / -38dB) is hardware-only, NOT MIDI
+;;   - Cabinet selection CC 8 and IR File CC 9/10 have open-ended ranges (depends on
+;;     how many IRs are loaded — up to 32 factory Virtual Cabinets)
+;;   - EQ frequency CCs 45-50, 80-85 use non-linear Hz mapping (not enumerated in manual)
+;;   - CC 64 = Enhancer Thickness (confirmed from wiki HTML; PDF OCR artifact shows 44)
+;;   - Dual-channel (A+B): each mic channel fully independently addressable
+
+{:device/id           :two-notes/torpedo-captor-x
+ :device/name         "Two Notes Torpedo Captor X"
+ :device/manufacturer "Two Notes Audio Engineering"
+ :device/type         :load-box
+ :device/role         :target
+ :device/connectivity [:trs-midi]  ; 1/8" TRS Type A; supplied TRS→DIN adapter
+
+ :midi/channel        :omni         ; configurable 1-16 or Omni; no documented factory default
+ :midi/program-change
+ {:receive true
+  :send    false
+  :range   [1 128]}    ; 128 presets; PC 1 = Preset 1
+
+ :midi/sysex nil       ; not implemented / not documented
+
+ :midi/cc
+
+ [;; --- Mode -----------------------------------------------------------
+  {:cc 34  :path [:mode]              :range [0 2]
+   :values [{:value 0 :label :simulation} {:value 1 :label :simulation} {:value 2 :label :ir-loader}]}
+
+  ;; --- Cabinet / Mic A -------------------------------------------------
+  {:cc 6   :path [:cab-mic :on]       :range [0 1]   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 7   :path [:unused]            :range [0 1]   :note "Unused parameter — documented as such in official manual"}
+  {:cc 8   :path [:cab :selection]    :range [0 127] :note "0=Cab #0, 1=Cab #1 … max depends on loaded IRs (up to 32 factory Virtual Cabs)"}
+  {:cc 9   :path [:ir :file-a]        :range [0 127] :note "0=File #0 … max depends on loaded IRs"}
+  {:cc 10  :path [:ir :file-b]        :range [0 127] :note "0=File #0 … max depends on loaded IRs"}
+  {:cc 11  :path [:ir :folder-a]      :range [0 3]   :values [{:value 0 :label :user-0} {:value 1 :label :user-1} {:value 2 :label :user-2} {:value 3 :label :user-3}]}
+  {:cc 12  :path [:ir :folder-b]      :range [0 3]   :values [{:value 0 :label :user-0} {:value 1 :label :user-1} {:value 2 :label :user-2} {:value 3 :label :user-3}]}
+  {:cc 13  :path [:mic-a :selection]  :range [0 7]   :note "0=Mic #1 … 7=Mic #8"}
+  {:cc 14  :path [:mic-a :distance]   :range [0 127] :note "0=0% 63=50% 127=100%"}
+  {:cc 15  :path [:mic-a :center]     :range [0 127] :note "0=0% 63=50% 127=100%"}
+  {:cc 16  :path [:mic-a :position]   :range [0 1]   :values [{:value 0 :label :back} {:value 1 :label :front}]}
+  {:cc 35  :path [:mic-a :level]      :range [0 107] :note "0=-95dB 95=0dB 107=+12dB"}
+  {:cc 36  :path [:mic-a :phase]      :range [0 1]   :values [{:value 0 :label :normal} {:value 1 :label :invert}]}
+  {:cc 37  :path [:mic-a :mute]       :range [0 1]   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 51  :path [:mic-a :bypass]     :range [0 1]   :values [{:value 0 :label :mic-on} {:value 1 :label :bypassed}]}
+
+  ;; --- Mic B -----------------------------------------------------------
+  {:cc 38  :path [:mic-b :selection]  :range [0 7]   :note "0=Mic #1 … 7=Mic #8"}
+  {:cc 39  :path [:mic-b :distance]   :range [0 127] :note "0=0% 63=50% 127=100%"}
+  {:cc 40  :path [:mic-b :center]     :range [0 127] :note "0=0% 63=50% 127=100%"}
+  {:cc 41  :path [:mic-b :position]   :range [0 1]   :values [{:value 0 :label :back} {:value 1 :label :front}]}
+  {:cc 42  :path [:mic-b :level]      :range [0 107] :note "0=-95dB 95=0dB 107=+12dB"}
+  {:cc 43  :path [:mic-b :phase]      :range [0 1]   :values [{:value 0 :label :normal} {:value 1 :label :invert}]}
+  {:cc 44  :path [:mic-b :mute]       :range [0 1]   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 52  :path [:mic-b :bypass]     :range [0 1]   :values [{:value 0 :label :mic-on} {:value 1 :label :bypassed}]}
+
+  ;; --- EQ (left / main channel) ----------------------------------------
+  {:cc 17  :path [:eq :on]            :range [0 1]   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 18  :path [:eq :mode]          :range [0 2]   :values [{:value 0 :label :guitar} {:value 1 :label :bass} {:value 2 :label :custom}]}
+  {:cc 19  :path [:eq :gain-low]      :range [0 40]  :note "0=-20dB 20=0dB 40=+20dB"}
+  {:cc 20  :path [:eq :gain-low-mid]  :range [0 40]  :note "0=-20dB 20=0dB 40=+20dB"}
+  {:cc 21  :path [:eq :gain-mid]      :range [0 40]  :note "0=-20dB 20=0dB 40=+20dB"}
+  {:cc 22  :path [:eq :gain-high-mid] :range [0 40]  :note "0=-20dB 20=0dB 40=+20dB"}
+  {:cc 23  :path [:eq :gain-high]     :range [0 40]  :note "0=-20dB 20=0dB 40=+20dB"}
+  {:cc 45  :path [:eq :freq-low-cut]  :range [0 127] :note "Non-linear Hz mapping (not enumerated in manual)"}
+  {:cc 46  :path [:eq :freq-low]      :range [0 127] :note "Non-linear Hz mapping"}
+  {:cc 47  :path [:eq :freq-low-mid]  :range [0 127] :note "Non-linear Hz mapping"}
+  {:cc 48  :path [:eq :freq-mid]      :range [0 127] :note "Non-linear Hz mapping"}
+  {:cc 49  :path [:eq :freq-high-mid] :range [0 127] :note "Non-linear Hz mapping"}
+  {:cc 50  :path [:eq :freq-high]     :range [0 127] :note "Non-linear Hz mapping"}
+
+  ;; --- Output Level ----------------------------------------------------
+  {:cc 24  :path [:output :level]     :range [0 107] :note "Main output level; 0=-95dB 95=0dB 107=+12dB"}
+  {:cc 86  :path [:output :preset-level-r] :range [0 107] :note "Right-channel preset level (Dual Mono routing only)"}
+  {:cc 87  :path [:output :out-level]  :range [0 107]}
+
+  ;; --- Reverb ----------------------------------------------------------
+  {:cc 25  :path [:reverb :on]        :range [0 1]   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 26  :path [:reverb :preset]    :range [0 7]   :note "0=Room #0 … 7=Room #7"}
+  {:cc 27  :path [:reverb :dry-wet]   :range [0 127] :note "0=0% 63=50% 127=100%"}
+  {:cc 53  :path [:reverb :size]      :range [0 127]}
+  {:cc 54  :path [:reverb :echo]      :range [0 127]}
+  {:cc 55  :path [:reverb :color]     :range [0 127]}
+  {:cc 56  :path [:reverb :type]      :range [0 1]   :values [{:value 0 :label :room} {:value 1 :label :ambience}]}
+  {:cc 57  :path [:reverb :width]     :range [0 127]}
+  {:cc 72  :path [:reverb :dry-wet-r] :range [0 127] :note "Right-channel dry/wet (Dual Mono only)"}
+
+  ;; --- Noise Gate ------------------------------------------------------
+  {:cc 58  :path [:noise-gate :on]        :range [0 1]  :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 59  :path [:noise-gate :mode]      :range [0 1]  :values [{:value 0 :label :soft} {:value 1 :label :hard}]}
+  {:cc 60  :path [:noise-gate :threshold] :range [0 80] :note "0=-80dB 80=0dB"}
+
+  ;; --- Enhancer --------------------------------------------------------
+  {:cc 61  :path [:enhancer :on]          :range [0 1]   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 62  :path [:enhancer :instrument]  :range [0 1]   :values [{:value 0 :label :guitar} {:value 1 :label :bass}]}
+  {:cc 63  :path [:enhancer :body]        :range [0 127] :note "Compressor+HPF; 0=0% 63=50% 127=100%"}
+  {:cc 64  :path [:enhancer :thickness]   :range [0 127] :note "Shelving boost 0–+15dB; confirmed CC 64 (PDF OCR erroneously shows 44)"}
+  {:cc 65  :path [:enhancer :brilliance]  :range [0 127]}
+  {:cc 66  :path [:enhancer :dry-wet]     :range [0 127]}
+
+  ;; --- Twin Tracker (stereo only) -------------------------------------
+  {:cc 67  :path [:twin-tracker :on]       :range [0 1]   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 68  :path [:twin-tracker :tightness] :range [0 127] :note "Delay 0–70ms when on; forces reverb width to 100%"}
+  {:cc 69  :path [:twin-tracker :balance]  :range [0 127]}
+
+  ;; --- Output / Routing -----------------------------------------------
+  {:cc 70  :path [:output :mode]      :range [0 2]
+   :values [{:value 0 :label :stereo} {:value 1 :label :dual-mono} {:value 2 :label :dual-mono-r-bypass}]}
+  {:cc 71  :path [:output :space-assign] :range [0 2]
+   :note "Context-dependent: Stereo: 0=Stereo Expander/1=Dry-Wet; Dual Mono: 0=Dry-Wet/1=Dry-Wet-L/2=Dry-Wet-R"}
+
+  ;; --- EQ Right (Dual Mono mode only) ---------------------------------
+  {:cc 73  :path [:eq-r :on]            :range [0 1]   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 74  :path [:eq-r :mode]          :range [0 2]   :values [{:value 0 :label :guitar} {:value 1 :label :bass} {:value 2 :label :custom}]}
+  {:cc 75  :path [:eq-r :gain-low]      :range [0 40]  :note "0=-20dB 20=0dB 40=+20dB"}
+  {:cc 76  :path [:eq-r :gain-low-mid]  :range [0 40]}
+  {:cc 77  :path [:eq-r :gain-mid]      :range [0 40]}
+  {:cc 78  :path [:eq-r :gain-high-mid] :range [0 40]}
+  {:cc 79  :path [:eq-r :gain-high]     :range [0 40]}
+  {:cc 80  :path [:eq-r :freq-low-cut]  :range [0 127] :note "Non-linear Hz mapping"}
+  {:cc 81  :path [:eq-r :freq-low]      :range [0 127] :note "Non-linear Hz mapping"}
+  {:cc 82  :path [:eq-r :freq-low-mid]  :range [0 127] :note "Non-linear Hz mapping"}
+  {:cc 83  :path [:eq-r :freq-mid]      :range [0 127] :note "Non-linear Hz mapping"}
+  {:cc 84  :path [:eq-r :freq-high-mid] :range [0 127] :note "Non-linear Hz mapping"}
+  {:cc 85  :path [:eq-r :freq-high]     :range [0 127] :note "Non-linear Hz mapping"}
+
+  ;; --- General controls -----------------------------------------------
+  {:cc 88  :path [:mute]              :range [0 1]   :values [{:value 0 :label :off} {:value 1 :label :on}]}
+  {:cc 89  :path [:bypass]            :range [0 1]   :values [{:value 0 :label :bypassed} {:value 1 :label :on}]}
+  {:cc 90  :path [:preset-select]     :range [0 127] :note "0=Preset #1 … 127=Preset #128; same as Program Change"}
+  {:cc 91  :path [:voicing]           :range [0 127]}
+  {:cc 92  :path [:space]             :range [0 127] :note "Assignment context-dependent per CC 71 (Space Pot Assign)"}]
+
+ :device/notes
+ {:attenuation "Hardware-only 3-position switch (Full / -20dB / -38dB) — NOT MIDI controllable"
+  :midi-input  "1/8\" TRS Type A (Tip=pin 5, Ring=pin 4, Sleeve=pin 2); use supplied TRS→DIN adapter"
+  :no-thru     "Single TRS MIDI input only — no MIDI Thru port"}
+
+ :device/map-source    "Two Notes Torpedo Captor X User Manual — wiki.two-notes.com"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

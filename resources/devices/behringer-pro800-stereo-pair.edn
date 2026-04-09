@@ -1,0 +1,183 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Behringer PRO-800 Stereo Pair — cljseq virtual device sketch
+;;
+;; SKETCH / DESIGN DOCUMENT — not a standard single-device EDN.
+;; This file explores the vocabulary needed to model two PRO-800 units
+;; panned hard L/R as a single virtual bitimbral instrument.
+;;
+;; -------------------------------------------------------------------------
+;; Physical setup:
+;;   - Unit L: MIDI ch 1, audio out → mixer channel L, panned hard left
+;;   - Unit R: MIDI ch 2, audio out → mixer channel R, panned hard right
+;;   - Both triggered in parallel for polyphonic/unison, or independently
+;;     for true bitimbral use
+;;
+;; What this gives us:
+;;   - 16 voices total (8 per side)
+;;   - Effective bitimbralism: different patches per side
+;;   - Per-side filter, envelope, and LFO control
+;;   - Inherent stereo without explicit panning CCs
+;;   - Voice Spread (CC 77) within each unit adds additional width per side
+;;
+;; -------------------------------------------------------------------------
+;; New vocabulary this sketch requires:
+;;
+;;   :device/type :virtual-stereo-pair
+;;     — not a physical synth, but a composition of two devices
+;;
+;;   :device/members
+;;     — ordered list of member device references with per-member overrides
+;;
+;;   :midi-routing :left | :right | :both | :alternate
+;;     — on each CC entry: which member(s) this CC targets by default
+;;     — :both  = send same value to both units (unison, macro-style control)
+;;     — :left  = send only to Unit L
+;;     — :right = send only to Unit R
+;;     — :alternate = interleave across units (round-robin for pattern steps)
+;;
+;;   New behavioral modes needed in cljseq:
+;;     1. :same-patch  — send same Program Change to both sides
+;;     2. :split-patch — send independent Program Changes (true bitimbral)
+;;     3. :unison-wide — same notes, same patch, diverge filter/detune slightly
+;;     4. :canon       — same patch, slightly delayed trigger on unit R
+;;
+;; -------------------------------------------------------------------------
+
+{:device/id   :behringer/pro800-stereo-pair
+ :device/name "Behringer PRO-800 Stereo Pair"
+ :device/manufacturer "Behringer / Music Tribe"
+ :device/type :virtual-stereo-pair        ; new device type (not yet implemented in cljseq)
+ :device/voices 16                         ; 8 per side
+ :device/role :target
+
+ ;; Member devices — each references a base device and adds per-unit overrides
+ :device/members
+ [{:member/id       :left
+   :member/device   :behringer/pro800      ; references single-unit EDN
+   :midi/channel    1
+   :member/label    "PRO-800 L"
+   :member/pan      -1.0}                  ; conceptual pan position (-1=full left)
+
+  {:member/id       :right
+   :member/device   :behringer/pro800
+   :midi/channel    2
+   :member/label    "PRO-800 R"
+   :member/pan      1.0}]                  ; conceptual pan position (+1=full right)
+
+ ;; -------------------------------------------------------------------------
+ ;; Default note routing
+ ;; Both units play in parallel by default (unison stereo wall).
+ ;; Override with :midi-routing per use case.
+ ;; -------------------------------------------------------------------------
+ :midi/note-routing :both
+
+ ;; -------------------------------------------------------------------------
+ ;; Composite CC map
+ ;;
+ ;; These entries describe the *virtual* CC surface of the pair.
+ ;; :midi-routing specifies which member(s) receive the message.
+ ;; Per-member overrides can specify different values per side.
+ ;;
+ ;; This is a DESIGN SKETCH — not all entries are needed immediately.
+ ;; Priority: volume, filter, patch, unison-detune.
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+
+ [;; --- Volume (balance mix between sides) ----------------------------------
+  ;; These route to individual units; adjust for relative level balance
+  {:cc 7   :path [:volume]         :range [0 127] :midi-routing :both
+   :note "Sends CC 7 to both units; to balance, use per-member volume overrides"}
+
+  ;; --- Filter (macro: same value both sides) --------------------------------
+  ;; The most useful real-time macro: open/close both filters together
+  {:cc 17  :path [:filter :cutoff]     :range [0 127] :midi-routing :both}
+  {:cc 18  :path [:filter :resonance]  :range [0 127] :midi-routing :both}
+  {:cc 19  :path [:filter :env-amount] :range [0 127] :midi-routing :both}
+
+  ;; VCF envelope (macro)
+  {:cc 23  :path [:filter-eg :attack]  :range [0 127] :midi-routing :both}
+  {:cc 22  :path [:filter-eg :decay]   :range [0 127] :midi-routing :both}
+  {:cc 21  :path [:filter-eg :sustain] :range [0 127] :midi-routing :both}
+  {:cc 20  :path [:filter-eg :release] :range [0 127] :midi-routing :both}
+
+  ;; --- Unison detune (stereo width control) --------------------------------
+  ;; Key technique: both units in Unison mode, detune diverges across stereo field
+  {:cc 108 :path [:unison :detune]     :range [0 127] :midi-routing :both
+   :note "With both units in Unison mode + Voice Spread, this creates huge stereo width"}
+
+  ;; --- LFO (macro or divergent) --------------------------------------------
+  {:cc 30  :path [:lfo :freq]          :range [0 127] :midi-routing :both}
+  {:cc 31  :path [:lfo :amount]        :range [0 127] :midi-routing :both}]
+
+ ;; -------------------------------------------------------------------------
+ ;; Performance modes (design vocabulary — not yet implemented)
+ ;;
+ ;; These are named configurations of the stereo pair. Each describes a
+ ;; cljseq setup call pattern that configures both units to achieve a
+ ;; particular sonic result.
+ ;; -------------------------------------------------------------------------
+ :performance/modes
+
+ {:unison-wide
+  {:description "Both units, same patch, Voice Spread + Unison Detune diverged — massive wall"
+   :setup [(set-member! :both :program-change <same-patch>)
+           (send-cc! :both 62 1)          ; Unison on both
+           (send-cc! :both 77 1)          ; Voice Spread on both
+           (send-cc! :left 108 30)        ; Detune L slightly less
+           (send-cc! :right 108 50)]}     ; Detune R slightly more — L/R asymmetry
+
+  :bitimbral
+  {:description "Different patch each side — effective two-part polyphony"
+   :setup [(set-member! :left :program-change <patch-a>)
+           (set-member! :right :program-change <patch-b>)
+           (send-cc! :both 62 0)]}        ; Unison off (polyphonic per side)
+
+  :spectral-split
+  {:description "Same patch, filter diverged — high-freq left, low-freq right (or vice versa)"
+   :setup [(set-member! :both :program-change <same-patch>)
+           (send-cc! :left 17 100)        ; L filter open
+           (send-cc! :right 17 40)]}      ; R filter closed → low-pass only
+
+  :canon
+  {:description "Same patch, Unit R triggers after Unit L — echo/canon effect"
+   :setup [(set-member! :both :program-change <same-patch>)]
+   :note "Requires send-notes-at! with per-member delay offsets in cljseq DSL"}
+
+  :diverge-lfo
+  {:description "Same patch, different LFO rates L/R — phasing / beating stereo motion"
+   :setup [(set-member! :both :program-change <same-patch>)
+           (send-cc! :left 30 40)         ; LFO rate L
+           (send-cc! :right 30 47)]}}     ; LFO rate R — slight difference creates beating
+
+ ;; -------------------------------------------------------------------------
+ ;; Design notes: cljseq vocabulary gaps
+ ;;
+ ;; To make this first-class, cljseq needs:
+ ;;
+ ;; 1. :device/type :virtual-stereo-pair — recognized by device registry
+ ;;    Dispatch: send-cc! checks :midi-routing and fans out to correct channels
+ ;;
+ ;; 2. set-member! — send a message to a specific named member of a pair/group
+ ;;    (send-cc! :pro800-pair/left 17 80)
+ ;;    (send-cc! :pro800-pair/right 17 60)
+ ;;
+ ;; 3. Per-member trajectory binding — two mod trajectories running in parallel,
+ ;;    one per member:
+ ;;    (mod/bind! :pro800-pair/left :filter/cutoff (trajectory/breathe 4))
+ ;;    (mod/bind! :pro800-pair/right :filter/cutoff (trajectory/breathe 4 {:phase 0.5}))
+ ;;    → L and R filter breathe out of phase = stereo motion
+ ;;
+ ;; 4. Device-group as first cljseq.device primitive:
+ ;;    defdevice-group :pro800-stereo [left right]
+ ;;    → auto-generates both, macro-routing, and per-member access
+ ;;
+ ;; The two-Pro800 setup is a concrete test case for a general "device group"
+ ;; abstraction that would also cover: dual Minitaur (stereo bass), dual
+ ;; Summit (one per timbre), Hydrasynth + Pro800 (MPE lead + poly pad).
+ ;; -------------------------------------------------------------------------
+
+ :device/firmware-version "1.4.6"
+ :device/map-source       "Sketch — derived from behringer-pro800.edn"
+ :device/map-version      "2026-04-05"
+ :device/map-confidence   :sketch}
