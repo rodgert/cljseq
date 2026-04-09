@@ -138,6 +138,7 @@
 (def pitch-class-dist          analyze/pitch-class-dist)
 (def detect-key               analyze/detect-key)
 (def detect-key-candidates    analyze/detect-key-candidates)
+(def detect-mode              analyze/detect-mode)
 (def identify-chord           analyze/identify-chord)
 (def identify-chord-candidates analyze/identify-chord-candidates)
 (def chord->roman             analyze/chord->roman)

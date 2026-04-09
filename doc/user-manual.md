@@ -269,15 +269,16 @@ new body starts.
 
 ;; Identify what chord a set of MIDI notes forms
 (identify-chord [60 64 67 71])
-;; => {:root :C :quality :maj7 :degree 1 :in-key? true}
+;; => {:root :C :root-pc 0 :quality :maj7 :inversion 0 :score 1.0}
 
-;; Roman numeral analysis
+;; Roman numeral analysis — returns a map, :roman is a keyword
 (chord->roman c-major (make-chord :G 4 :dom7))
-;; => "V7"
+;; => {:root :G :root-pc 7 :quality :dom7 :inversion 0 :score 1.0
+;;     :degree 4 :roman :V :in-key? true}
 
 ;; Suggest scales that fit a set of pitch classes
 (suggest-scales [0 2 4 5 7 9 11])
-;; => [{:root :C :mode :major :score 1.0} ...]
+;; => [{:root :C :mode :major :fitness 1.0} ...]
 ```
 
 ### Key detection and analysis
@@ -287,20 +288,26 @@ new body starts.
 (detect-key [0 2 4 5 7 9 11])
 ;; => {:root :C :mode :major :score 0.95}
 
-;; Analyze a progression
+;; Analyze a progression — each result is a chord->roman map
 (analyze-progression c-major
   [(make-chord :C 4 :major) (make-chord :F 4 :major)
    (make-chord :G 4 :dom7)  (make-chord :C 4 :major)])
-;; => [{:chord ... :roman "I"} {:chord ... :roman "IV"}
-;;     {:chord ... :roman "V7"} {:chord ... :roman "I"}]
+;; => [{:root :C :quality :major :roman :I  :degree 0 :in-key? true ...}
+;;     {:root :F :quality :major :roman :IV :degree 3 :in-key? true ...}
+;;     {:root :G :quality :dom7  :roman :V  :degree 4 :in-key? true ...}
+;;     {:root :C :quality :major :roman :I  :degree 0 :in-key? true ...}]
 ```
 
 ### Tension and progression suggestion
 
 ```clojure
-;; Score the tension of a chord (0.0 = stable, 1.0 = maximum tension)
-(tension-score (make-chord :B 4 :diminished))  ; => 1.0
-(tension-score (make-chord :C 4 :major))        ; => 0.0
+;; Score the tension of an analyzed chord (0.0 = stable, 1.0 = maximum tension)
+;; tension-score takes a chord->roman result map, not a Chord record
+(tension-score (chord->roman c-major (make-chord :G 4 :dom7)))  ; => 0.9  (V7)
+(tension-score (chord->roman c-major (make-chord :C 4 :major))) ; => 0.0  (I)
+;; or pass a bare map with :degree and :quality:
+(tension-score {:degree 4 :quality :dom7})   ; => 0.9  (V7)
+(tension-score {:degree nil :quality :major}) ; => 0.85 (chromatic — degree unknown)
 
 ;; Generate a progression matching a tension arc (4 chords)
 (suggest-progression c-major [0.0 0.3 0.7 0.0])
