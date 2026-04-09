@@ -1,0 +1,167 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; studio-topology.edn -- cljseq studio MIDI topology declaration
+;;
+;; This file describes the logical device layout of the studio. cljseq.topology
+;; reads it at startup and provides stable device aliases that survive MIDI port
+;; index changes (e.g. across reboots, USB reconnects, or MioXM re-patching).
+;;
+;; Usage:
+;;   (require '[cljseq.topology :as topology])
+;;   (topology/load-topology!)            ; loads this file (default path)
+;;   (topology/start-sidecar! :hydrasynth)
+;;   (topology/start-sidecar! :hydrasynth :input :linnstrument)
+;;
+;; Layer 1 (Sprint 38): logical device aliases + port-pattern matching.
+;; Layer 2 (future):    MioXM multi-host routing, per-interface port assignment.
+;; Layer 3 (future):    Spatial/group device targets, trajectory routing.
+
+{:topology/id          :rodgert-studio
+ :topology/version     "0.1.0"
+ :topology/description "3-host studio: Mac Mini (cljseq) + 3x iConnectivity MioXM"
+
+ ;; -----------------------------------------------------------------------
+ ;; Logical devices
+ ;;
+ ;; Each entry maps an alias keyword to a device descriptor. The
+ ;; :port-pattern is matched case-insensitively as a substring of the
+ ;; OS MIDI port name (same semantics as start-sidecar! :midi-port "name").
+ ;;
+ ;; :device-id   -- references a device map in resources/devices/
+ ;; :port-pattern -- substring to match against MIDI output port name
+ ;; :in-pattern   -- substring for MIDI input port (defaults to :port-pattern)
+ ;; :midi/channel -- default MIDI channel for this device (1-16)
+ ;; :role         -- informational: :synth :controller :fx :midi-to-cv :looper
+ ;; -----------------------------------------------------------------------
+
+ :devices
+ {;; --- Synthesizers ---
+
+  :hydrasynth
+  {:device-id    :asm/hydrasynth-explorer
+   :port-pattern "Hydrasynth"
+   :midi/channel  1
+   :role          :synth
+   :note          "ASM Hydrasynth Explorer; MPE on channels 1-16"}
+
+  :cascadia
+  {:device-id    :intellijel/cascadia
+   :port-pattern "Cascadia"
+   :midi/channel  1
+   :role          :midi-to-cv
+   :note          "Intellijel Cascadia semi-modular; MIDI -> CV bridge to Eurorack"}
+
+  :minilogue
+  {:device-id    :korg/minilogue-xd
+   :port-pattern "minilogue"
+   :midi/channel  1
+   :role          :synth}
+
+  ;; --- Controllers / Sequencers ---
+
+  :linnstrument
+  {:device-id    :roger-linn/linnstrument
+   :port-pattern "LinnStrument"
+   :in-pattern   "LinnStrument"
+   :midi/channel  1
+   :role          :controller
+   :note          "LinnStrument 200; MPE lower zone by default"}
+
+  :keystep-pro
+  {:device-id    :arturia/keystep-pro
+   :port-pattern "KeyStep Pro"
+   :in-pattern   "KeyStep Pro"
+   :midi/channel  1
+   :role          :controller}
+
+  ;; --- FX / Processing ---
+
+  :dd-500
+  {:device-id    :boss/dd-500
+   :port-pattern "DD-500"
+   :midi/channel  1
+   :role          :fx
+   :note          "Boss DD-500 digital delay; dual engine A/B"}
+
+  :rv-500
+  {:device-id    :boss/rv-500
+   :port-pattern "RV-500"
+   :midi/channel  1
+   :role          :fx}
+
+  :md-500
+  {:device-id    :boss/md-500
+   :port-pattern "MD-500"
+   :midi/channel  1
+   :role          :fx}
+
+  :sde-3000d
+  {:device-id    :boss/sde-3000d
+   :port-pattern "SDE-3000"
+   :midi/channel  1
+   :role          :fx}
+
+  :nightsky
+  {:device-id    :strymon/nightsky
+   :port-pattern "NightSky"
+   :midi/channel  1
+   :role          :fx
+   :note          "Strymon NightSky reverb; freeze CC 24"}
+
+  :volante
+  {:device-id    :strymon/volante
+   :port-pattern "Volante"
+   :midi/channel  1
+   :role          :fx
+   :note          "Strymon Volante tape echo; 4-head matrix"}
+
+  ;; --- IAC (macOS virtual routing) ---
+
+  :iac
+  {:port-pattern "IAC Driver"
+   :midi/channel  1
+   :role          :virtual
+   :note          "macOS IAC Driver Bus 1; route to DAW or software synths"}}
+
+ ;; -----------------------------------------------------------------------
+ ;; MIDI interfaces
+ ;;
+ ;; Informational in Layer 1. Used for multi-host routing in Layer 2.
+ ;; :host corresponds to a key in :hosts below.
+ ;; -----------------------------------------------------------------------
+
+ :interfaces
+ {:miox-1
+  {:manufacturer "iConnectivity"
+   :model        "MioXM"
+   :port-pattern "iConnectivity MioXM"
+   :host         :mac-mini
+   :note         "Primary studio interface; connects synths + controllers to Mac Mini"}
+
+  :miox-2
+  {:manufacturer "iConnectivity"
+   :model        "MioXM"
+   :port-pattern "iConnectivity MioXM"
+   :host         :ubuntu
+   :note         "DAW interface; connects Ubuntu DAW host"}
+
+  :miox-3
+  {:manufacturer "iConnectivity"
+   :model        "MioXM"
+   :port-pattern "iConnectivity MioXM"
+   :host         :windows
+   :note         "GigPerformer + Elektron interface"}}
+
+ ;; -----------------------------------------------------------------------
+ ;; Studio hosts
+ ;;
+ ;; Informational in Layer 1. Used for distributed ctrl tree in Layer 2+.
+ ;; -----------------------------------------------------------------------
+
+ :hosts
+ {:mac-mini {:role :cljseq-host :os :macos
+             :note "Primary cljseq host; runs the REPL and sidecar"}
+  :ubuntu   {:role :daw         :os :linux
+             :note "DAW host (Bitwig / Ardour)"}
+  :windows  {:role :gig-performer :os :windows
+             :note "GigPerformer + VCV Rack + Elektron hardware"}}}
