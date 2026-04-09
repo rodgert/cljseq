@@ -198,3 +198,155 @@
   (testing "all buffers removed after stop-all!"
     (is (not (contains? (set (tbuf/buffer-names)) :sa1)))
     (is (not (contains? (set (tbuf/buffer-names)) :sa2)))))
+
+;; ---------------------------------------------------------------------------
+;; Phase 2 — Rate / Doppler helpers (via private var access)
+;; ---------------------------------------------------------------------------
+
+(def ^:private doppler-pitch-cents @#'tbuf/doppler-pitch-cents)
+(def ^:private shift-pitch          @#'tbuf/shift-pitch)
+(def ^:private effective-cursor-rate @#'tbuf/effective-cursor-rate)
+
+(deftest doppler-pitch-cents-linear
+  (let [linear-zone {:rate-mode :linear}]
+    (testing "rate=1.0 → 0 cents"
+      (is (== 0.0 (doppler-pitch-cents 1.0 1200.0 linear-zone false))))
+    (testing "rate=2.0 → +1200 cents at scale 1200"
+      (is (== 1200.0 (doppler-pitch-cents 2.0 1200.0 linear-zone false))))
+    (testing "rate=0.5 → -600 cents at scale 1200"
+      (is (== -600.0 (doppler-pitch-cents 0.5 1200.0 linear-zone false))))
+    (testing "tape-scale halved → half the pitch offset"
+      (is (== 600.0 (doppler-pitch-cents 2.0 600.0 linear-zone false))))
+    (testing "clocked? suppresses pitch"
+      (is (== 0.0 (doppler-pitch-cents 2.0 1200.0 linear-zone true))))))
+
+(deftest doppler-pitch-cents-exponential
+  (let [exp-zone {:rate-mode :exponential}]
+    (testing "rate=1.0 → 0 cents (log2(1)=0)"
+      (is (< (Math/abs (doppler-pitch-cents 1.0 1200.0 exp-zone false)) 1e-9)))
+    (testing "rate=2.0 → +1200 cents (one octave)"
+      (is (< (Math/abs (- 1200.0 (doppler-pitch-cents 2.0 1200.0 exp-zone false))) 1e-6)))
+    (testing "rate=0.5 → -1200 cents (one octave down)"
+      (is (< (Math/abs (- -1200.0 (doppler-pitch-cents 0.5 1200.0 exp-zone false))) 1e-6)))
+    (testing "rate=4.0 → +2400 cents (two octaves)"
+      (is (< (Math/abs (- 2400.0 (doppler-pitch-cents 4.0 1200.0 exp-zone false))) 1e-6)))
+    (testing "clocked? suppresses pitch"
+      (is (== 0.0 (doppler-pitch-cents 2.0 1200.0 exp-zone true))))))
+
+(deftest shift-pitch-semantics
+  (testing "zero cents → event unchanged"
+    (let [ev {:pitch/midi 60 :dur/beats 0.25}]
+      (is (= ev (shift-pitch ev 0.0)))))
+  (testing "+1200 cents → +12 semitones (one octave up)"
+    (let [ev {:pitch/midi 60}
+          ev' (shift-pitch ev 1200.0)]
+      (is (= 72 (:pitch/midi ev')))))
+  (testing "-1200 cents → -12 semitones (one octave down)"
+    (let [ev {:pitch/midi 60}
+          ev' (shift-pitch ev -1200.0)]
+      (is (= 48 (:pitch/midi ev')))))
+  (testing "+50 cents → rounds to MIDI 61 with -50 cents fractional offset"
+    ;; Math/round(60.5) = 61; remainder = (60.5 - 61) * 100 = -50
+    (let [ev {:pitch/midi 60}
+          ev' (shift-pitch ev 50.0)]
+      (is (= 61 (:pitch/midi ev')))
+      (is (< (Math/abs (- -50.0 (:pitch/cents-offset ev'))) 1e-6))))
+  (testing "midi clamped at 0 floor"
+    (let [ev {:pitch/midi 2}
+          ev' (shift-pitch ev -600.0)]
+      (is (>= (:pitch/midi ev') 0))))
+  (testing "midi clamped at 127 ceiling"
+    (let [ev {:pitch/midi 125}
+          ev' (shift-pitch ev 600.0)]
+      (is (<= (:pitch/midi ev') 127)))))
+
+(deftest effective-cursor-rate-test
+  (testing "no skew → base rate unchanged"
+    (is (== 2.0 (effective-cursor-rate 2.0 nil :a)))
+    (is (== 2.0 (effective-cursor-rate 2.0 nil :b))))
+  (testing "inverse skew — cursor A gets + amount"
+    (is (== 1.2 (effective-cursor-rate 1.0 {:mode :inverse :amount 0.2} :a))))
+  (testing "inverse skew — cursor B gets - amount"
+    (is (== 0.8 (effective-cursor-rate 1.0 {:mode :inverse :amount 0.2} :b)))))
+
+;; ---------------------------------------------------------------------------
+;; Phase 2 — State API
+;; ---------------------------------------------------------------------------
+
+(deftest phase2-defaults
+  (tbuf/deftemporal-buffer :p2-def {})
+  (let [info (tbuf/temporal-buffer-info :p2-def)]
+    (testing "rate defaults to 1.0"
+      (is (== 1.0 (:rate info))))
+    (testing "tape-scale defaults to 1200.0"
+      (is (== 1200.0 (:tape-scale info))))
+    (testing "clocked? defaults to false"
+      (is (false? (:clocked? info))))
+    (testing "skew defaults to nil"
+      (is (nil? (:skew info)))))
+  (tbuf/stop! :p2-def))
+
+(deftest phase2-opts-at-creation
+  (tbuf/deftemporal-buffer :p2-opts {:rate 1.5 :tape-scale 600.0 :clocked? false
+                                     :skew {:mode :inverse :amount 0.1}})
+  (let [info (tbuf/temporal-buffer-info :p2-opts)]
+    (testing "rate from opts"
+      (is (== 1.5 (:rate info))))
+    (testing "tape-scale from opts"
+      (is (== 600.0 (:tape-scale info))))
+    (testing "skew from opts"
+      (is (= {:mode :inverse :amount 0.1} (:skew info)))))
+  (tbuf/stop! :p2-opts))
+
+(deftest phase2-rate-mutation
+  (tbuf/deftemporal-buffer :p2-rate {})
+  (testing "temporal-buffer-rate! updates state"
+    (tbuf/temporal-buffer-rate! :p2-rate 2.0)
+    (is (== 2.0 (:rate (tbuf/temporal-buffer-info :p2-rate)))))
+  (testing "temporal-buffer-rate! on unknown buf is safe"
+    (is (nil? (tbuf/temporal-buffer-rate! :no-such 2.0))))
+  (tbuf/stop! :p2-rate))
+
+(deftest phase2-tape-scale-mutation
+  (tbuf/deftemporal-buffer :p2-ts {})
+  (testing "temporal-buffer-tape-scale! updates state"
+    (tbuf/temporal-buffer-tape-scale! :p2-ts 600.0)
+    (is (== 600.0 (:tape-scale (tbuf/temporal-buffer-info :p2-ts)))))
+  (tbuf/stop! :p2-ts))
+
+(deftest phase2-clocked-mutation
+  (tbuf/deftemporal-buffer :p2-clk {})
+  (testing "temporal-buffer-clocked! enables clocked mode"
+    (tbuf/temporal-buffer-clocked! :p2-clk true)
+    (is (true? (:clocked? (tbuf/temporal-buffer-info :p2-clk)))))
+  (testing "temporal-buffer-clocked! disables clocked mode"
+    (tbuf/temporal-buffer-clocked! :p2-clk false)
+    (is (false? (:clocked? (tbuf/temporal-buffer-info :p2-clk)))))
+  (tbuf/stop! :p2-clk))
+
+(deftest phase2-skew-mutation
+  (tbuf/deftemporal-buffer :p2-skew {:skew {:mode :inverse :amount 0.2}})
+  (testing "temporal-buffer-skew! clears skew"
+    (tbuf/temporal-buffer-skew! :p2-skew nil)
+    (is (nil? (:skew (tbuf/temporal-buffer-info :p2-skew)))))
+  (testing "temporal-buffer-skew! sets new skew params"
+    (tbuf/temporal-buffer-skew! :p2-skew {:mode :inverse :amount 0.4})
+    (is (= {:mode :inverse :amount 0.4} (:skew (tbuf/temporal-buffer-info :p2-skew)))))
+  (tbuf/stop! :p2-skew))
+
+(deftest phase2-skew-lifecycle
+  (testing "skew buffer starts; both threads spin up"
+    (tbuf/deftemporal-buffer :p2-slc {:skew {:mode :inverse :amount 0.1}})
+    (is (contains? (set (tbuf/buffer-names)) :p2-slc)))
+  (testing "stop! on skew buffer is clean"
+    (tbuf/stop! :p2-slc)
+    (is (not (contains? (set (tbuf/buffer-names)) :p2-slc)))))
+
+(deftest phase2-hold-blocks-send-at-rate
+  ;; Regression: Phase 2 state additions should not break hold semantics
+  (tbuf/deftemporal-buffer :p2-hold {:rate 2.0 :tape-scale 600.0})
+  (tbuf/temporal-buffer-hold! :p2-hold true)
+  (let [before (:event-count (tbuf/temporal-buffer-info :p2-hold))]
+    (tbuf/temporal-buffer-send! :p2-hold {:pitch/midi 60})
+    (is (= before (:event-count (tbuf/temporal-buffer-info :p2-hold)))))
+  (tbuf/stop! :p2-hold))
