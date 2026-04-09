@@ -47,6 +47,7 @@
             [cljseq.scale      :as scale]
             [cljseq.sidecar    :as sidecar]
             [cljseq.stochastic :as stoch]
+            [cljseq.texture    :as tx]
             [cljseq.trajectory :as traj]
             [cljseq.voice      :as voice]))
 
@@ -130,6 +131,19 @@
 (def cue!             conductor/cue!)
 (def conductor-state  conductor/conductor-state)
 (def conductor-names  conductor/conductor-names)
+
+;; ---------------------------------------------------------------------------
+;; Texture protocol
+;; ---------------------------------------------------------------------------
+
+(def deftexture!          tx/deftexture!)
+(def get-texture          tx/get-texture)
+(def texture-names        tx/texture-names)
+(def buffer-texture       tx/buffer-texture)
+(def texture-transition!  tx/texture-transition!)
+(def shadow-init!         tx/shadow-init!)
+(def shadow-update!       tx/shadow-update!)
+(def shadow-get           tx/shadow-get)
 
 ;; ---------------------------------------------------------------------------
 ;; Analysis
