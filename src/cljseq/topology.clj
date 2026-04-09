@@ -32,8 +32,9 @@
   Layer 1 (Sprint 38): logical device aliases + port-pattern resolution.
   Layer 2 (future):    MioXM multi-host routing, per-interface port assignment.
   Layer 3 (future):    Spatial/group device targets, trajectory routing."
-  (:require [clojure.edn  :as edn]
+  (:require [clojure.edn     :as edn]
             [clojure.java.io :as io]
+            [cljseq.dirs     :as dirs]
             [cljseq.sidecar  :as sidecar]))
 
 ;; ---------------------------------------------------------------------------
@@ -42,9 +43,18 @@
 
 (def ^:private topology (atom nil))
 
-(def default-topology-path
-  "Default path to the studio topology EDN file."
-  "resources/studio-topology.edn")
+(defn default-topology-path
+  "Return the default path for the studio topology file.
+
+  Resolution order:
+    1. CLJSEQ_TOPOLOGY environment variable
+    2. (dirs/user-config-dir)/topology.edn
+       -- XDG default: ~/.config/cljseq/topology.edn
+       -- macOS native: ~/Library/Application Support/cljseq/topology.edn
+
+  See doc/topology-example.edn for the full schema and annotations."
+  []
+  (dirs/topology-path))
 
 ;; ---------------------------------------------------------------------------
 ;; Load / reload
@@ -58,13 +68,16 @@
 
   Returns the topology map."
   ([]
-   (load-topology! default-topology-path))
+   (load-topology! (default-topology-path)))
   ([path]
    (let [f   (io/file path)
          topo (if (.exists f)
                 (edn/read-string (slurp f))
-                (throw (ex-info (str "Topology file not found: " path)
-                                {:path path})))]
+                (throw (ex-info
+                        (str "Topology file not found: " path "\n"
+                             "  Create it from the schema reference: doc/topology-example.edn\n"
+                             "  Or set CLJSEQ_TOPOLOGY to an explicit path.")
+                        {:path path})))]
      (when-not (map? (:devices topo))
        (throw (ex-info "Invalid topology: :devices must be a map"
                        {:path path :topology topo})))

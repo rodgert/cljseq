@@ -80,14 +80,14 @@
       (is (thrown-with-msg? clojure.lang.ExceptionInfo #"Invalid topology"
                             (topology/load-topology! path))))))
 
-(deftest load-topology-default-path-exists
-  (testing "default topology file resources/studio-topology.edn is present"
-    (is (.exists (io/file topology/default-topology-path))
-        "resources/studio-topology.edn should exist in the repo")))
+(deftest load-topology-example-doc-exists
+  (testing "doc/topology-example.edn schema reference is present in the repo"
+    (is (.exists (io/file "doc/topology-example.edn"))
+        "doc/topology-example.edn should exist as the schema reference")))
 
-(deftest load-topology-default-loadable
-  (testing "default topology file parses without error"
-    (let [result (topology/load-topology!)]
+(deftest load-topology-example-doc-loadable
+  (testing "doc/topology-example.edn parses without error"
+    (let [result (topology/load-topology! "doc/topology-example.edn")]
       (is (map? result))
       (is (seq (:devices result))))))
 

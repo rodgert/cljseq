@@ -19,10 +19,11 @@ Version 0.2.0 · April 2026
 11. [FX Automation](#11-fx-automation)
 12. [Control Tree](#12-control-tree)
 13. [Generative Techniques](#13-generative-techniques)
-14. [Temporal Buffer](#14-temporal-buffer)
-15. [Threshold Extractor](#15-threshold-extractor)
-16. [Bach Corpus (Music21)](#16-bach-corpus-music21)
-17. [Reference: REPL Commands and Step Keys](#17-reference)
+14. [Studio Topology](#14-studio-topology)
+15. [Temporal Buffer](#15-temporal-buffer)
+16. [Threshold Extractor](#16-threshold-extractor)
+17. [Bach Corpus (Music21)](#17-bach-corpus-music21)
+18. [Reference: REPL Commands and Step Keys](#18-reference)
 
 ---
 
@@ -635,7 +636,91 @@ and checkpoints. Bind a physical knob to a named path and read it from any loop.
 
 ---
 
-## 14. Temporal Buffer
+## 14. Studio Topology
+
+The studio topology file declares the logical layout of your MIDI studio --
+which synthesizers, controllers, and FX units you have, and which substring
+of the OS MIDI port name to use to find each one. This decouples cljseq
+scripts from fragile port indices that change across reboots and USB reconnects.
+
+### Creating your topology file
+
+Copy the schema reference and fill in your hardware:
+
+```bash
+# Linux / macOS (XDG default)
+cp doc/topology-example.edn ~/.config/cljseq/topology.edn
+```
+
+The path can also be set explicitly:
+
+```bash
+export CLJSEQ_TOPOLOGY=/path/to/my-studio.edn
+```
+
+### Loading and using the topology
+
+```clojure
+(require '[cljseq.topology :as topology])
+
+;; Load from default path (~/.config/cljseq/topology.edn or CLJSEQ_TOPOLOGY)
+(topology/load-topology!)
+
+;; Or load from an explicit path
+(topology/load-topology! "path/to/my-studio.edn")
+
+;; Start the sidecar targeting a named device
+(topology/start-sidecar! :poly-synth)
+
+;; Output to one device, monitor MIDI input from another
+(topology/start-sidecar! :poly-synth :input :keyboard)
+
+;; Show what is loaded
+(topology/print-topology)
+
+;; Query individual devices
+(topology/device-info :poly-synth)
+;; => {:port-pattern "PolySynth" :midi/channel 1 :role :synth ...}
+
+(topology/device-ids)
+;; => [:bass-synth :cv-bridge :iac :keyboard :poly-synth :reverb]
+```
+
+### Topology file schema
+
+See `doc/topology-example.edn` for a fully-annotated example. The essential
+structure:
+
+```edn
+{:topology/id      :my-studio
+ :topology/version "0.1.0"
+
+ :devices
+ {:poly-synth  {:port-pattern "PolySynth"
+                :midi/channel  1
+                :role          :synth}
+
+  :keyboard    {:port-pattern "KeyboardCtrl Out"
+                :in-pattern   "KeyboardCtrl In"  ; optional: separate input name
+                :midi/channel  1
+                :role          :controller}
+
+  :reverb      {:port-pattern "ReverbFX"
+                :midi/channel  1
+                :role          :fx}}
+
+ ;; Optional: document your interfaces and hosts (used in Layer 2+ routing)
+ :interfaces  {:hub-1 {:manufacturer "Example" :model "USB Hub" ...}}
+ :hosts       {:main {:role :cljseq-host :os :macos}}}
+```
+
+`port-pattern` is matched case-insensitively as a substring of the OS MIDI
+port name -- the same semantics as `(start-sidecar! :midi-port "substring")`.
+Run `(list-midi-ports)` to see what port names your system reports.
+
+---
+
+## 15. Temporal Buffer
 
 The Temporal Buffer is a beat-timestamped event store that replays events
 from a sliding window of recent history. It is inspired by loop-and-modify
@@ -805,7 +890,7 @@ arcs and trajectory curves drive buffer parameters live:
 
 ---
 
-## 15. Threshold Extractor
+## 16. Threshold Extractor
 
 The Threshold Extractor watches a continuously varying value and fires note
 or CC events whenever the value crosses a boundary. Rhythm emerges from the
@@ -948,7 +1033,7 @@ All parameters can be changed on a running extractor:
 
 ---
 
-## 16. Bach Corpus (Music21)
+## 17. Bach Corpus (Music21)
 
 cljseq integrates with [Music21](https://web.mit.edu/music21/) for the Bach
 chorale corpus. Requires Python 3.x with `music21` installed:
@@ -985,7 +1070,7 @@ to disk in `~/.local/share/cljseq/corpora/m21/`.
 
 ---
 
-## 17. Reference
+## 18. Reference
 
 ### REPL commands
 
