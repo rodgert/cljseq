@@ -213,6 +213,20 @@
           (binding [*out* *err*]
             (println "[texture] texture-fade! error:" (.getMessage e))))))))
 
+(defn start-texture-fade!
+  "Start a background interpolation from the device's current state to `target`
+  over `beats` beats. Returns the future immediately.
+
+  Intended for use by ITexture implementors that want to reuse the shared fade
+  mechanism rather than duplicating interpolation logic.
+
+  Example (inside a defrecord ITexture impl):
+    (texture-fade! [this target beats]
+      (tx/start-texture-fade! this target beats)
+      nil)"
+  [tx target beats]
+  (fade-thread! tx target beats (max 1 (int beats))))
+
 ;; ---------------------------------------------------------------------------
 ;; TemporalBufferTexture — ITexture wrapper for temporal buffers
 ;; ---------------------------------------------------------------------------

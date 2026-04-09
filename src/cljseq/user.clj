@@ -46,6 +46,7 @@
             [cljseq.scala      :as scala]
             [cljseq.scale      :as scale]
             [cljseq.sidecar    :as sidecar]
+            [cljseq.spectral   :as spectral]
             [cljseq.stochastic :as stoch]
             [cljseq.texture    :as tx]
             [cljseq.trajectory :as traj]
@@ -144,6 +145,14 @@
 (def shadow-init!         tx/shadow-init!)
 (def shadow-update!       tx/shadow-update!)
 (def shadow-get           tx/shadow-get)
+
+;; ---------------------------------------------------------------------------
+;; Spectral analysis
+;; ---------------------------------------------------------------------------
+
+(def start-spectral!  spectral/start-spectral!)
+(def stop-spectral!   spectral/stop-spectral!)
+(def spectral-ctx     spectral/spectral-ctx)
 
 ;; ---------------------------------------------------------------------------
 ;; Analysis
