@@ -581,3 +581,105 @@
     (testing "halo present"
       (is (= 0.2 (:amount (:halo info))))))
   (tbuf/stop! :p4-reg))
+
+;; ---------------------------------------------------------------------------
+;; Phase 5 — Named presets
+;; ---------------------------------------------------------------------------
+
+(deftest presets-defined
+  (testing "all 5 presets are present"
+    (is (every? #(contains? tbuf/presets %) [:flux :tape-echo :looper :cosmos :mimeophon])))
+  (testing "each preset is a map"
+    (doseq [[_ p] tbuf/presets]
+      (is (map? p))))
+  (testing ":flux has zero feedback amount"
+    (is (== 0.0 (get-in tbuf/presets [:flux :feedback :amount]))))
+  (testing ":looper uses clocked mode"
+    (is (true? (get-in tbuf/presets [:looper :clocked?]))))
+  (testing ":mimeophon has skew configured"
+    (is (= :inverse (get-in tbuf/presets [:mimeophon :skew :mode]))))
+  (testing ":cosmos uses reduced tape-scale"
+    (is (< (get-in tbuf/presets [:cosmos :tape-scale]) 200.0))))
+
+(deftest deftemporal-buffer-preset-basic
+  (testing "creates buffer from preset"
+    (tbuf/deftemporal-buffer-preset :pr-flux :flux)
+    (let [info (tbuf/temporal-buffer-info :pr-flux)]
+      (is (= :z3 (:active-zone info)))
+      (is (== 0.0 (get-in info [:feedback :amount]))))
+    (tbuf/stop! :pr-flux))
+
+  (testing "creates buffer from :mimeophon preset"
+    (tbuf/deftemporal-buffer-preset :pr-mim :mimeophon)
+    (let [info (tbuf/temporal-buffer-info :pr-mim)]
+      (is (= :z3 (:active-zone info)))
+      (is (== 0.6 (get-in info [:feedback :amount])))
+      (is (= :inverse (get-in info [:skew :mode]))))
+    (tbuf/stop! :pr-mim)))
+
+(deftest deftemporal-buffer-preset-with-overrides
+  (testing "opts override preset values"
+    (tbuf/deftemporal-buffer-preset :pr-over :tape-echo {:active-zone :z4 :color :dark})
+    (let [info (tbuf/temporal-buffer-info :pr-over)]
+      (is (= :z4 (:active-zone info)))
+      (is (= :dark (:color info)))
+      ;; feedback from preset still present
+      (is (pos? (get-in info [:feedback :amount]))))
+    (tbuf/stop! :pr-over)))
+
+(deftest deftemporal-buffer-preset-unknown-throws
+  (testing "unknown preset key throws ex-info"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (tbuf/deftemporal-buffer-preset :pr-bad :no-such-preset)))))
+
+;; ---------------------------------------------------------------------------
+;; Phase 5 — temporal-buffer-set! (trajectory integration)
+;; ---------------------------------------------------------------------------
+
+(deftest temporal-buffer-set-batch-update
+  (tbuf/deftemporal-buffer :p5-set {})
+  (testing "set! updates multiple keys atomically"
+    (tbuf/temporal-buffer-set! :p5-set {:rate 2.0 :color :bright :clocked? true})
+    (let [info (tbuf/temporal-buffer-info :p5-set)]
+      (is (== 2.0 (:rate info)))
+      (is (= :bright (:color info)))
+      (is (true? (:clocked? info)))))
+  (testing "set! on unknown buffer is safe"
+    (is (nil? (tbuf/temporal-buffer-set! :no-such {:rate 1.0}))))
+  (tbuf/stop! :p5-set))
+
+;; ---------------------------------------------------------------------------
+;; Phase 5 — slice-start / Hold loop-slice
+;; ---------------------------------------------------------------------------
+
+(deftest phase5-slice-start-default
+  (tbuf/deftemporal-buffer :p5-sl {})
+  (testing "slice-start defaults to 0.0"
+    (is (== 0.0 (:slice-start (tbuf/temporal-buffer-info :p5-sl)))))
+  (tbuf/stop! :p5-sl))
+
+(deftest phase5-slice-start-mutation
+  (tbuf/deftemporal-buffer :p5-slm {:slice-start 8.0})
+  (testing "slice-start from opts"
+    (is (== 8.0 (:slice-start (tbuf/temporal-buffer-info :p5-slm)))))
+  (testing "temporal-buffer-slice-start! updates state"
+    (tbuf/temporal-buffer-slice-start! :p5-slm 16.0)
+    (is (== 16.0 (:slice-start (tbuf/temporal-buffer-info :p5-slm)))))
+  (testing "temporal-buffer-slice-start! on unknown buf is safe"
+    (is (nil? (tbuf/temporal-buffer-slice-start! :no-such 4.0))))
+  (tbuf/stop! :p5-slm))
+
+(deftest phase5-regression-all-phases
+  ;; Full-stack: all phase options coexist without error
+  (tbuf/deftemporal-buffer-preset :p5-full :mimeophon
+    {:halo {:amount 0.4 :copies 2 :spread 0.05 :pitch-spread 4
+            :feedback-threshold 0.7 :max-halo-depth 3}
+     :slice-start 4.0})
+  (let [info (tbuf/temporal-buffer-info :p5-full)]
+    (testing "preset base active"
+      (is (= :z3 (:active-zone info))))
+    (testing "halo override present"
+      (is (= 0.4 (:amount (:halo info)))))
+    (testing "slice-start override present"
+      (is (== 4.0 (:slice-start info)))))
+  (tbuf/stop! :p5-full))

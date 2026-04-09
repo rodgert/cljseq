@@ -300,18 +300,19 @@
   Phase 2 additions: Rate/Doppler, clocked mode, Skew (cursor A / B).
   Phase 3 additions: Color per-pass transform, Feedback re-injection.
   Phase 4 additions: Halo temporal neighbor generation + threshold injection.
+  Phase 5 additions: Hold loop-slice (large zones z4–z7 remap the window to
+                     a fixed slice anchored at :slice-start beats).
 
   Each cycle:
   1. Determine zone depth D and effective rate R for this cursor.
   2. Compute period P = D / R.
   3. Park until next cycle boundary (cycle-start + P).
-  4. Collect events written during [cycle-start, cycle-start + P).
-  5. Apply Doppler pitch shift; emit in forward or retrograde order.
+  4. Determine window [win-start, win-end):
+     - Normal: [cycle-start, next-wake)
+     - Hold + zone z4–z7: [slice-start, slice-start + P) — fixed loop slice
+  5. Apply Doppler pitch shift; emit events in forward or retrograde order.
   6. If feedback is active, apply Color and re-inject events (generation+1).
-  7. If Halo is active, generate neighbor copies per emitted event:
-     - amount < feedback-threshold → emit copies directly (output smear)
-     - amount ≥ feedback-threshold → inject copies into buffer (feedback wash)
-     Events at max-halo-depth do not spawn further copies.
+  7. If Halo is active, generate neighbor copies per emitted event.
   8. Prune buffer of events beyond max-depth.
   9. Advance cycle-start by P."
   [buf-name running? cursor]
@@ -335,20 +336,30 @@
               (let [state'      @(:state-atom entry)
                     buf         @(:buffer-atom entry)
                     flip?       (:flip? state' false)
-                    ;; Window: events written during [cycle-start, next-wake)
+                    ;; Phase 5: Hold loop-slice — large zones remap the read window
+                    ;; to a fixed beat-position slice rather than the rolling cursor.
+                    hold?       (:hold? state' false)
+                    large-zone? (contains? #{:z4 :z5 :z6 :z7} zone-id)
+                    win-start   (if (and hold? large-zone?)
+                                  (double (:slice-start state' 0.0))
+                                  cycle-start)
+                    win-end     (if (and hold? large-zone?)
+                                  (+ win-start period)
+                                  next-wake)
+                    ;; Window: events in [win-start, win-end)
                     window      (filterv (fn [ev]
                                           (let [b (double (:beat ev 0.0))]
-                                            (and (>= b cycle-start) (< b next-wake))))
+                                            (and (>= b win-start) (< b win-end))))
                                         buf)
                     ordered     (if flip?
                                   (sort-by #(- (double (:beat % 0.0))) window)
                                   (sort-by #(double (:beat % 0.0)) window))
                     pitch-cents (doppler-pitch-cents eff-rate tape-scale zone clocked?)]
-                ;; Schedule each event at (event.beat - cycle-start) + next-wake
-                ;; i.e. same relative position within the zone, one period later.
+                ;; Schedule each event at (event.beat - win-start) + next-wake
+                ;; i.e. same relative position within the window, one period later.
                 ;; Apply Doppler pitch shift before emission.
                 (doseq [ev ordered]
-                  (let [rel-offset (- (double (:beat ev 0.0)) cycle-start)
+                  (let [rel-offset (- (double (:beat ev 0.0)) win-start)
                         play-beat  (+ next-wake rel-offset)
                         ev'        (shift-pitch ev pitch-cents)]
                     (emit-event! ev' play-beat)))
@@ -363,7 +374,7 @@
                       (let [gen (int (:generation ev 0))]
                         (when (< gen max-gen)
                           (when (< (rand) fb-amt)
-                            (let [rel-offset (- (double (:beat ev 0.0)) cycle-start)
+                            (let [rel-offset (- (double (:beat ev 0.0)) win-start)
                                   play-beat  (+ next-wake rel-offset)
                                   ev-colored (apply-color ev color)
                                   fb-vel     (int (:mod/velocity ev-colored 64))]
@@ -389,7 +400,7 @@
                       (when (pos? halo-amt)
                         (doseq [ev ordered]
                           (when (< (int (:halo-depth ev 0)) max-hd)
-                            (let [rel-offset (- (double (:beat ev 0.0)) cycle-start)
+                            (let [rel-offset (- (double (:beat ev 0.0)) win-start)
                                   play-beat  (+ next-wake rel-offset)
                                   copies     (generate-halo-copies ev play-beat halo-cfg)]
                               (if (>= halo-amt fb-thresh)
@@ -441,7 +452,11 @@
                     :spread           0.1  ; ± beat offset range for copies
                     :pitch-spread     5    ; ± cents range for copy pitch
                     :feedback-threshold 0.7 ; above this, copies enter buffer
-                    :max-halo-depth   4}   ; max copy generations (prevents explosion
+                    :max-halo-depth   4}   ; max copy generations (prevents explosion)
+
+  Phase 5 options:
+    :slice-start — beats offset for Hold loop-slice mode (default 0.0)
+                   only active when hold? is true + zone is z4–z7
 
   Re-evaluating with the same name stops the prior instance and starts fresh.
 
@@ -460,6 +475,7 @@
          color       (or (:color opts) :neutral)
          feedback    (or (:feedback opts) {:amount 0.0})
          halo        (:halo opts)
+         slice-start (double (or (:slice-start opts) 0.0))
          state-atom  (atom {:active-zone active-zone
                             :hold?       false
                             :flip?       false
@@ -470,7 +486,8 @@
                             :skew        skew
                             :color       color
                             :feedback    feedback
-                            :halo        halo})
+                            :halo        halo
+                            :slice-start slice-start})
          buffer-atom (atom [])
          running?    (atom true)
          entry       {:opts        opts
@@ -704,6 +721,133 @@
     (swap! (:state-atom entry) assoc :skew skew-map))
   nil)
 
+(defn temporal-buffer-slice-start!
+  "Set the loop-slice start position (beats) for Hold mode in `buf-name`.
+
+  Only active when the buffer is in hold mode AND the active zone is z4–z7
+  (large zones). The cursor reads a period-width window anchored at
+  `slice-start` beats, looping continuously. This enables loop sculpting:
+  freeze a 64-beat buffer and sweep through it in 4- or 8-beat slices.
+
+  Has no effect outside hold mode or in zones z0–z3."
+  [buf-name slice-start]
+  (when-let [entry (get @registry buf-name)]
+    (swap! (:state-atom entry) assoc :slice-start (double slice-start)))
+  nil)
+
+(defn temporal-buffer-set!
+  "Apply a map of state updates to `buf-name` atomically.
+
+  Intended as the trajectory integration point — called by the trajectory
+  system to update multiple parameters within a single tick:
+
+    (temporal-buffer-set! :echo
+      {:rate 1.2 :color :bright :halo {:amount 0.4 ...}})
+
+  Any key present in the state atom is valid:
+    :active-zone, :hold?, :flip?, :rate, :tape-scale, :clocked?,
+    :color, :feedback, :halo, :skew, :slice-start
+
+  Returns nil."
+  [buf-name state-updates]
+  (when-let [entry (get @registry buf-name)]
+    (swap! (:state-atom entry) merge state-updates))
+  nil)
+
+;; ---------------------------------------------------------------------------
+;; Named presets
+;; ---------------------------------------------------------------------------
+
+(def presets
+  "Factory configurations for common Temporal Buffer setups.
+
+  Each value is an opts map suitable for `deftemporal-buffer` or
+  `deftemporal-buffer-preset`. Presets can be inspected, merged, and
+  extended before use:
+
+    ;; Use as-is
+    (deftemporal-buffer-preset :echo :tape-echo)
+
+    ;; Override one parameter
+    (deftemporal-buffer-preset :echo :tape-echo {:active-zone :z4})
+
+    ;; Inspect
+    (get presets :mimeophon)
+
+  | Preset       | Character                                          |
+  |--------------|----------------------------------------------------|
+  | :flux        | Degenerate: clean single-cursor, no feedback/halo  |
+  | :tape-echo   | Warm tape delay: Doppler + light halo + mod. fb    |
+  | :looper      | Clocked loop: high feedback, no pitch drift        |
+  | :cosmos      | Drifting memory: warm + halo + sustained feedback  |
+  | :mimeophon   | Full Mimeophon-inspired: all systems active        |
+
+  See doc/attribution.md for hardware sources."
+  {:flux
+   {:active-zone :z3
+    :rate        1.0
+    :tape-scale  1200.0
+    :color       :neutral
+    :feedback    {:amount 0.0}
+    :halo        nil}
+
+   :tape-echo
+   {:active-zone :z2
+    :rate        1.0
+    :tape-scale  1200.0
+    :color       :warm
+    :feedback    {:amount 0.4 :max-generation 6 :velocity-floor 8}
+    :halo        {:amount 0.15 :copies 2 :spread 0.05 :pitch-spread 3
+                  :feedback-threshold 0.7 :max-halo-depth 3}}
+
+   :looper
+   {:active-zone :z4
+    :rate        1.0
+    :tape-scale  1200.0
+    :clocked?    true
+    :color       :neutral
+    :feedback    {:amount 0.95 :max-generation 12 :velocity-floor 3}
+    :halo        nil}
+
+   :cosmos
+   {:active-zone :z3
+    :rate        1.0
+    :tape-scale  80.0
+    :color       :warm
+    :feedback    {:amount 0.65 :max-generation 10 :velocity-floor 8}
+    :halo        {:amount 0.2 :copies 3 :spread 0.08 :pitch-spread 5
+                  :feedback-threshold 0.7 :max-halo-depth 4}}
+
+   :mimeophon
+   {:active-zone :z3
+    :rate        1.0
+    :tape-scale  100.0
+    :color       :neutral
+    :feedback    {:amount 0.6 :max-generation 8 :velocity-floor 5}
+    :halo        {:amount 0.3 :copies 3 :spread 0.1 :pitch-spread 5
+                  :feedback-threshold 0.7 :max-halo-depth 4}
+    :skew        {:mode :inverse :amount 0.05}}})
+
+(defn deftemporal-buffer-preset
+  "Create and start a temporal buffer from a named preset.
+
+  `buf-name`   — keyword name for the buffer
+  `preset-key` — keyword from `presets` (:flux :tape-echo :looper :cosmos :mimeophon)
+  `opts`       — optional overrides merged atop the preset (default {})
+
+  Throws ex-info if `preset-key` is unknown.
+  Re-evaluating with the same name stops the prior instance.
+
+  Returns `buf-name`."
+  ([buf-name preset-key]
+   (deftemporal-buffer-preset buf-name preset-key {}))
+  ([buf-name preset-key opts]
+   (let [base (get presets preset-key)]
+     (when-not base
+       (throw (ex-info "deftemporal-buffer-preset: unknown preset"
+                       {:preset-key preset-key :valid (keys presets)})))
+     (deftemporal-buffer buf-name (merge base opts)))))
+
 (defn temporal-buffer-info
   "Return a snapshot of the state of temporal buffer `buf-name`, or nil.
 
@@ -720,6 +864,7 @@
      :color       :neutral
      :feedback    {:amount 0.0 :max-generation 8 :velocity-floor 5}
      :halo        nil
+     :slice-start 0.0
      :event-count 42
      :oldest-beat 34.375}"
   [buf-name]
