@@ -1,0 +1,89 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Singular Sound MIDI Maestro — cljseq device map
+;;
+;; 6-button MIDI foot controller. TRANSMIT-ONLY — no MIDI IN port.
+;; Designed as primary foot controller for the Singular Sound ecosystem
+;; (BeatBuddy + Aeros Looper). Two built-in "App Modes" with preconfigured
+;; CCs; additional custom modes via MIDI Maestro Manager app.
+;;
+;; !! NO MIDI IN !! — cannot receive any MIDI messages; cannot be addressed
+;; by cljseq. This device is a CONTROLLER only.
+;;
+;; Ecosystem chain: MIDI Maestro OUT → BeatBuddy IN (BeatBuddy merges + forwards to Aeros)
+;;
+;; Source: Singular Sound MIDI Maestro User Manual — singularsound.com
+;; Confidence: High (transmit-only confirmed; App Mode CCs from official manual)
+
+{:device/id           :singular-sound/midi-maestro
+ :device/name         "Singular Sound MIDI Maestro"
+ :device/manufacturer "Singular Sound"
+ :device/type         :foot-controller
+ :device/role         :source    ; transmit-only; cljseq cannot address this device
+ :device/connectivity [:din-midi]
+
+ ;; MIDI Maestro has NO MIDI IN — transmit only
+ ;; cljseq has no way to send to this device
+ :midi/receive        false
+ :midi/channel        1         ; default transmit channel; configurable
+
+ :midi/clock  {:receive false :send false}
+ :midi/sysex  nil
+
+ :midi/ports
+ {:din-in   false   ; !! NO MIDI IN — confirmed !!
+  :din-thru false
+  :din-out  true    ; MIDI OUT only; connects to BeatBuddy IN in standard chain
+  :usb      true}   ; USB for MIDI Maestro Manager app config
+
+ ;; MIDI Maestro transmits; cljseq receives (via monitoring) but cannot control it.
+ ;; The following documents what it SENDS in its two built-in App Modes.
+
+ ;; APP MODE 1 — BeatBuddy Mode
+ ;; 6 buttons mapped to BeatBuddy control CCs
+ :midi-maestro/app-mode-1
+ {:name    "BeatBuddy Mode"
+  :target  :beatbuddy
+  :buttons
+  [{:button 1 :label "Play/Pause"     :cc 41  :note "BeatBuddy CC 41 = start/resume"}
+   {:button 2 :label "Stop"           :cc 42  :note "BeatBuddy CC 42 = stop"}
+   {:button 3 :label "Transition"     :cc 103 :note "Queue transition fill"}
+   {:button 4 :label "Fill"           :cc 104 :note "One-shot fill"}
+   {:button 5 :label "Outro"          :cc 101 :note "Trigger outro/ending"}
+   {:button 6 :label "Part+"          :cc 102 :note "Advance to next part"}]}
+
+ ;; APP MODE 2 — Aeros Mode
+ ;; 6 buttons mapped to Aeros Looper control CCs
+ :midi-maestro/app-mode-2
+ {:name    "Aeros Mode"
+  :target  :aeros-looper
+  :buttons
+  [{:button 1 :label "Record/Play/Overdub" :cc 43  :note "Aeros main loop action"}
+   {:button 2 :label "Stop All"             :cc 44  :note "Aeros stop all tracks"}
+   {:button 3 :label "Next Part"            :cc 45  :note "Advance Aeros song part"}
+   {:button 4 :label "Undo/Redo"            :cc 46  :note "Aeros undo last overdub"}
+   {:button 5 :label "Track 1 Solo"         :cc 47  :note "Solo track 1"}
+   {:button 6 :label "Track 2 Solo"         :cc 48  :note "Solo track 2"}]}
+
+ ;; CUSTOM MODES — configurable via MIDI Maestro Manager app
+ ;; Any button can be mapped to: any CC 0-127 on any channel, PC, or note
+ :midi-maestro/custom-modes
+ {:count        3     ; 3 additional user-configurable modes
+  :configure-via :app ; MIDI Maestro Manager (iOS / Android / Windows)
+  :per-button   [:cc :program-change :note-on]
+  :momentary-toggle :both}  ; each button can be momentary or toggle
+
+ :device/ecosystem
+ {:role    :controller
+  :chain   "MIDI Maestro OUT → BeatBuddy IN → BeatBuddy MIDI merge OUT → Aeros IN"
+  :note    "MIDI Maestro cannot be placed downstream (no MIDI IN); must be first in chain"}
+
+ :device/notes
+ {:no-midi-in        "MIDI Maestro has NO MIDI IN — it is a pure transmitter; cljseq cannot address or LED-control it"
+  :chain-constraint  "Must connect MIDI Maestro OUT → BeatBuddy IN; BeatBuddy's merge port then forwards to Aeros"
+  :cljseq-use        "cljseq can monitor MIDI Maestro output (via BeatBuddy or dedicated interface channel) but cannot send to it"
+  :custom-modes      "Custom CC assignments via MIDI Maestro Manager app; not visible to cljseq at runtime"}
+
+ :device/map-source    "Singular Sound MIDI Maestro User Manual — singularsound.com"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

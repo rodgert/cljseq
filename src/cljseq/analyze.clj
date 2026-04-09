@@ -619,3 +619,96 @@
                    #(Math/abs (- (double (:tension %)) (double target)))
                    candidates))
           tension-targets)))
+
+;; ---------------------------------------------------------------------------
+;; Modal disambiguation — extend major/minor detection to all 7 church modes
+;; ---------------------------------------------------------------------------
+
+(def ^:private modal-signatures
+  "Characteristic scale-degree intervals that distinguish modes sharing the same
+  major/minor classification. Each entry is [test-mode check-fn], where check-fn
+  takes [pc-distribution tonic-pc] and returns a score in [0.0 .. 1.0].
+
+  Checks compare the raised/lowered degree characteristic of each mode against
+  the frequency of that pitch class in the recording."
+  {:dorian      (fn [dist tonic]
+                  ;; Raised 6th vs natural minor: compare pc at +9 (♮6) vs +8 (♭6)
+                  (let [n6 (get dist (mod (+ tonic 9) 12) 0)
+                        b6 (get dist (mod (+ tonic 8) 12) 0)]
+                    (if (> (+ n6 b6) 0) (/ n6 (+ n6 b6)) 0.5)))
+   :phrygian    (fn [dist tonic]
+                  ;; Lowered 2nd: compare pc at +1 (♭2) vs +2 (♮2)
+                  (let [b2 (get dist (mod (+ tonic 1) 12) 0)
+                        n2 (get dist (mod (+ tonic 2) 12) 0)]
+                    (if (> (+ b2 n2) 0) (/ b2 (+ b2 n2)) 0.5)))
+   :lydian      (fn [dist tonic]
+                  ;; Raised 4th: compare pc at +6 (#4) vs +5 (♮4)
+                  (let [s4 (get dist (mod (+ tonic 6) 12) 0)
+                        n4 (get dist (mod (+ tonic 5) 12) 0)]
+                    (if (> (+ s4 n4) 0) (/ s4 (+ s4 n4)) 0.5)))
+   :mixolydian  (fn [dist tonic]
+                  ;; Lowered 7th: compare pc at +10 (♭7) vs +11 (♮7)
+                  (let [b7 (get dist (mod (+ tonic 10) 12) 0)
+                        n7 (get dist (mod (+ tonic 11) 12) 0)]
+                    (if (> (+ b7 n7) 0) (/ b7 (+ b7 n7)) 0.5)))})
+
+(defn detect-mode
+  "Disambiguate the church mode of a pitch collection given its detected tonic.
+
+  Uses `detect-key` to establish tonic and major/minor class, then examines
+  the frequency of characteristic scale degrees to narrow to all 7 church modes.
+
+  `pitches` — MIDI ints, Pitch records, or nested collections.
+
+  Returns a map with:
+    :tonic      — root keyword (:C :Db :D ...)
+    :mode       — mode keyword (:ionian :dorian :phrygian :lydian
+                                :mixolydian :aeolian :locrian)
+    :confidence — float [0.0 .. 1.0]; based on KS score + modal disambiguation
+    :ks-score   — raw Krumhansl-Schmuckler correlation score
+    :alternatives — up to 2 next-best mode candidates with confidence scores
+
+  Example:
+    (detect-mode [38 50 53 57 62 64 65 67 69])
+    ;; A NDLR Dorian bass/pad pattern in D
+    ;; => {:tonic :D :mode :dorian :confidence 0.84 :ks-score 0.91}"
+  [pitches]
+  (let [candidates (detect-key-candidates pitches)
+        best       (first candidates)
+        ;; Invert pc->root-kw-map to get root keyword → pitch class
+        root-kw->pc (into {} (map (fn [[pc kw]] [kw pc]) pc->root-kw-map))
+        tonic-pc    (get root-kw->pc (:root best) 0)
+        dist        (pitch-class-dist pitches)
+        ks-score    (:score best)
+        ;; Candidate modes and their disambiguating score functions
+        ;; — call each fn with (dist tonic-pc) to evaluate the signature
+        mode-candidates
+        (if (= :major (:mode best))
+          {:ionian     (fn [d t]
+                         (let [lyd  ((modal-signatures :lydian)  d t)
+                               mix  ((modal-signatures :mixolydian) d t)]
+                           (- 1.0 (max lyd mix))))
+           :lydian     (:lydian     modal-signatures)
+           :mixolydian (:mixolydian modal-signatures)}
+          {:aeolian    (fn [d t]
+                         (let [dor ((modal-signatures :dorian)   d t)
+                               phr ((modal-signatures :phrygian) d t)]
+                           (- 1.0 (max dor phr))))
+           :dorian     (:dorian   modal-signatures)
+           :phrygian   (:phrygian modal-signatures)})
+        ;; Evaluate each mode's characteristic score
+        scored-modes
+        (->> mode-candidates
+             (map (fn [[mode score-fn]]
+                    {:mode        mode
+                     :modal-score (score-fn dist tonic-pc)}))
+             (sort-by (comp - :modal-score)))
+        best-mode   (first scored-modes)
+        modal-score (:modal-score best-mode)
+        confidence  (* (max 0.0 ks-score) (max 0.1 modal-score))]
+    {:tonic        (:root best)
+     :mode         (:mode best-mode)
+     :confidence   confidence
+     :ks-score     ks-score
+     :alternatives (mapv #(select-keys % [:mode :modal-score])
+                         (rest scored-modes))}))

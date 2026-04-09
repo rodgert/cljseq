@@ -1,0 +1,101 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Behringer Neutron — cljseq device map
+;;
+;; Semi-modular analog synthesizer (original Behringer design).
+;; Minimal MIDI CC (3 entries only). All synthesis parameter control is
+;; via SysEx global config — no real-time CC parameter automation.
+;; Primary cljseq use: MIDI note → pitch CV + gate for semi-modular patching.
+;;
+;; Source: Behringer Neutron User Manual (firmware v2.0.x) — behringer.com
+;; SysEx: Behringer ID [0x00 0x20 0x32], Neutron model byte [0x28]
+;; Confidence: High (CC table complete; SysEx commands from official manual)
+
+{:device/id           :behringer/neutron
+ :device/name         "Behringer Neutron"
+ :device/manufacturer "Behringer"
+ :device/type         :semi-modular
+ :device/voices       1             ; monophonic; 2 in paraphonic mode
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel — set via 4 rear DIP switches (ch 1–16)
+ ;; Can be overridden via SysEx (which disables DIP switches)
+ ;; Warning: do NOT use USB and DIN MIDI simultaneously
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1
+
+ :midi/notes
+ {:range      [24 96]    ; C1–C7; notes outside clamped, not ignored
+  :velocity   {:note-on false :note-off false}   ; not velocity sensitive
+  :aftertouch {:channel-pressure false :poly-key-pressure false}}
+
+ :midi/pitch-bend
+ {:default-semitones 2
+  :max-semitones     24
+  :configurable      true
+  :configure-via     :sysex}
+
+ :midi/clock
+ {:receive true
+  :send    false
+  :uses    [:lfo-sync]}
+
+ :midi/program-change {:receive false :send false}   ; no preset memory
+
+ ;; Only 3 CCs — all synthesis parameter control is via SysEx or physical patching
+ :midi/cc
+ [{:cc 1   :path [:mod-wheel]       :range [0 127] :cc-type :global
+   :note "Routable to ASSIGN output via SysEx (cmd 0A 04)"}
+  {:cc 33  :path [:mod-wheel :lsb]  :cc-lsb true   :cc-type :global}
+  {:cc 64  :path [:sustain-pedal]   :range [0 127] :cc-type :global
+   :note "≥64 = on"}]
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx — global configuration (not real-time parameter control)
+ ;; Format: F0 00 20 32 28 <dev-id> 0A <param> <value> F7
+ ;; Restore: F0 00 20 32 28 <dev-id> 0B F7
+ ;; Bidirectional read/write available since firmware OS 2.0
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x32]
+  :model-id        [0x28]
+  :device-id-range [0 15]           ; 0x7F = broadcast to all
+  :frame           "F0 00 20 32 28 <dev-id> 0A <param> <value> F7"
+  :bidirectional   true             ; since OS 2.0
+  :commands
+  [{:param 0x00 :name :midi-channel      :range [0 15]  :note "0=ch1…15=ch16; enables software channel, disables DIP switches"}
+   {:param 0x01 :name :key-priority      :range [0 2]   :values {0 :low 1 :high 2 :last}}
+   {:param 0x03 :name :pitch-bend-range  :range [0 24]  :note "semitones; default 2"}
+   {:param 0x04 :name :assign-out-source :range [0 4]   :values {0 :osc1-cv 1 :osc2-cv 2 :velocity 3 :mod-wheel 4 :aftertouch}}
+   {:param 0x05 :name :env-retrigger     :range [0 1]   :values {0 :off 1 :on}}
+   {:param 0x08 :name :poly-chain        :range [0 1]   :values {0 :off 1 :on}}
+   {:param 0x10 :name :vcf-mode          :range [0 2]   :values {0 :hp 1 :bp 2 :lp}}
+   {:param 0x11 :name :vcf-key-track     :range [0 1]   :values {0 :off 1 :on}}
+   {:param 0x12 :name :vcf-mod-source    :range [0 3]   :values {0 :off 1 :aftertouch 2 :mod-wheel 3 :velocity}}
+   {:param 0x14 :name :vcf-mod-depth     :range [0 63]}
+   {:param 0x28 :name :osc-key-split     :range [0 88]  :note "0=off; 24–88=split MIDI note#"}
+   {:param 0x31 :name :lfo-one-shot      :range [0 1]   :values {0 :off 1 :on}}
+   {:param 0x34 :name :lfo-depth         :range [0 4]   :values {0 :20pct 1 :40pct 2 :60pct 3 :80pct 4 :100pct}}
+   {:param 0x35 :name :lfo-clock-sync    :range [0 1]   :values {0 :sync 1 :ignore}}]
+  :restore-cmd "F0 00 20 32 28 <dev-id> 0B F7"}
+
+ ;; -------------------------------------------------------------------------
+ ;; CV/gate outputs driven by MIDI (for semi-modular patching)
+ ;; -------------------------------------------------------------------------
+ :device/cv-outputs
+ {:osc1-pitch {:signal :1v-oct  :note "MIDI note → OSC 1 pitch CV"}
+  :osc2-pitch {:signal :1v-oct  :note "Independent second voice in paraphonic mode"}
+  :midi-gate  {:signal :gate    :voltage "0 / +3.3V" :note "MIDI Note On/Off"}
+  :assign-out {:signal :selectable :note "OSC1 CV, OSC2 CV, velocity, mod wheel, or aftertouch (set via SysEx)"}
+  :env1       {:signal :trigger :note "Triggered by MIDI Note On unless overridden by E.GATE patchbay"}
+  :env2       {:signal :trigger :note "Same"}}
+
+ :device/modes
+ {:paraphonic {:voices 2    :note "Two MIDI notes → OSC1 and OSC2 through shared filter"}
+  :poly-chain {:max 16      :note "Multiple Neutrons chained via MIDI THRU; all on same channel"}}
+
+ :device/map-source    "Behringer Neutron User Manual (firmware v2.0.x) — behringer.com"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

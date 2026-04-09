@@ -1,0 +1,74 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Behringer Kobol Expander — cljseq device map
+;;
+;; RSF Kobol Expander clone. 32 Eurorack-compatible patchbay jacks (3.5mm).
+;; SynthTribe-compatible (same family as Neutron/Proton).
+;; Dual paraphonic: two independent VCO pitch CVs from MIDI.
+;;
+;; NOTE: PARTIAL DATA — Behringer has not published a full CC table for this
+;; device. CC 1 and CC 64 are confirmed by product page; full CC list (if any
+;; additional CCs exist) is not publicly documented. SysEx model ID is also
+;; unpublished. Filed as :medium confidence until official manual is available.
+;;
+;; Source: Behringer product page (behringer.com) + retailer specs + forum
+;; Confidence: Medium (CC 1/64 confirmed; full CC list and SysEx model ID unknown)
+
+{:device/id           :behringer/kobol-expander
+ :device/name         "Behringer Kobol Expander"
+ :device/manufacturer "Behringer"
+ :device/type         :semi-modular
+ :device/voices       2             ; duophonic (dual VCO pitch CVs)
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ :midi/channel        1             ; set via 4 rear DIP switches (ch 1–16)
+                                    ; overridable via SynthTribe app
+
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on false :note-off false}
+  :aftertouch {:channel-pressure false :poly-key-pressure false}}
+
+ :midi/pitch-bend
+ {:receive    true
+  :configurable true
+  :configure-via :sysex}
+
+ :midi/clock {:receive false :send false}
+
+ :midi/program-change {:receive false :send false}
+
+ ;; PARTIAL: only CC 1 and CC 64 confirmed. Additional CCs unknown.
+ :midi/cc
+ [{:cc 1   :path [:mod-wheel]     :range [0 127] :cc-type :global
+   :note "Confirmed; possibly routable to ASSIGN output via SynthTribe"}
+  {:cc 64  :path [:sustain-pedal] :range [0 127] :cc-type :global
+   :note "≥64 = on; confirmed"}]
+
+ :midi/sysex
+ {:manufacturer-id  [0x00 0x20 0x32]  ; Behringer — confirmed
+  :model-id         :unknown           ; not publicly documented by Behringer
+  :synthtribe       true               ; SynthTribe app for firmware + config
+  :note             "SysEx model ID unpublished; SynthTribe manages config over USB MIDI"}
+
+ :midi/ports
+ {:din-in   true
+  :din-thru true
+  :din-out  false
+  :usb      true}
+
+ :device/cv-outputs
+ {:osc1-pitch {:signal :1v-oct  :jack "3.5mm" :note "Voice 1 — 1V/oct from MIDI note"}
+  :osc2-pitch {:signal :1v-oct  :jack "3.5mm" :note "Voice 2 — independent pitch in paraphonic mode"}
+  :gate       {:signal :gate    :jack "3.5mm" :note "MIDI Note On/Off"}}
+
+ :device/patchbay
+ {:jacks 32 :format "Eurorack-compatible 3.5mm TS" :cv-in [:vcf-freq :resonance :vco-pitch :vca-level]}
+
+ :device/modes
+ {:poly-chain {:max 16 :note "Up to 16 units chained via MIDI THRU"}}
+
+ :device/map-source    "Behringer product page + retailer specs — behringer.com"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :medium}

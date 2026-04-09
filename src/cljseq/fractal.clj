@@ -2,7 +2,7 @@
 (ns cljseq.fractal
   "cljseq fractal sequencer — self-similar branching sequence generation.
 
-  Inspired by the Teenage Engineering Bloom sequencer (see doc/attribution.md).
+  Inspired by the Qu-Bit Electronix Bloom sequencer (see doc/attribution.md).
   Generates sequences that exhibit self-similar (fractal) branching structure
   via deterministic transformations of a hand-programmed trunk sequence.
   Variability comes from navigating different paths through the branch tree

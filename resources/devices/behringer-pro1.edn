@@ -1,0 +1,95 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Behringer Pro-1 — cljseq device map
+;;
+;; Sequential Circuits Pro-One clone. Semi-modular with patchbay.
+;; Minimal MIDI: only CC 1 (mod wheel) — no CC 33 LSB, no CC 64 sustain.
+;; No velocity sensitivity. SysEx is write-only (pitch bend range only confirmed).
+;; Primary cljseq use: MIDI note → KB CV OUT + GATE for semi-modular patching.
+;;
+;; Source: Behringer Pro-1 QSG + SunnyS ynths Ctrlr panel docs v2.3 — behringer.com
+;; SysEx: Behringer ID [0x00 0x20 0x32], model [0x00 0x01 0x08]
+;; Confidence: High (CC/SysEx from official QSG + Ctrlr live capture)
+
+{:device/id           :behringer/pro1
+ :device/name         "Behringer Pro-1"
+ :device/manufacturer "Behringer"
+ :device/type         :semi-modular
+ :device/voices       1             ; monophonic; poly-chainable up to 16
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; MIDI channel set via 4 rear DIP switches (ch 1–16); factory default = ch 1
+ :midi/channel        1
+
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on false :note-off false}  ; not velocity sensitive
+  :aftertouch {:channel-pressure false :poly-key-pressure false}}
+
+ :midi/pitch-bend
+ {:receive           true
+  :default-semitones 12   ; default is ±12 semitones (wider than most)
+  :max-semitones     12
+  :configurable      true
+  :configure-via     :sysex}
+
+ :midi/clock {:receive false :send false}
+
+ :midi/program-change {:receive false :send false}
+
+ ;; Only CC 1 received — no CC 33 (LSB), no CC 64 (sustain)
+ ;; Confirmed: "does not support NRPN/CC/SysEx parameter messages"
+ :midi/cc
+ [{:cc 1  :path [:mod-wheel]  :range [0 127]  :cc-type :global
+   :note "Only CC received; routes to mod wheel paths in synthesis matrix"}]
+
+ ;; SysEx: write-only (cannot query state)
+ ;; Only 3 global settings: pitch bend range, note priority, MIDI clock routing
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x32]
+  :model-id        [0x00 0x01 0x08]
+  :bidirectional   false   ; write-only — no query/read capability
+  :synthtribe      true
+  :commands
+  [{:name  :pitch-bend-range
+    :frame "F0 00 20 32 00 01 08 11 <value:00-0C> 00 F7"
+    :range [0 12]    ; 0–12 semitones
+    :default 12      ; Pro-1 default is ±12 (wider than Neutron's ±2)
+    :note  "Confirmed from Ctrlr panel live SysEx capture"}
+   {:name  :key-priority
+    :frame "F0 00 20 32 00 01 08 12 <value> 00 F7"
+    :values {0 :low 1 :high 2 :last}
+    :note  "Inferred from TD-3 family pattern; not directly confirmed"}
+   {:name  :midi-clock-output
+    :note  "Configurable via SynthTribe; SysEx command byte not confirmed"}]}
+
+ :midi/ports
+ {:din-in   true
+  :din-thru true
+  :din-out  false   ; no MIDI OUT — only THRU
+  :usb      true}   ; class-compliant; input/output
+
+ :device/cv-outputs
+ {:kb-cv      {:signal :1v-oct  :jack "3.5mm" :note "1V/oct from MIDI note; drives VCOs internally, available as KB CV OUT"}
+  :gate       {:signal :gate    :jack "3.5mm" :voltage "+5V" :note "MIDI Note On → gate; drives EGs"}
+  :lfo-out    {:signal :lfo     :jack "3.5mm" :note "LFO CV output; waveform-dependent"}
+  :filter-env {:signal :env     :jack "3.5mm" :note "Filter envelope output"}
+  :amp-env    {:signal :env     :jack "3.5mm" :note "Amp envelope output"}}
+
+ :device/cv-inputs
+ {:mod-wh-cv  "Mod wheel CV input"
+  :osc-cv     "1V/oct pitch CV input — overrides MIDI pitch"
+  :gate-clk   "Gate/clock input (active when REPEAT/EXT engaged)"
+  :lfo-cv     "LFO rate CV input"
+  :cutoff-cv  "VCF cutoff CV input"
+  :resonance-cv "VCF resonance CV input"
+  :ext-audio  "External audio input to mixer"}
+
+ :device/modes
+ {:poly-chain {:max 16 :name "Pro-16"
+               :note "Multiple Pro-1 units chained; POLY/MONO switch + SynthTribe config"}}
+
+ :device/map-source    "Behringer Pro-1 QSG + SunnyS ynths Ctrlr panel v2.3 — behringer.com"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

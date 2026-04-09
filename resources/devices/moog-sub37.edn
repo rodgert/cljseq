@@ -1,0 +1,322 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Moog Subsequent 37 — cljseq device map
+;;
+;; NOTE: The Subsequent 25 is a different instrument with a different MIDI
+;; implementation. See moog-subsequent25.edn. Do not treat them as equivalent.
+;;
+;; Source: Moog Sub 37 Owner's Manual v1.1
+;;   https://cdn.inmusicbrands.com/Moog/BackOffice/SUB_37_MANUAL_v1.1_0.pdf
+;;   (inMusic CDN — Moog Music acquired by inMusic Brands)
+;; Confidence: High. Full CC and NRPN tables extracted from official manual.
+;;
+;; Key quirks:
+;;   - Knobs transmit CC (default) or NRPN (switchable via MIDI Menu 3)
+;;   - 14-bit high-resolution CC mode: each MSB CC has a paired LSB CC at MSB+32
+;;     (e.g. CC 3 = LFO1 Rate MSB, CC 35 = LFO1 Rate LSB); default is 7-bit
+;;   - CC 107/108 control pitch bend range up/down independently per preset
+;;   - NRPN numbers start at 402; MSB = floor(N/128), LSB = N mod 128
+;;   - SysEx manufacturer ID: 0x04 (Moog Music Inc.)
+
+{:device/id           :moog/sub37
+ :device/name         "Moog Sub 37"
+ :device/manufacturer "Moog Music"
+ :device/type         :synthesizer
+ :device/voices       1             ; monophonic or duophonic
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1
+ :midi/poly-mode      :mono         ; also :duo
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes
+ ;; -------------------------------------------------------------------------
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on true :note-off false}
+  :aftertouch {:channel-pressure true :poly-key-pressure false}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Pitch bend
+ ;; -------------------------------------------------------------------------
+ :midi/pitch-bend
+ {:default-semitones-up   2
+  :default-semitones-down 2
+  :max-semitones          24
+  :configurable-per-preset true
+  :bend-up-cc   107     ; CC 107 sets pitch bend up range (0–24 semitones)
+  :bend-down-cc 108     ; CC 108 sets pitch bend down range (0–24 semitones)
+  :bend-dest    :note   ; configurable: NONE / OSC1 / OSC2 / BOTH per preset}
+  }
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive true
+  :send    false
+  :uses    [:lfo-sync :arp :sequencer]}
+
+ ;; -------------------------------------------------------------------------
+ ;; Program change
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:receive    true
+  :send       true
+  :each-configurable true    ; send and receive independently switchable
+  :range      [0 255]        ; 256 presets — 16 banks × 16 patches
+  :bank-select true
+  :bank-msb   0
+  :bank-lsb   32}
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x04]   ; Moog Music Inc.
+  :purpose         [:patch-dump :patch-load :sequence-dump :global-settings
+                    :bulk-dump :firmware-update]}
+
+ ;; -------------------------------------------------------------------------
+ ;; 14-bit CC mode note
+ ;; -------------------------------------------------------------------------
+ ;; When 14-bit mode is enabled (MIDI Menu 3), each continuous CC below
+ ;; transmits its MSB on the listed CC# and LSB on CC#+32.
+ ;; The :cc-lsb key marks paired LSB CCs (receive-only in 7-bit mode).
+ ;; -------------------------------------------------------------------------
+
+ :midi/cc
+
+ [;; --- Standard / Global ---------------------------------------------------
+  {:cc 0   :path [:bank-select :msb]    :range [0 127] :cc-type :global}
+  {:cc 1   :path [:mod-wheel]           :range [0 127] :default 0   :cc-type :global}
+  {:cc 3   :path [:lfo1 :rate]          :range [0 127] :default 64  :cc-type :fixed
+   :note "Also selects clock division when LFO1 is synced (see LFO clock div table)"}
+  {:cc 4   :path [:mod1 :pitch-amt]     :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 5   :path [:glide :time]         :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 7   :path [:master-volume]       :range [0 127] :default 100 :cc-type :global}
+  {:cc 8   :path [:lfo2 :rate]          :range [0 127] :default 64  :cc-type :fixed
+   :note "Also selects clock division when LFO2 is synced"}
+  {:cc 9   :path [:osc1 :wave]          :range [0 127] :cc-type :fixed}
+  {:cc 11  :path [:mod1 :filter-amt]    :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 12  :path [:osc2 :freq]          :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 13  :path [:osc2 :beat-freq]     :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 14  :path [:osc2 :wave]          :range [0 127] :cc-type :fixed}
+  {:cc 15  :path [:mod2 :pitch-amt]     :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 16  :path [:mod2 :filter-amt]    :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 17  :path [:mod2 :pgm-dest-amt]  :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 18  :path [:filter :multidrive]  :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 19  :path [:filter :cutoff]      :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 20  :path [:mod1 :pgm-dest-amt]  :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 21  :path [:filter :resonance]   :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 22  :path [:filter :kb-amt]      :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 23  :path [:filter-eg :attack]   :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 24  :path [:filter-eg :decay]    :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 25  :path [:filter-eg :sustain]  :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 26  :path [:filter-eg :release]  :range [0 127] :default 32  :cc-type :fixed}
+  {:cc 27  :path [:filter-eg :amount]   :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 28  :path [:amp-eg :attack]      :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 29  :path [:amp-eg :decay]       :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 30  :path [:amp-eg :sustain]     :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 31  :path [:amp-eg :release]     :range [0 127] :default 32  :cc-type :fixed}
+  {:cc 32  :path [:bank-select :lsb]    :range [0 127] :cc-type :global
+   :note "0 = banks 1–8; 1 = banks 9–16"}
+
+  ;; --- 14-bit LSB CCs (CC 33–63 = LSBs for CC 1–31 in 14-bit mode) --------
+  ;; These are receive-only in 7-bit mode and used for LSB data in 14-bit mode.
+  ;; Listing key ones:
+  {:cc 33  :path [:mod-wheel :lsb]      :cc-lsb true :cc-type :global}
+  {:cc 35  :path [:lfo1 :rate :lsb]     :cc-lsb true :cc-type :fixed}
+  {:cc 36  :path [:glide :time :lsb]    :cc-lsb true :cc-type :fixed}
+  {:cc 39  :path [:master-volume :lsb]  :cc-lsb true :cc-type :global}
+  {:cc 40  :path [:lfo2 :rate :lsb]     :cc-lsb true :cc-type :fixed}
+  {:cc 51  :path [:filter :cutoff :lsb] :cc-lsb true :cc-type :fixed}
+
+  ;; --- Switches and modes (7-bit only, always) -----------------------------
+  {:cc 64  :path [:hold-pedal]          :range [0 127] :default 0 :cc-type :global
+   :note "≥64 = on"}
+  {:cc 65  :path [:glide :on]           :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 69  :path [:arp :latch]          :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 70  :path [:mod1 :osc-select]    :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :osc1+osc2}
+            {:value 43  :label :osc1}
+            {:value 85  :label :osc2}]}
+  {:cc 71  :path [:mod1 :source]        :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :triangle-lfo}
+            {:value 21  :label :square-lfo}
+            {:value 43  :label :saw-lfo}
+            {:value 64  :label :ramp-lfo}
+            {:value 85  :label :sample-hold-lfo}
+            {:value 107 :label :filter-eg-pgm}]}
+  {:cc 72  :path [:mod2 :source]        :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :triangle-lfo}
+            {:value 21  :label :square-lfo}
+            {:value 43  :label :saw-lfo}
+            {:value 64  :label :ramp-lfo}
+            {:value 85  :label :sample-hold-lfo}
+            {:value 107 :label :filter-eg-pgm}]}
+  {:cc 73  :path [:arp :on]             :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 74  :path [:osc1 :octave]        :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :16-foot}
+            {:value 32 :label :8-foot}
+            {:value 64 :label :4-foot}
+            {:value 96 :label :2-foot}]}
+  {:cc 75  :path [:osc2 :octave]        :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :16-foot}
+            {:value 32 :label :8-foot}
+            {:value 64 :label :4-foot}
+            {:value 96 :label :2-foot}]}
+  {:cc 76  :path [:lfo1 :range]         :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :low}
+            {:value 43 :label :med}
+            {:value 85 :label :hi}]}
+  {:cc 77  :path [:osc2 :hard-sync]     :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 78  :path [:lfo2 :range]         :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :low}
+            {:value 43 :label :med}
+            {:value 85 :label :hi}]}
+  {:cc 79  :path [:filter-eg :kb-amt]   :range [0 127] :cc-type :fixed}
+  {:cc 80  :path [:amp-eg :kb-amt]      :range [0 127] :cc-type :fixed}
+  {:cc 81  :path [:osc :kb-reset]       :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 82  :path [:filter-eg :reset]    :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 83  :path [:amp-eg :reset]       :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 85  :path [:glide :type]         :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :lcr}
+            {:value 43 :label :lct}
+            {:value 85 :label :exp}]}
+  {:cc 86  :path [:filter-eg :vel-amt]  :range [0 127] :cc-type :fixed}
+  {:cc 87  :path [:amp-eg :vel-amt]     :range [0 127] :cc-type :fixed}
+  {:cc 88  :path [:mod2 :osc-select]    :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :osc1+osc2}
+            {:value 43 :label :osc1}
+            {:value 85 :label :osc2}]}
+  {:cc 89  :path [:kb :octave]          :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :-2-oct}
+            {:value 26  :label :-1-oct}
+            {:value 51  :label :0-oct}
+            {:value 77  :label :+1-oct}
+            {:value 102 :label :+2-oct}]}
+  {:cc 91  :path [:mod1 :dest]          :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :lfo2-rate}
+            {:value 18  :label :vca-level}
+            {:value 37  :label :osc1-wave}
+            {:value 55  :label :osc1+osc2-wave}
+            {:value 73  :label :osc2-wave}
+            {:value 91  :label :noise-level}
+            {:value 110 :label :eg-time-pgm}]}
+  {:cc 92  :path [:mod2 :dest]          :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :lfo1-rate}
+            {:value 18  :label :vca-level}
+            {:value 37  :label :osc1-wave}
+            {:value 55  :label :osc1+osc2-wave}
+            {:value 73  :label :osc2-wave}
+            {:value 91  :label :noise-level}
+            {:value 110 :label :eg-time-pgm}]}
+  {:cc 93  :path [:lfo1 :kb-reset]      :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 94  :path [:glide :legato]       :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 95  :path [:lfo2 :kb-reset]      :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 102 :path [:glide :dest]         :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :osc1+osc2}
+            {:value 43 :label :osc1}
+            {:value 85 :label :osc2}]}
+  {:cc 103 :path [:filter-eg :delay]    :range [0 127] :cc-type :fixed}
+  {:cc 104 :path [:amp-eg :delay]       :range [0 127] :cc-type :fixed}
+  {:cc 105 :path [:filter-eg :hold]     :range [0 127] :cc-type :fixed}
+  {:cc 106 :path [:amp-eg :hold]        :range [0 127] :cc-type :fixed}
+  {:cc 107 :path [:pitch-bend :up-semitones]   :range [0 24] :cc-type :fixed
+   :note "Sets pitch bend up range for current preset; 0–24 semitones"}
+  {:cc 108 :path [:pitch-bend :down-semitones] :range [0 24] :cc-type :fixed
+   :note "Sets pitch bend down range for current preset; 0–24 semitones"}
+  {:cc 109 :path [:filter :slopes]      :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :-6db}
+            {:value 32 :label :-12db}
+            {:value 64 :label :-18db}
+            {:value 96 :label :-24db}]}
+  {:cc 110 :path [:osc :duo-mode]       :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 111 :path [:kb :ctrl-lo-hi]      :range [0 127] :cc-type :fixed
+   :values [{:value 0  :label :neither}
+            {:value 32 :label :lo}
+            {:value 64 :label :hi}]}
+  {:cc 112 :path [:filter-eg :multi-trig] :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 113 :path [:amp-eg :multi-trig]  :range [0 127] :default 0 :cc-type :fixed
+   :note "≥64 = on"}
+  {:cc 114 :path [:mixer :osc1-level]   :range [0 127] :cc-type :fixed}
+  {:cc 115 :path [:mixer :osc1-sub-level] :range [0 127] :cc-type :fixed}
+  {:cc 116 :path [:mixer :osc2-level]   :range [0 127] :cc-type :fixed}
+  {:cc 117 :path [:mixer :noise-level]  :range [0 127] :cc-type :fixed}
+  {:cc 118 :path [:mixer :feedback-ext-level] :range [0 127] :cc-type :fixed}
+  {:cc 119 :path [:kb :transpose]       :range [52 77] :cc-type :fixed
+   :note "Receive only; 52=−12 semitones, 64=0, 77=+13 semitones"}
+  {:cc 122 :path [:local-control]       :range [0 127] :cc-type :global
+   :note "0 = off; 127 = on"}]
+
+ ;; -------------------------------------------------------------------------
+ ;; NRPN — key assignments (partial; see manual pages 56–59 for full list)
+ ;; NRPNs start at 402. Format: CC 99 (MSB) + CC 98 (LSB) + CC 6 (data MSB)
+ ;; All values 16384 unless noted (14-bit). Binary values: 0=off, 1=on.
+ ;; -------------------------------------------------------------------------
+ :midi/nrpn
+ [;; Arpeggiator
+  {:nrpn 403 :nrpn-msb 3 :nrpn-lsb 19 :path [:arp :rate]       :range 16384}
+  {:nrpn 404 :nrpn-msb 3 :nrpn-lsb 20 :path [:arp :sync]       :range 2}
+  {:nrpn 405 :nrpn-msb 3 :nrpn-lsb 21 :path [:arp :range]      :range 7}
+  {:nrpn 406 :nrpn-msb 3 :nrpn-lsb 22 :path [:arp :back-forth] :range 2}
+  {:nrpn 407 :nrpn-msb 3 :nrpn-lsb 23 :path [:arp :bf-mode]    :range 2}
+  {:nrpn 408 :nrpn-msb 3 :nrpn-lsb 24 :path [:arp :invert]     :range 2}
+  {:nrpn 409 :nrpn-msb 3 :nrpn-lsb 25 :path [:arp :pattern]    :range 6}
+  {:nrpn 412 :nrpn-msb 3 :nrpn-lsb 28 :path [:arp :gate-len]   :range 16384}
+  {:nrpn 413 :nrpn-msb 3 :nrpn-lsb 29 :path [:arp :clk-div]    :range 21}
+  ;; Glide
+  {:nrpn 417 :nrpn-msb 3 :nrpn-lsb 33 :path [:glide :time]     :range 16384}
+  {:nrpn 418 :nrpn-msb 3 :nrpn-lsb 34 :path [:glide :osc]      :range 3}
+  {:nrpn 419 :nrpn-msb 3 :nrpn-lsb 35 :path [:glide :type]     :range 3}
+  {:nrpn 422 :nrpn-msb 3 :nrpn-lsb 38 :path [:glide :on]       :range 2}
+  ;; LFO 1
+  {:nrpn 423 :nrpn-msb 3 :nrpn-lsb 39 :path [:lfo1 :rate]      :range 16384}
+  {:nrpn 424 :nrpn-msb 3 :nrpn-lsb 40 :path [:lfo1 :range]     :range 3}
+  {:nrpn 425 :nrpn-msb 3 :nrpn-lsb 41 :path [:lfo1 :sync]      :range 2}
+  {:nrpn 426 :nrpn-msb 3 :nrpn-lsb 42 :path [:lfo1 :kb-reset]  :range 2}
+  {:nrpn 427 :nrpn-msb 3 :nrpn-lsb 43 :path [:lfo1 :clk-div]   :range 21}
+  ;; LFO 2
+  {:nrpn 448 :nrpn-msb 3 :nrpn-lsb 64 :path [:lfo2 :rate]      :range 16384}
+  {:nrpn 449 :nrpn-msb 3 :nrpn-lsb 65 :path [:lfo2 :range]     :range 3}
+  {:nrpn 450 :nrpn-msb 3 :nrpn-lsb 66 :path [:lfo2 :sync]      :range 2}
+  ;; Filter
+  {:nrpn 499 :nrpn-msb 3 :nrpn-lsb 115 :path [:filter :cutoff]    :range 16384}
+  {:nrpn 500 :nrpn-msb 3 :nrpn-lsb 116 :path [:filter :resonance] :range 16384}
+  {:nrpn 501 :nrpn-msb 3 :nrpn-lsb 117 :path [:filter :drive]     :range 16384}
+  {:nrpn 502 :nrpn-msb 3 :nrpn-lsb 118 :path [:filter :slope]     :range 4}
+  {:nrpn 503 :nrpn-msb 3 :nrpn-lsb 119 :path [:filter-eg :amount] :range 16384}
+  ;; Filter EG
+  {:nrpn 505 :nrpn-msb 3 :nrpn-lsb 121 :path [:filter-eg :attack]  :range 16384}
+  {:nrpn 506 :nrpn-msb 3 :nrpn-lsb 122 :path [:filter-eg :decay]   :range 16384}
+  {:nrpn 507 :nrpn-msb 3 :nrpn-lsb 123 :path [:filter-eg :sustain] :range 16384}
+  {:nrpn 508 :nrpn-msb 3 :nrpn-lsb 124 :path [:filter-eg :release] :range 16384}
+  {:nrpn 509 :nrpn-msb 3 :nrpn-lsb 125 :path [:filter-eg :delay]   :range 16384}
+  {:nrpn 510 :nrpn-msb 3 :nrpn-lsb 126 :path [:filter-eg :hold]    :range 16384}]
+
+ ;; -------------------------------------------------------------------------
+ ;; Metadata
+ ;; -------------------------------------------------------------------------
+ :device/firmware-version "1.1"
+ :device/map-source       "Moog Sub 37 Owner's Manual v1.1 — cdn.inmusicbrands.com"
+ :device/map-version      "2026-04-05"}

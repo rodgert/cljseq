@@ -19,9 +19,14 @@ the following convention applies:
 
 | Hardware product              | Owner                    | cljseq abstraction           |
 |-------------------------------|--------------------------|------------------------------|
-| Bloom step sequencer          | Teenage Engineering AB   | `deffractal` / `cljseq.fractal` |
+| Bloom step sequencer          | Qu-Bit Electronix        | `deffractal` / `cljseq.fractal` |
 | Marbles random sampler        | Mutable Instruments      | `defstochastic` / `cljseq.stochastic` |
 | Labyrinth sequencer           | Moog Music Inc.          | `defflux` / `cljseq.flux`    |
+| Mimeophon audio repeater      | MakeNoise                | `deftemporal-buffer` / `cljseq.temporal-buffer` |
+| Cosmos drifting memory station | Soma Laboratory          | `deftemporal-buffer` / `cljseq.temporal-buffer` |
+| Spectraphon spectral processor | MakeNoise                | `defspectral-resynthesizer` / `cljseq.spectral` |
+| Panharmonium spectral oscillator | Rossum Electro-Music   | `defspectral-resynthesizer` / `cljseq.spectral` |
+| GTE (Gestural Time Extractor)  | MakeNoise                | `defthreshold-extractor` / `cljseq.extractor`   |
 
 New entries should be added to this table whenever a hardware-inspired abstraction
 is named.
@@ -35,8 +40,8 @@ Pocket Operator devices (PO-14 Sub, PO-16 Factory, etc.) are products of
 Teenage Engineering AB. Referenced in cljseq design as examples of compact,
 expressive performance devices.
 
-### Teenage Engineering Bloom Sequencer
-The Bloom step sequencer is a product of Teenage Engineering AB. The cljseq
+### Qu-Bit Electronix Bloom
+The Bloom (v2) step sequencer is a product of Qu-Bit Electronix. The cljseq
 `cljseq.fractal` namespace and `deffractal` abstraction are directly inspired
 by Bloom's self-similar branching sequence model. The design document §24
 retains the subtitle "Bloom-Inspired" as explicit attribution. The name
@@ -69,6 +74,47 @@ by the Labyrinth's play head / write head separation model, CORRUPT bit-level
 mutation, and BIT FLIP side-channel trigger. The design document §26 retains the
 subtitle "Labyrinth-Inspired" as explicit attribution. The name "flux" was chosen
 for the cljseq API to avoid trademark conflict.
+
+### MakeNoise Mimeophon
+The Mimeophon ("Stereo Multi-Zone Color Audio Repeater", 2019) is a product of
+MakeNoise. The cljseq `cljseq.temporal-buffer` namespace and `deftemporal-buffer`
+abstraction are directly inspired by the Mimeophon's eight overlapping zone
+topology, Rate/tape-Doppler coupling, Color per-pass event transform, Halo smear
+with threshold-based feedback injection, Hold mode, and Flip (retrograde) mode.
+The name "temporal-buffer" was chosen for the cljseq API to avoid trademark conflict.
+The R&R section covering this abstraction retains "(Mimeophon-Inspired)" as
+explicit attribution.
+
+### Soma Laboratory Cosmos
+The Cosmos ("Drifting Memory Station") is a product of Soma Laboratory. The
+Memory Field preset within `cljseq.temporal-buffer` is directly inspired by the
+Cosmos' multiple drifting playback heads, probabilistic event decay, and
+scale-gravity pitch drift model. Referenced in `design-memory-field.md` (now
+superseded) and `design-temporal-buffer.md` §12.
+
+### MakeNoise GTE (Gestural Time Extractor)
+The GTE is a product of MakeNoise (released 2026-03-26). The planned
+`cljseq.extractor` namespace and `defthreshold-extractor` abstraction are directly
+inspired by the GTE's threshold-based gate extraction from continuous CV signals —
+watching a voltage source and firing a gate each time the signal crosses a
+configurable threshold band (Space parameter) with configurable crossing direction.
+The name "extractor" was chosen for the cljseq API to avoid trademark conflict.
+
+### MakeNoise Spectraphon
+The Spectraphon is a product of MakeNoise. The planned `cljseq.spectral` namespace
+and `defspectral-resynthesizer` abstraction are directly inspired by the
+Spectraphon's SAM (Spectral Analysis Mode) / SAO (Spectral Array Oscillator) dual
+architecture, its Array system for storing and recalling up to 1024 named spectral
+snapshots, and its separate Odd/Even harmonic output routing. The name "spectral"
+was chosen for the cljseq API to avoid trademark conflict.
+
+### Rossum Electro-Music Panharmonium
+The Panharmonium is a product of Rossum Electro-Music. The planned
+`cljseq.spectral` namespace and `defspectral-resynthesizer` abstraction are
+directly inspired by the Panharmonium's spectral lag processor (Blur parameter),
+Voice density control, Center/Bandwidth pitch window, and self-sustaining feedback
+behavior at unity gain. The name "spectral" was chosen for the cljseq API to avoid
+trademark conflict.
 
 ### Conductive Labs NDLR
 The NDLR (Next Dimensional Loop Rider) is a product of Conductive Labs.

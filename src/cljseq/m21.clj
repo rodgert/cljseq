@@ -148,11 +148,24 @@
       (.flush ^BufferedWriter writer)
       (json/read-str (.readLine ^BufferedReader reader)))))
 
-(defn- ensure-server!
+(defn ensure-server!
   "Start the m21 server if it is not already running."
   []
   (when-not (server-running?)
     (open-server!)))
+
+(defn server-call!
+  "Send an arbitrary op request to the m21 server and return the response map.
+  Ensures the server is running first. Keys are keywordized in the response.
+
+  Used by cljseq.midi-repair and other namespaces that extend the m21 protocol.
+
+  Example:
+    (server-call! {:op \"parse-midi\" :path \"/abs/path/file.mid\"})"
+  [req]
+  (ensure-server!)
+  (let [resp (m21-request! req)]
+    (into {} (map (fn [[k v]] [(keyword k) v]) resp))))
 
 (defn stop-server!
   "Send the shutdown op to the m21 server and wait for it to exit.

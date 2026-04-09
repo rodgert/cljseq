@@ -1,0 +1,101 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Novation Peak — cljseq device map
+;;
+;; Sources:
+;;   Peak 1.2 Manual English:
+;;     https://fael-downloads-prod.focusrite.com/customer/prod/s3fs-public/downloads/Peak%201.2%20Manual%20-%20English.pdf
+;;   Summit & Peak 2.1 Firmware Addendum:
+;;     https://fael-downloads-prod.focusrite.com/customer/prod/downloads/summit_peak_2.1_firmware_update_addendum_v1_english_en.pdf
+;; Confidence: High.
+;;
+;; The Peak and Summit share an IDENTICAL CC and NRPN parameter map for all
+;; synthesizer parameters. This file contains the complete Peak-specific
+;; metadata. For the full CC and NRPN tables, see novation-summit.edn —
+;; they are identical and not repeated here to avoid duplication.
+;;
+;; Peak vs Summit differences:
+;;   - Peak: mono-timbral (1 MIDI channel); Summit: bi-timbral (3 channels)
+;;   - Peak: 8 voices; Summit: 16 voices (2 × Peak engine)
+;;   - Peak: no Seq Local mode; Summit: has Seq Local mode
+;;   - Peak: no polyphonic aftertouch receive; Summit: poly AT received
+;;   - Peak: no external audio input; Summit: dual stereo inputs
+;;   - Peak: no CV input; Summit: ±5V Eurorack CV input
+;;   - Summit NRPN 64:3 (Aftertouch Scale) does not apply to Peak
+
+{:device/id           :novation/peak
+ :device/name         "Novation Peak"
+ :device/manufacturer "Novation"
+ :device/type         :synthesizer
+ :device/voices       8
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel (single channel, unlike Summit)
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1
+ :midi/poly-mode      :poly
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes
+ ;; -------------------------------------------------------------------------
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on true :note-off false}
+  :aftertouch {:channel-pressure true :poly-key-pressure false}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Pitch bend — see novation-summit.edn for NRPN details (identical)
+ ;; -------------------------------------------------------------------------
+ :midi/pitch-bend
+ {:default-semitones  12
+  :max-semitones      24
+  :configurable-per-oscillator true}
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive true
+  :send    true
+  :uses    [:lfo-sync :arp]}
+
+ ;; -------------------------------------------------------------------------
+ ;; Program change
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:receive    true
+  :send       true
+  :each-configurable true
+  :range      [0 127]
+  :bank-select true
+  :bank-count 4                    ; Banks A, B, C, D — 128 patches each
+  :bank-msb   0
+  :bank-lsb   32}
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x29]   ; Novation/Focusrite
+  :purpose         [:patch-dump :patch-load]
+  :note "Patch dump format not publicly documented; use Novation Components software"}
+
+ ;; -------------------------------------------------------------------------
+ ;; CC and NRPN maps
+ ;; Identical to novation-summit.edn — refer to that file for the full tables.
+ ;; Key caveats apply equally to Peak:
+ ;;   - CC 38 conflict (Osc2 ModEnv2>Pitch vs NRPN Data Entry LSB)
+ ;;   - CC pairs for high-resolution parameters (primary CC + primary+32)
+ ;;   - NRPN notation: MSB:LSB
+ ;; -------------------------------------------------------------------------
+ :midi/cc-reference   :novation/summit   ; same CC map as Summit
+ :midi/nrpn-reference :novation/summit   ; same NRPN map as Summit
+
+ ;; -------------------------------------------------------------------------
+ ;; Metadata
+ ;; -------------------------------------------------------------------------
+ :device/firmware-version "2.1"
+ :device/map-source       "Novation Peak 1.2 Manual + 2.1 Firmware Addendum — fael-downloads-prod.focusrite.com"
+ :device/map-version      "2026-04-05"}

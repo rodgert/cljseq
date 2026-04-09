@@ -1,0 +1,134 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Boss ES-8 Effect Switching System — cljseq device map
+;;
+;; 8-loop true-bypass/buffer switcher with programmable MIDI I/O.
+;; No fixed CC map — uses a 12-slot user-programmable "Assign" system per patch.
+;; 800 patches (banks A0-J9 × 8 patches each). Patch MIDI: 8 outgoing MIDI messages
+;; per patch (channel + PC + Bank MSB/LSB + CC1 + CC2). Separate 7-bank × 128-entry
+;; PC Map for incoming PC→patch lookup.
+;;
+;; Primary cljseq use: loop-bypass orchestration; sends PC/CC to downstream pedals.
+;; Boss 500-series pedals (DD-500/RV-500/MD-500) in ES-8 loops are dual-addressable:
+;; ES-8 controls loop bypass; direct MIDI controls internal parameters independently.
+;;
+;; Source: Boss ES-8 Owner's Manual — boss.info
+;; SysEx: Roland ID 0x41, device ID 0x10 (default), model [0x00 0x00 0x00 0x14]
+;; Confidence: High (assign architecture confirmed; SysEx model from Roland sysex docs)
+
+{:device/id           :boss/es-8
+ :device/name         "Boss ES-8 Effect Switching System"
+ :device/manufacturer "Boss"
+ :device/type         :switcher
+ :device/role         :controller    ; primary role: routes loops + sends MIDI
+ :device/connectivity [:din-midi]
+
+ ;; MIDI channel for receive (patch select, CC assigns) — configurable 1-16
+ :midi/channel        1
+
+ :midi/program-change
+ {:receive true
+  :send    true
+  :receive-note "Incoming PC triggers PC Map lookup (7 banks × 128 entries → patch number)"
+  :send-note    "Each patch can send up to 8 outgoing MIDI messages on patch change"}
+
+ :midi/clock
+ {:receive false
+  :send    true
+  :note    "ES-8 can transmit MIDI clock derived from internal tap tempo / BPM assign target"}
+
+ :midi/sysex
+ {:manufacturer-id [0x41]           ; Roland
+  :device-id       0x10             ; default; configurable
+  :model-id        [0x00 0x00 0x00 0x14]
+  :note            "Roland-format SysEx for bulk patch dump/load. Not required for real-time control."}
+
+ :midi/ports
+ {:din-in   true
+  :din-thru false   ; no MIDI THRU — dedicated MIDI OUT only
+  :din-out  true
+  :usb      false}
+
+ ;; No fixed CC map — all CC behavior is user-programmed via Assign system
+ :midi/cc-architecture :assign-system
+
+ ;; ASSIGN SYSTEM
+ ;; Each patch has 12 assign slots. Each slot maps one source to one target.
+ ;; Source: any CC 0-127 on any channel, or footswitch (FS1-FS5 + ext)
+ ;; Target: any of the assign targets below
+ ;; Range: source 0-63 = off/low, 64-127 = on/high (binary targets)
+ ;;        or full 0-127 sweep for continuous targets (BPM, expression)
+ :es8/assign-system
+ {:slots-per-patch 12
+  :source-types
+  [:cc-0-127     ; incoming CC on any channel
+   :footswitch   ; FS1-FS5 + external FS/exp
+   :expression]  ; expression pedal (EXP1/EXP2 jacks)
+
+  :target-categories
+  [{:category :loop-bypass
+    :targets [:L1 :L2 :L3 :L4 :L5 :L6 :L7 :L8 :LV]
+    :note "Toggle or momentary bypass per loop; LV = volume loop"}
+   {:category :loop-mute
+    :targets [:L1-mute :L2-mute :L3-mute :L4-mute :L5-mute :L6-mute :L7-mute :L8-mute]
+    :note "Mute loop output without full bypass"}
+   {:category :patch-select
+    :targets [:bank-up :bank-down :patch-up :patch-down :patch-direct]
+    :note "Navigate patches from incoming MIDI or footswitch"}
+   {:category :midi-cc-thru
+    :note "Route incoming CC value to a CC number on specified output channel"}
+   {:category :bpm
+    :note "Set internal BPM from 0-127 mapped to BPM range"}
+   {:category :output-level
+    :targets [:master-volume]
+    :note "Expression pedal → master output level"}]}
+
+ ;; PATCH MIDI — per-patch outgoing MIDI
+ ;; Each of the 800 patches can send up to 8 MIDI messages on activation.
+ ;; Each slot: channel (1-16) + Program Change + Bank MSB + Bank LSB + CC1# + CC1val + CC2# + CC2val
+ :es8/patch-midi
+ {:slots-per-patch  8
+  :message-types    [:program-change :bank-select-msb :bank-select-lsb :cc :note-on]
+  :note             "All 8 slots fire simultaneously on patch activation; used to set downstream pedals"}
+
+ ;; PC MAP — incoming PC → patch routing
+ ;; 7 banks (A-G) × 128 PC numbers; each entry points to any of 800 patches
+ :es8/pc-map
+ {:banks    7
+  :entries-per-bank 128
+  :note     "Allows arbitrary remapping of incoming PC numbers to ES-8 patches"}
+
+ ;; PHYSICAL — loops and jacks
+ :es8/loops
+ {:count        8
+  :labels       [:L1 :L2 :L3 :L4 :L5 :L6 :L7 :L8]
+  :volume-loop  :LV              ; LV loop: expression-controlled level (100kΩ send)
+  :true-bypass  true             ; hardware relay true bypass per loop
+  :buffer       true             ; optional: buffer mode bypasses relay
+  :send-return  "1/4\" mono TS jacks (send + return per loop)"}
+
+ :es8/control-jacks
+ {:ctl-1    "CTL1: footswitch (TS) or expression (TRS)"
+  :ctl-2    "CTL2: footswitch (TS) or expression (TRS)"
+  :ext-fs   "EXT FS: 3-button external footswitch (TRS)"
+  :midi-in  "MIDI IN 5-pin DIN"
+  :midi-out "MIDI OUT 5-pin DIN"}
+
+ ;; PATCH STORAGE
+ :es8/patches
+ {:total   800
+  :banks   10               ; A-J
+  :per-bank 80              ; 10 sub-banks × 8 patches each
+  :internal true
+  :usb-backup true}         ; bulk dump/restore via SysEx over USB
+
+ :device/notes
+ {:dual-addressable   "Boss 500-series pedals in ES-8 loops are dual-addressable: ES-8 bypasses loop; direct MIDI controls parameters. Both paths are orthogonal."
+  :no-fixed-cc-map    "ES-8 receives no fixed CC numbers; all CC response is user-programmed in Assign system"
+  :patch-midi-timing  "All patch MIDI messages fire simultaneously on patch change; ordering not guaranteed"
+  :pc-map-note        "Incoming PC numbers pass through PC Map before resolving to patch; 7 independent banks allow different mappings per external controller"
+  :volume-loop        "LV loop uses 100kΩ send impedance; designed for passive expression-style level control"}
+
+ :device/map-source    "Boss ES-8 Owner's Manual — boss.info"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

@@ -1,0 +1,86 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Behringer 2600 / Grey Meanie — cljseq device map
+;;
+;; ARP 2600 clone. The original ARP 2600 had no MIDI; Behringer added a
+;; MIDI-to-CV engine compatible with the optional ARP 3620 keyboard connector.
+;; Zero MIDI CC support. SysEx is pitch-bend-range and key-priority only.
+;;
+;; !! IMPORTANT — MIDI CLOCK CAUSES NOTE DROPOUTS !!
+;; Do NOT send MIDI clock to the Behringer 2600. Receiving MIDI clock causes
+;; note dropouts and playback disruption. Exclude from all MIDI clock routes.
+;;
+;; Trigger output is 14V (not 5V) — compatible with Eurorack ≥5V inputs.
+;;
+;; Source: behringer.com + Behringer 2600 Ctrlr panel docs (SunnyS ynths v1.4)
+;; SysEx: Behringer ID [0x00 0x20 0x32], model [0x00 0x01 0x0B]
+;; Confidence: High (CC absence confirmed; SysEx pitch-bend cmd confirmed)
+
+{:device/id           :behringer/2600
+ :device/name         "Behringer 2600"
+ :device/aliases      ["Behringer 2600 Grey Meanie" "Behringer 2600 Blue Marvin"]
+ :device/manufacturer "Behringer"
+ :device/type         :semi-modular
+ :device/voices       2             ; mono + upper voice for paraphonic-style
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; MIDI channel set via 4 rear DIP switches (ch 1–16)
+ ;; Can be overridden via SynthTribe app
+ :midi/channel        1
+
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on false :note-off false}
+  :aftertouch {:channel-pressure false :poly-key-pressure false}}
+
+ :midi/pitch-bend
+ {:receive           true
+  :default-semitones 2
+  :max-semitones     12
+  :configurable      true
+  :configure-via     :sysex}
+
+ ;; !! MIDI CLOCK CAUSES NOTE DROPOUTS — DO NOT ENABLE !!
+ :midi/clock
+ {:receive false
+  :send    false
+  :note    "MIDI clock reception causes note dropouts — never route MIDI clock to this device"}
+
+ :midi/program-change {:receive false :send false}
+
+ ;; ZERO MIDI CC support — fully confirmed
+ :midi/cc []
+
+ ;; SysEx: pitch-bend range and key priority only
+ ;; Confirmed: F0 00 20 32 00 01 0B <dev-id> <pkt> D0 <value:00-0C> F7
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x32]
+  :model-id        [0x00 0x01 0x0B]
+  :synthtribe      true
+  :commands
+  [{:name :pitch-bend-range
+    :frame "F0 00 20 32 00 01 0B <dev-id> <pkt> D0 <value> F7"
+    :range [0 12]    ; 0–12 semitones
+    :default 2
+    :note "value byte 0x00–0x0C = 0–12 semitones; confirmed from Ctrlr panel SysEx capture"}
+   {:name :key-priority
+    :values [:low :high :last]
+    :note "Configurable via SynthTribe app; SysEx command byte pattern inferred from TD-3 family"}]}
+
+ :midi/ports
+ {:din-in   true
+  :din-thru true
+  :din-out  false   ; no MIDI OUT
+  :usb      true}   ; class-compliant input only
+
+ ;; CV/gate outputs — voltages are non-standard; note trigger = 14V
+ :device/cv-outputs
+ {:pitch-cv      {:signal :1v-oct  :voltage "+0–10V"  :note "1V/oct from MIDI note; routes to VCO 1/2 FM inputs"}
+  :upper-voice   {:signal :1v-oct  :voltage "+0–10V"  :note "Second MIDI note → second pitch CV (paraphonic-style)"}
+  :gate          {:signal :gate    :voltage "+10V"    :note "High while note held"}
+  :trigger       {:signal :trigger :voltage "+14V"    :note "FIRES AR envelope; 14V — high but compatible with Eurorack ≥5V trigger inputs"}}
+
+ :device/map-source    "behringer.com + Behringer 2600 Ctrlr panel docs (SunnyS ynths v1.4)"
+ :device/map-version   "2026-04-06"
+ :device/map-confidence :high}

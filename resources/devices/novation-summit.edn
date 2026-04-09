@@ -1,0 +1,409 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Novation Summit — cljseq device map
+;;
+;; Sources:
+;;   Summit User Guide 1.1 EN:
+;;     https://fael-downloads-prod.focusrite.com/customer/prod/s3fs-public/downloads/Summit%20User%20Guide%201.1%20EN.pdf
+;;   Summit & Peak 2.1 Firmware Addendum:
+;;     https://fael-downloads-prod.focusrite.com/customer/prod/downloads/summit_peak_2.1_firmware_update_addendum_v1_english_en.pdf
+;; Confidence: High. Full CC and NRPN tables from official Novation/Focusrite PDFs.
+;;
+;; Key quirks:
+;;   - Summit is a bi-timbral 16-voice version of Peak (2 × Peak engine)
+;;   - Summit and Peak share an IDENTICAL CC and NRPN parameter map for all
+;;     synth parameters; see novation-peak.edn for the single-timbral version
+;;   - NRPN notation: MSB:LSB (e.g. 0:5 = CC99=0 / CC98=5)
+;;   - CC 38 CONFLICT: Novation repurposed CC 38 as Osc2 ModEnv2>Pitch,
+;;     conflicting with standard MIDI Data Entry LSB for NRPNs. NRPNs that
+;;     use CC 38 for data entry may interfere with this CC. Send NRPNs with
+;;     CC 6 only (MSB) to avoid the conflict.
+;;   - High-resolution parameters use CC PAIRS: primary CC (MSB) + primary+32 (LSB)
+;;     giving 0–255 effective range (or −128 to +127 for bipolar parameters)
+;;   - Pitch bend is per-patch, per-oscillator (NRPN 0:20, 0:29, 0:38); default ±12 semitones
+;;   - SysEx: manufacturer ID [0x00 0x20 0x29]; patch format not public; use Novation Components
+;;   - Polyphonic Aftertouch received from external controllers (Summit only; treated as mod source)
+
+{:device/id           :novation/summit
+ :device/name         "Novation Summit"
+ :device/manufacturer "Novation"
+ :device/type         :synthesizer
+ :device/voices       16           ; bi-timbral 8+8
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi]
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channels (Summit is bi-timbral — 3 MIDI channels)
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1            ; Global channel (Single Patch mode)
+ :midi/channel-part-a 2            ; Part A channel (Multi Patch mode)
+ :midi/channel-part-b 3            ; Part B channel (Multi Patch mode)
+ :midi/poly-mode      :poly
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes
+ ;; -------------------------------------------------------------------------
+ :midi/notes
+ {:range      [0 127]
+  :velocity   {:note-on true :note-off false}
+  :aftertouch {:channel-pressure true :poly-key-pressure true
+               :note "Poly AT received from external controllers; treated as mod matrix source"}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Pitch bend — per-patch, per-oscillator (set via NRPN)
+ ;; -------------------------------------------------------------------------
+ :midi/pitch-bend
+ {:default-semitones  12           ; ±12 (±1 octave) per oscillator
+  :max-semitones      24
+  :configurable-per-oscillator true
+  :nrpn-osc1         "0:20"        ; NRPN range 40–88 (−24 to +24 semitones); default 76 (+12)
+  :nrpn-osc2         "0:29"
+  :nrpn-osc3         "0:38"
+  :note "Negative values reverse pitch wheel direction; each oscillator independent"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive true
+  :send    true
+  :uses    [:lfo-sync :arp]}
+
+ ;; -------------------------------------------------------------------------
+ ;; Program change
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:receive    true
+  :send       true
+  :each-configurable true          ; Disabled/Receive/Transmit/Rec+Tran per unit settings
+  :range      [0 127]
+  :bank-select true
+  :bank-count 4                    ; Banks A, B, C, D — 128 patches each
+  :bank-msb   0
+  :bank-lsb   32}
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x00 0x20 0x29]   ; Novation/Focusrite
+  :purpose         [:patch-dump :patch-load]
+  :note "Patch dump format not publicly documented; use Novation Components software for patch management"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Control Change map
+ ;; CC pairs: some parameters use two CCs for 8-bit resolution.
+ ;; Format: primary CC = MSB (0–127), secondary CC = primary+32 = LSB (0–127)
+ ;; Combined value 0–255; for bipolar: 128 = center.
+ ;; :cc-pair [msb-cc lsb-cc] marks paired parameters.
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+
+ [;; --- Standard -----------------------------------------------------------
+  {:cc 0   :path [:bank-select :msb]    :range [0 127] :cc-type :global}
+  {:cc 32  :path [:bank-select :lsb]    :range [0 127] :cc-type :global}
+
+  ;; --- Glide --------------------------------------------------------------
+  {:cc 5   :path [:glide :time]         :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 35  :path [:glide :on]           :range [0 1]   :default 0   :cc-type :fixed}
+
+  ;; --- Oscillator 1 -------------------------------------------------------
+  {:cc 3   :path [:osc1 :range]         :range [63 66] :default 64  :cc-type :fixed
+   :note "63=−1 oct, 64=0, 65=+1 oct, 66=+2 oct"}
+  {:cc 14  :path [:osc1 :coarse]        :range [0 127] :cc-type :fixed
+   :cc-pair [14 46] :note "With CC 46 (LSB): 0–255 = −128 to +127 semitones; 128 = 0"}
+  {:cc 15  :path [:osc1 :fine]          :range [0 127] :cc-type :fixed
+   :cc-pair [15 47] :note "With CC 47 (LSB): 28–228 = −100 to +100 cents; 128 = 0"}
+  {:cc 9   :path [:osc1 :modenv2-pitch] :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64 :note "1–127 = −63 to +63"}
+  {:cc 16  :path [:osc1 :lfo2-pitch]    :range [0 127] :cc-type :fixed
+   :cc-pair [16 48] :note "With CC 48 (LSB): 1–255 = −127 to +127; 128 = 0"}
+  {:cc 12  :path [:osc1 :shape]         :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 119 :path [:osc1 :modenv1-shape] :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 33  :path [:osc1 :lfo1-shape]    :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 34  :path [:osc1 :vsync]         :range [0 127] :default 0   :cc-type :fixed}
+
+  ;; --- Oscillator 2 -------------------------------------------------------
+  {:cc 37  :path [:osc2 :range]         :range [63 66] :default 64  :cc-type :fixed}
+  {:cc 17  :path [:osc2 :coarse]        :range [0 127] :cc-type :fixed
+   :cc-pair [17 49] :note "With CC 49 (LSB): 0–255 = −128 to +127 semitones; 64 = 0"}
+  {:cc 18  :path [:osc2 :fine]          :range [0 127] :cc-type :fixed
+   :cc-pair [18 50] :note "With CC 50 (LSB): 28–228 = −100 to +100 cents; 64 = 0"}
+  {:cc 38  :path [:osc2 :modenv2-pitch] :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64
+   :note "*** CC 38 CONFLICT: standard MIDI uses CC 38 as NRPN Data Entry LSB ***
+          Sending NRPNs to this device may inadvertently affect Osc2 ModEnv2>Pitch.
+          Use CC 6 only (not CC 38) when sending NRPN data entries."}
+  {:cc 19  :path [:osc2 :lfo2-pitch]    :range [0 127] :cc-type :fixed
+   :cc-pair [19 51] :note "With CC 51 (LSB): 1–255 = −127 to +127; 64 = 0"}
+  {:cc 39  :path [:osc2 :shape]         :range [0 127] :default 99  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 40  :path [:osc2 :modenv1-shape] :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 41  :path [:osc2 :lfo1-shape]    :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 42  :path [:osc2 :vsync]         :range [0 127] :default 0   :cc-type :fixed}
+
+  ;; --- Oscillator 3 -------------------------------------------------------
+  {:cc 65  :path [:osc3 :range]         :range [63 66] :default 63  :cc-type :fixed}
+  {:cc 20  :path [:osc3 :coarse]        :range [0 127] :cc-type :fixed
+   :cc-pair [20 52] :note "With CC 52 (LSB): 0–255 = −128 to +127 semitones; 128 = 0"}
+  {:cc 21  :path [:osc3 :fine]          :range [0 127] :cc-type :fixed
+   :cc-pair [21 53] :note "With CC 53 (LSB): 28–228 = −100 to +100 cents; 128 = 0"}
+  {:cc 43  :path [:osc3 :modenv2-pitch] :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 22  :path [:osc3 :lfo2-pitch]    :range [0 127] :cc-type :fixed
+   :cc-pair [22 54] :note "With CC 54 (LSB): 1–255 = −127 to +127; 128 = 0"}
+  {:cc 71  :path [:osc3 :shape]         :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 72  :path [:osc3 :modenv1-shape] :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 73  :path [:osc3 :lfo1-shape]    :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 44  :path [:osc3 :vsync]         :range [0 127] :default 0   :cc-type :fixed}
+
+  ;; --- Mixer --------------------------------------------------------------
+  {:cc 23  :path [:mixer :osc1-level]   :range [0 127] :cc-type :fixed
+   :cc-pair [23 55] :note "With CC 55 (LSB): 0–255; default 255 (full)"}
+  {:cc 24  :path [:mixer :osc2-level]   :range [0 127] :cc-type :fixed
+   :cc-pair [24 56] :note "With CC 56 (LSB): 0–255; default 0"}
+  {:cc 25  :path [:mixer :osc3-level]   :range [0 127] :cc-type :fixed
+   :cc-pair [25 57] :note "With CC 57 (LSB): 0–255; default 0"}
+  {:cc 26  :path [:mixer :ring-1x2-level] :range [0 127] :cc-type :fixed
+   :cc-pair [26 58] :note "With CC 58 (LSB): 0–255; default 0"}
+  {:cc 27  :path [:mixer :noise-level]  :range [0 127] :cc-type :fixed
+   :cc-pair [27 59] :note "With CC 59 (LSB): 0–255; default 0"}
+
+  ;; --- Filter -------------------------------------------------------------
+  {:cc 80  :path [:filter :overdrive]   :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 36  :path [:filter :post-drive]  :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 75  :path [:filter :key-tracking]:range [0 127] :default 127 :cc-type :fixed}
+  {:cc 79  :path [:filter :resonance]   :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 29  :path [:filter :frequency]   :range [0 127] :cc-type :fixed
+   :cc-pair [29 61] :note "With CC 61 (LSB): 0–255; default 255"}
+  {:cc 28  :path [:filter :lfo1-mod]    :range [0 127] :cc-type :fixed
+   :cc-pair [28 60] :bipolar true :note "With CC 60 (LSB): 1–255 = −127 to +127; 128 = 0"}
+  {:cc 76  :path [:filter :osc3-mod]    :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 77  :path [:filter :ampenv-mod]  :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+  {:cc 78  :path [:filter :modenv1-mod] :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+
+  ;; --- Amp Envelope (DAHDSR) ----------------------------------------------
+  {:cc 86  :path [:amp-eg :attack]      :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 87  :path [:amp-eg :decay]       :range [0 127] :default 90  :cc-type :fixed}
+  {:cc 88  :path [:amp-eg :sustain]     :range [0 127] :default 127 :cc-type :fixed}
+  {:cc 89  :path [:amp-eg :release]     :range [0 127] :default 40  :cc-type :fixed}
+
+  ;; --- Mod Envelope 1 -----------------------------------------------------
+  {:cc 90  :path [:mod-eg1 :attack]     :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 91  :path [:mod-eg1 :decay]      :range [0 127] :default 75  :cc-type :fixed}
+  {:cc 92  :path [:mod-eg1 :sustain]    :range [0 127] :default 35  :cc-type :fixed}
+  {:cc 93  :path [:mod-eg1 :release]    :range [0 127] :default 45  :cc-type :fixed}
+
+  ;; --- Mod Envelope 2 -----------------------------------------------------
+  {:cc 94  :path [:mod-eg2 :attack]     :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 95  :path [:mod-eg2 :decay]      :range [0 127] :default 75  :cc-type :fixed}
+  {:cc 117 :path [:mod-eg2 :sustain]    :range [0 127] :default 35  :cc-type :fixed}
+  {:cc 103 :path [:mod-eg2 :release]    :range [0 127] :default 45  :cc-type :fixed}
+
+  ;; --- LFO 1 --------------------------------------------------------------
+  {:cc 30  :path [:lfo1 :rate]          :range [0 127] :cc-type :fixed
+   :cc-pair [30 62] :note "With CC 62 (LSB): 0–255; default 128"}
+  {:cc 81  :path [:lfo1 :sync-rate]     :range [0 34]  :default 16  :cc-type :fixed}
+  {:cc 82  :path [:lfo1 :fade-time]     :range [0 127] :default 0   :cc-type :fixed}
+
+  ;; --- LFO 2 --------------------------------------------------------------
+  {:cc 83  :path [:lfo2 :range]         :range [0 2]   :default 0   :cc-type :fixed}
+  {:cc 31  :path [:lfo2 :rate]          :range [0 127] :cc-type :fixed
+   :cc-pair [31 63] :note "With CC 63 (LSB): 0–255; default 128"}
+  {:cc 84  :path [:lfo2 :sync-rate]     :range [0 34]  :default 12  :cc-type :fixed}
+  {:cc 85  :path [:lfo2 :fade-time]     :range [0 127] :default 0   :cc-type :fixed}
+
+  ;; --- Effects ------------------------------------------------------------
+  {:cc 104 :path [:distortion :level]   :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 108 :path [:delay :level]        :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 109 :path [:delay :time]         :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 110 :path [:delay :feedback]     :range [0 127] :default 64  :cc-type :fixed}
+  {:cc 112 :path [:reverb :level]       :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 113 :path [:reverb :time]        :range [0 127] :default 90  :cc-type :fixed}
+  {:cc 105 :path [:chorus :level]       :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 118 :path [:chorus :rate]        :range [0 127] :default 20  :cc-type :fixed}
+  {:cc 107 :path [:chorus :feedback]    :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64}
+
+  ;; --- Arpeggiator --------------------------------------------------------
+  {:cc 116 :path [:arp :gate]           :range [0 127] :default 64  :cc-type :fixed}
+
+  ;; --- Animate buttons ----------------------------------------------------
+  {:cc 114 :path [:animate1 :hold]      :range [0 1]   :default 0   :cc-type :fixed}
+  {:cc 115 :path [:animate2 :hold]      :range [0 1]   :default 0   :cc-type :fixed}]
+
+ ;; -------------------------------------------------------------------------
+ ;; NRPN — key assignments
+ ;; NRPN notation: MSB:LSB (CC 99 = MSB, CC 98 = LSB, CC 6 = value MSB)
+ ;; AVOID using CC 38 for NRPN Data Entry LSB — it conflicts with Osc2 ModEnv2>Pitch
+ ;; -------------------------------------------------------------------------
+ :midi/nrpn
+
+ [;; --- Patch metadata -----------------------------------------------------
+  {:nrpn "0:0"   :path [:patch :category]         :range [0 14]  :default 0}
+  {:nrpn "0:1"   :path [:patch :genre]             :range [0 9]   :default 0}
+
+  ;; --- Voice / Unison -----------------------------------------------------
+  {:nrpn "0:2"   :path [:voice :mode]              :range [0 4]   :default 3}
+  {:nrpn "0:3"   :path [:voice :unison]            :range [0 4]   :default 0}
+  {:nrpn "0:4"   :path [:voice :unison-detune]     :range [0 127] :default 25}
+  {:nrpn "0:5"   :path [:voice :unison-spread]     :range [0 127] :default 0}
+  {:nrpn "0:6"   :path [:voice :kb-octave]         :range [61 67] :default 64
+   :note "61=−3 oct, 64=0, 67=+3 oct"}
+  {:nrpn "0:7"   :path [:voice :pre-glide]         :range [52 76] :default 64
+   :note "52=−12st, 64=Off, 76=+12st"}
+
+  ;; --- Oscillator common --------------------------------------------------
+  {:nrpn "0:9"   :path [:osc-common :divergence]   :range [0 127] :default 0}
+  {:nrpn "0:10"  :path [:osc-common :drift]        :range [0 127] :default 0}
+  {:nrpn "0:11"  :path [:osc-common :noise-lpf]    :range [0 127] :default 127}
+  {:nrpn "0:12"  :path [:osc-common :noise-hpf]    :range [0 127] :default 0}
+
+  ;; --- Oscillator 1 -------------------------------------------------------
+  {:nrpn "0:14"  :path [:osc1 :wave]               :range [0 4]   :default 2}
+  {:nrpn "0:15"  :path [:osc1 :wave-more]          :range [4 63]  :default 4}
+  {:nrpn "0:16"  :path [:osc1 :shape-source]       :range [0 2]   :default 0}
+  {:nrpn "0:17"  :path [:osc1 :saw-density]        :range [0 127] :default 0}
+  {:nrpn "0:18"  :path [:osc1 :saw-density-detune] :range [0 127] :default 0}
+  {:nrpn "0:19"  :path [:osc1 :fixed-note]         :range [0 88]  :default 0
+   :note "0 = Off; 1–88 = fixed MIDI note"}
+  {:nrpn "0:20"  :path [:osc1 :bend-range]         :range [40 88] :default 76
+   :note "40=−24st, 64=0st, 76=+12st, 88=+24st; negative reverses wheel direction"}
+
+  ;; --- Oscillator 2 -------------------------------------------------------
+  {:nrpn "0:23"  :path [:osc2 :wave]               :range [0 4]   :default 2}
+  {:nrpn "0:24"  :path [:osc2 :wave-more]          :range [4 63]  :default 4}
+  {:nrpn "0:25"  :path [:osc2 :shape-source]       :range [0 2]   :default 0}
+  {:nrpn "0:26"  :path [:osc2 :saw-density]        :range [0 127] :default 0}
+  {:nrpn "0:27"  :path [:osc2 :saw-density-detune] :range [0 127] :default 64}
+  {:nrpn "0:28"  :path [:osc2 :fixed-note]         :range [0 88]  :default 0}
+  {:nrpn "0:29"  :path [:osc2 :bend-range]         :range [40 88] :default 76}
+
+  ;; --- Oscillator 3 -------------------------------------------------------
+  {:nrpn "0:32"  :path [:osc3 :wave]               :range [0 4]   :default 2}
+  {:nrpn "0:33"  :path [:osc3 :wave-more]          :range [4 63]  :default 4}
+  {:nrpn "0:34"  :path [:osc3 :shape-source]       :range [0 2]   :default 0}
+  {:nrpn "0:35"  :path [:osc3 :saw-density]        :range [0 127] :default 0}
+  {:nrpn "0:36"  :path [:osc3 :saw-density-detune] :range [0 127] :default 64}
+  {:nrpn "0:37"  :path [:osc3 :fixed-note]         :range [0 88]  :default 0}
+  {:nrpn "0:38"  :path [:osc3 :bend-range]         :range [40 88] :default 76}
+
+  ;; --- Mixer --------------------------------------------------------------
+  {:nrpn "0:41"  :path [:mixer :patch-level]        :range [0 127] :default 64}
+  {:nrpn "0:42"  :path [:mixer :vca-gain]           :range [0 127] :default 127}
+  {:nrpn "0:43"  :path [:mixer :dry-level]          :range [0 127] :default 127}
+  {:nrpn "0:44"  :path [:mixer :wet-level]          :range [0 127] :default 127}
+
+  ;; --- Filter -------------------------------------------------------------
+  {:nrpn "0:45"  :path [:filter :slope]             :range [0 1]   :default 1
+   :note "0 = 2-pole 12dB/oct; 1 = 4-pole 24dB/oct"}
+  {:nrpn "0:46"  :path [:filter :shape]             :range [0 2]   :default 0}
+  {:nrpn "0:47"  :path [:filter :env-select]        :range [0 1]   :default 1}
+  {:nrpn "0:48"  :path [:filter :divergence]        :range [0 127] :default 0}
+
+  ;; --- Amp Envelope -------------------------------------------------------
+  {:nrpn "0:55"  :path [:amp-eg :velocity]          :range [0 127] :default 64 :bipolar true}
+  {:nrpn "0:56"  :path [:amp-eg :trigger]           :range [0 1]   :default 0}
+
+  ;; --- Mod Envelope 1 -----------------------------------------------------
+  {:nrpn "0:59"  :path [:mod-eg1 :select]           :range [0 1]   :default 1}
+  {:nrpn "0:60"  :path [:mod-eg1 :velocity]         :range [0 127] :default 64 :bipolar true}
+  {:nrpn "0:61"  :path [:mod-eg1 :trigger]          :range [0 1]   :default 1}
+
+  ;; --- Mod Envelope 2 -----------------------------------------------------
+  {:nrpn "0:64"  :path [:mod-eg2 :velocity]         :range [0 127] :default 64 :bipolar true}
+  {:nrpn "0:65"  :path [:mod-eg2 :trigger]          :range [0 1]   :default 1}
+
+  ;; --- LFO 1 --------------------------------------------------------------
+  {:nrpn "0:68"  :path [:lfo1 :range]               :range [0 2]   :default 0}
+  {:nrpn "0:69"  :path [:lfo1 :wave]                :range [0 3]   :default 0}
+  {:nrpn "0:70"  :path [:lfo1 :phase]               :range [0 120] :default 0}
+  {:nrpn "0:71"  :path [:lfo1 :slew]                :range [0 127] :default 0}
+  {:nrpn "0:72"  :path [:lfo1 :fade-in-out]         :range [0 3]   :default 0}
+  {:nrpn "0:75"  :path [:lfo1 :one-shot]            :range [0 1]   :default 0}
+  {:nrpn "0:76"  :path [:lfo1 :common]              :range [0 1]   :default 0}
+
+  ;; --- LFO 2 --------------------------------------------------------------
+  {:nrpn "0:78"  :path [:lfo2 :wave]                :range [0 3]   :default 0}
+  {:nrpn "0:79"  :path [:lfo2 :phase]               :range [0 120] :default 0}
+  {:nrpn "0:80"  :path [:lfo2 :slew]                :range [0 127] :default 0}
+  {:nrpn "0:81"  :path [:lfo2 :fade-in-out]         :range [0 3]   :default 0}
+  {:nrpn "0:84"  :path [:lfo2 :one-shot]            :range [0 1]   :default 0}
+  {:nrpn "0:85"  :path [:lfo2 :common]              :range [0 1]   :default 0}
+
+  ;; --- Effects ------------------------------------------------------------
+  {:nrpn "0:88"  :path [:effects :master-bypass]    :range [0 1]   :default 0}
+  {:nrpn "0:89"  :path [:effects :routing]          :range [0 6]   :default 0}
+  {:nrpn "0:92"  :path [:delay :width]              :range [0 127] :default 64}
+  {:nrpn "0:93"  :path [:delay :sync]               :range [0 1]   :default 0}
+  {:nrpn "0:94"  :path [:delay :sync-time]          :range [0 18]  :default 4}
+  {:nrpn "0:95"  :path [:delay :lp-damp]            :range [0 127] :default 85}
+  {:nrpn "0:96"  :path [:delay :hp-damp]            :range [0 127] :default 0}
+  {:nrpn "0:97"  :path [:delay :slew-rate]          :range [0 127] :default 32}
+  {:nrpn "0:101" :path [:reverb :type]              :range [0 2]   :default 2}
+  {:nrpn "0:102" :path [:reverb :damping-lp]        :range [0 127] :default 50}
+  {:nrpn "0:103" :path [:reverb :damping-hp]        :range [0 127] :default 1}
+  {:nrpn "0:104" :path [:reverb :size]              :range [0 127] :default 64}
+  {:nrpn "0:105" :path [:reverb :mod]               :range [0 127] :default 64}
+  {:nrpn "0:106" :path [:reverb :mod-rate]          :range [0 127] :default 4}
+  {:nrpn "0:109" :path [:reverb :pre-delay]         :range [0 127] :default 40}
+  {:nrpn "0:111" :path [:chorus :type]              :range [0 2]   :default 2}
+  {:nrpn "0:112" :path [:chorus :mod-depth]         :range [0 127] :default 64}
+  {:nrpn "0:113" :path [:chorus :lp]                :range [0 127] :default 90}
+  {:nrpn "0:114" :path [:chorus :hp]                :range [0 127] :default 2}
+  {:nrpn "0:115" :path [:chorus :mode]              :range [0 2]   :default 0
+   :note "v2.1: 0=Chorus, 1=Phaser, 2=Flanger"}
+
+  ;; --- Arpeggiator --------------------------------------------------------
+  {:nrpn "0:116" :path [:arp :sync-rate]            :range [0 18]  :default 0}
+  {:nrpn "0:117" :path [:arp :type]                 :range [0 6]   :default 0}
+  {:nrpn "0:118" :path [:arp :rhythm]               :range [0 32]  :default 0}
+  {:nrpn "0:119" :path [:arp :octave]               :range [0 5]   :default 1}
+  {:nrpn "0:120" :path [:arp :swing]                :range [20 80] :default 50}
+  {:nrpn "0:121" :path [:arp :on]                   :range [0 1]   :default 0}
+  {:nrpn "0:122" :path [:arp :key-latch]            :range [0 1]   :default 0}
+  {:nrpn "0:123" :path [:arp :key-sync]             :range [0 1]   :default 0}
+
+  ;; --- Modulation matrix (16 slots) ---------------------------------------
+  ;; Each slot N (1–16): source1=N:0, source2=N:1, depth=N:2, dest=N:3
+  {:nrpn "0:125" :path [:mod-matrix :selection]     :range [0 15]  :default 0}
+
+  ;; --- Firmware 2.1 additions ---------------------------------------------
+  {:nrpn "0:51"  :path [:pan :position]             :range [0 127] :default 0}
+  {:nrpn "0:52"  :path [:pan :type]                 :range [0 3]   :default 0}
+  {:nrpn "25:6"  :path [:tuning :table-select]      :range [0 16]  :default 0}
+  {:nrpn "25:33" :path [:arp :chance]               :range [1 100] :default 100}
+  {:nrpn "25:13" :path [:fm :osc3-to-1]             :range [0 127] :default 0}
+  {:nrpn "25:17" :path [:fm :osc1-to-2]             :range [0 127] :default 0}
+  {:nrpn "25:21" :path [:fm :osc2-to-3]             :range [0 127] :default 0}
+  {:nrpn "64:3"  :path [:aftertouch :scale]         :range [1 10]  :default 5
+   :note "Summit only; lower = less pressure required"}]
+
+ ;; -------------------------------------------------------------------------
+ ;; Summit-exclusive features (not present on Peak)
+ ;; -------------------------------------------------------------------------
+ :device/summit-exclusive
+ {:bi-timbral        true
+  :channels          {:global 1 :part-a 2 :part-b 3}
+  :seq-local-mode    true          ; Keys/wheels→MIDI only; panel→engine only
+  :poly-aftertouch   true          ; Received from external controllers
+  :external-audio-in true          ; Two stereo inputs, routable pre/post filter or to FX
+  :cv-input          true          ; ±5V Eurorack CV input, mod matrix source}
+  }
+
+ ;; -------------------------------------------------------------------------
+ ;; Metadata
+ ;; -------------------------------------------------------------------------
+ :device/firmware-version "2.1"
+ :device/map-source       "Novation Summit User Guide 1.1 + 2.1 Firmware Addendum — fael-downloads-prod.focusrite.com"
+ :device/map-version      "2026-04-05"}

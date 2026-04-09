@@ -1,0 +1,237 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Moog Minitaur — cljseq device map
+;;
+;; Source: Moog Minitaur Owner's Manual (includes v2.1 firmware addendum)
+;;   https://cdn.inmusicbrands.com/Moog/Minitaur/Minitaur_Manual.pdf
+;;   (inMusic CDN — Moog Music acquired by inMusic Brands)
+;; Confidence: High. CC map extracted from official manual appendix.
+;;
+;; Key quirks:
+;;   - Note range is 0–72 only; MIDI notes above 72 (C5) are ignored
+;;   - Does NOT have an NRPN map; all parameter control is via CC
+;;   - Knobs transmit CC values over USB MIDI only (not DIN)
+;;   - No DIN MIDI out → USB MIDI passthrough
+;;   - Aftertouch: not transmitted, not received
+;;   - 14-bit CC mode: global setting (default OFF); MSB+32 = LSB when enabled
+;;   - Pitch bend: transmitted from panel ONLY when 14-bit mode is off;
+;;     received always
+;;   - SysEx manufacturer ID: 0x04 (Moog Music Inc.)
+;;   - Poly chain compatible with Little/Slim Phatty, Sub Phatty, Sub 37
+;;   - Supports MIDI Tuning Standard via SysEx (custom scales)
+;;   - Program Change: receive-only (from firmware v2.1)
+
+{:device/id           :moog/minitaur
+ :device/name         "Moog Minitaur"
+ :device/manufacturer "Moog Music"
+ :device/type         :synthesizer
+ :device/voices       1             ; monophonic
+ :device/role         :target
+ :device/connectivity [:usb-midi :din-midi-in]  ; DIN in only, no DIN out
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel
+ ;; -------------------------------------------------------------------------
+ :midi/channel        1
+ :midi/poly-mode      :mono
+
+ ;; -------------------------------------------------------------------------
+ ;; Notes
+ ;; -------------------------------------------------------------------------
+ :midi/notes
+ {:range      [0 72]          ; notes above MIDI 72 (C5) are ignored
+  :velocity   {:note-on true :note-off false}   ; received, not transmitted
+  :aftertouch {:channel-pressure false :poly-key-pressure false}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Pitch bend
+ ;; -------------------------------------------------------------------------
+ :midi/pitch-bend
+ {:default-semitones 3       ; ±3 semitones default
+  :max-semitones     24
+  :configurable-per-preset true
+  :bend-up-cc   107          ; CC 107 range: 0–15=OFF, 16–31=2st, 32–47=3st,
+  :bend-down-cc 108          ; 48–63=4st, 64–79=5st, 80–95=7st, 96–111=12st, 112–127=24st
+  :note "Pitch bend is receive-only from the panel; transmit requires external controller"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:receive true
+  :send    false
+  :uses    [:lfo-sync]}
+
+ ;; -------------------------------------------------------------------------
+ ;; Program change
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:receive    true           ; from firmware v2.1; not in original manual
+  :send       false
+  :range      [0 127]        ; 128 presets (94 factory)
+  :bank-select false}
+
+ ;; -------------------------------------------------------------------------
+ ;; SysEx
+ ;; -------------------------------------------------------------------------
+ :midi/sysex
+ {:manufacturer-id [0x04]   ; Moog Music Inc.
+  :purpose         [:patch-dump :patch-load :bulk-dump :firmware-update
+                    :midi-tuning-standard]
+  :note "Supports MIDI Tuning Standard (Scale/Octave 1-byte and 2-byte forms)"}
+
+ ;; -------------------------------------------------------------------------
+ ;; Control Change map
+ ;; (M) = MIDI-accessible parameter only; no front panel knob or switch
+ ;; 14-bit pairs: MSB CC listed; LSB = MSB+32 when 14-bit mode is enabled
+ ;; -------------------------------------------------------------------------
+ :midi/cc
+
+ [;; --- Standard -----------------------------------------------------------
+  {:cc 1   :path [:mod-wheel]           :range [0 127] :default 0   :cc-type :global}
+
+  ;; --- LFO ----------------------------------------------------------------
+  {:cc 3   :path [:lfo :rate]           :range [0 127] :default 64  :cc-type :fixed
+   :note "0.01–100 Hz; 14-bit MSB (LSB = CC 35 when enabled)"}
+
+  ;; --- Glide --------------------------------------------------------------
+  {:cc 5   :path [:glide :rate]         :range [0 127] :default 0   :cc-type :fixed
+   :note "14-bit MSB (LSB = CC 37 when enabled)"}
+
+  ;; --- Levels (MIDI-only) ------------------------------------------------
+  {:cc 7   :path [:output :level]       :range [0 127] :default 100 :cc-type :fixed
+   :midi-only true
+   :note "Master output/VCA level; 14-bit MSB (LSB = CC 39 when enabled)"}
+
+  ;; --- Filter modulation -------------------------------------------------
+  {:cc 12  :path [:filter :lfo-amount]  :range [0 127] :default 0   :cc-type :fixed
+   :note "14-bit MSB (LSB = CC 44)"}
+  {:cc 13  :path [:osc :lfo-amount]     :range [0 127] :default 0   :cc-type :fixed
+   :note "14-bit MSB (LSB = CC 45)"}
+
+  ;; --- Oscillator levels --------------------------------------------------
+  {:cc 15  :path [:vco1 :level]         :range [0 127] :default 127 :cc-type :fixed
+   :note "14-bit MSB (LSB = CC 47)"}
+  {:cc 16  :path [:vco2 :level]         :range [0 127] :default 0   :cc-type :fixed
+   :note "14-bit MSB (LSB = CC 48)"}
+  {:cc 17  :path [:vco2 :freq]          :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64
+   :note "64 = center/unison; 14-bit MSB (LSB = CC 49)"}
+  {:cc 18  :path [:vco2 :beat]          :range [0 127] :default 64  :cc-type :fixed
+   :bipolar true :center 64
+   :note "±50 cents; 64 = center; MIDI-accessible only; 14-bit MSB (LSB = CC 50)"}
+
+  ;; --- Filter -------------------------------------------------------------
+  {:cc 19  :path [:filter :cutoff]      :range [0 127] :default 127 :cc-type :fixed
+   :note "20 Hz–20 kHz; 14-bit MSB (LSB = CC 51)"}
+  {:cc 20  :path [:filter :kb-tracking] :range [0 127] :default 32  :cc-type :fixed
+   :midi-only true
+   :note "0–200%; default 32 ≈ 50%"}
+  {:cc 21  :path [:filter :resonance]   :range [0 127] :default 0   :cc-type :fixed}
+  {:cc 22  :path [:filter :eg-amount]   :range [0 127] :default 0   :cc-type :fixed}
+
+  ;; --- Filter EG ----------------------------------------------------------
+  {:cc 23  :path [:filter-eg :attack]   :range [0 127] :default 0   :cc-type :fixed
+   :note "1 ms–30 s; 14-bit MSB (LSB = CC 55)"}
+  {:cc 24  :path [:filter-eg :decay-release] :range [0 127] :default 64 :cc-type :fixed
+   :note "1 ms–30 s; single D/R knob; 14-bit MSB (LSB = CC 56)"}
+  {:cc 25  :path [:filter-eg :sustain]  :range [0 127] :default 127 :cc-type :fixed
+   :note "14-bit MSB (LSB = CC 57)"}
+
+  ;; --- External input -----------------------------------------------------
+  {:cc 27  :path [:ext-input :level]    :range [0 127] :default 64  :cc-type :fixed
+   :midi-only true
+   :note "Default 64 = unity gain; up to 200%; 14-bit MSB (LSB = CC 59)"}
+
+  ;; --- Amp EG -------------------------------------------------------------
+  {:cc 28  :path [:amp-eg :attack]      :range [0 127] :default 0   :cc-type :fixed
+   :note "1 ms–30 s; 14-bit MSB (LSB = CC 60)"}
+  {:cc 29  :path [:amp-eg :decay-release] :range [0 127] :default 64 :cc-type :fixed
+   :note "1 ms–30 s; single D/R knob; 14-bit MSB (LSB = CC 61)"}
+  {:cc 30  :path [:amp-eg :sustain]     :range [0 127] :default 127 :cc-type :fixed
+   :note "14-bit MSB (LSB = CC 62)"}
+
+  ;; --- Glide switch -------------------------------------------------------
+  {:cc 65  :path [:glide :on]           :range [0 127] :default 0   :cc-type :fixed
+   :note "0–63 = off; 64–127 = on"}
+
+  ;; --- Oscillator wave ----------------------------------------------------
+  {:cc 70  :path [:vco1 :wave]          :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :saw}
+            {:value 64  :label :square}]}
+  {:cc 71  :path [:vco2 :wave]          :range [0 127] :cc-type :fixed
+   :values [{:value 0   :label :saw}
+            {:value 64  :label :square}]}
+
+  ;; --- Release switch -----------------------------------------------------
+  {:cc 72  :path [:amp-eg :release-on]  :range [0 127] :default 0   :cc-type :fixed
+   :note "0–63 = off (gated); 64–127 = on (release active)"}
+
+  ;; --- Trigger / legato (MIDI-only) ---------------------------------------
+  {:cc 73  :path [:trigger-mode]        :range [0 127] :cc-type :fixed
+   :midi-only true
+   :values [{:value 0   :label :legato-on}
+            {:value 43  :label :legato-off}
+            {:value 86  :label :eg-reset}]}
+
+  ;; --- LFO behaviour (MIDI-only) ------------------------------------------
+  {:cc 81  :path [:lfo :note-sync]      :range [0 127] :default 0   :cc-type :fixed
+   :midi-only true :note "0–63 = off; 64–127 = on"}
+  {:cc 82  :path [:lfo :key-trigger]    :range [0 127] :default 0   :cc-type :fixed
+   :midi-only true :note "0–63 = off; 64–127 = on"}
+  {:cc 83  :path [:glide :legato]       :range [0 127] :cc-type :fixed
+   :midi-only true
+   :values [{:value 0  :label :always-glide}
+            {:value 64 :label :legato-only}]}
+
+  ;; --- LFO sync (MIDI-only) -----------------------------------------------
+  {:cc 86  :path [:lfo :sync-clk-div]   :range [0 127] :cc-type :fixed
+   :midi-only true
+   :note "Clock division values same as Sub 37 LFO clock div table"}
+  {:cc 87  :path [:lfo :midi-sync]      :range [0 127] :default 127 :cc-type :fixed
+   :midi-only true
+   :note "0–63 = off; 64–127 = on (default on)"}
+
+  ;; --- Velocity sensitivity (MIDI-only) -----------------------------------
+  {:cc 89  :path [:filter :vel-sensitivity] :range [0 127] :default 64 :cc-type :fixed
+   :midi-only true}
+  {:cc 90  :path [:amp :vel-sensitivity]    :range [0 127] :default 64 :cc-type :fixed
+   :midi-only true :note "Default 64 = 50%"}
+
+  ;; --- Key priority (MIDI-only) -------------------------------------------
+  {:cc 91  :path [:kb :key-priority]    :range [0 127] :cc-type :fixed
+   :midi-only true
+   :values [{:value 0   :label :low}
+            {:value 43  :label :high}
+            {:value 87  :label :last}]}
+  {:cc 92  :path [:glide :type]         :range [0 127] :cc-type :fixed
+   :midi-only true
+   :values [{:value 0   :label :lcr}
+            {:value 43  :label :lct}
+            {:value 85  :label :exp}]}
+
+  ;; --- Pitch bend range (MIDI-only) ---------------------------------------
+  {:cc 107 :path [:pitch-bend :up]      :range [0 127] :cc-type :fixed
+   :midi-only true
+   :note "0–15=off, 16–31=2st, 32–47=3st, 48–63=4st, 64–79=5st, 80–95=7st, 96–111=12st, 112–127=24st"}
+  {:cc 108 :path [:pitch-bend :down]    :range [0 127] :cc-type :fixed
+   :midi-only true
+   :note "Same range values as CC 107"}
+
+  ;; --- Channel mode -------------------------------------------------------
+  {:cc 120 :path [:channel-mode :all-sounds-off]  :range [0 127] :cc-type :global}
+  {:cc 122 :path [:local-control]                 :range [0 127] :cc-type :global
+   :midi-only true :note "0 = off; 127 = on"}
+  {:cc 123 :path [:channel-mode :all-notes-off]   :range [0 127] :cc-type :global}]
+
+ ;; -------------------------------------------------------------------------
+ ;; NRPN
+ ;; -------------------------------------------------------------------------
+ :midi/nrpn []    ; Minitaur has no NRPN map; all parameters via CC
+
+ ;; -------------------------------------------------------------------------
+ ;; Metadata
+ ;; -------------------------------------------------------------------------
+ :device/firmware-version "2.1"
+ :device/map-source       "Moog Minitaur Owner's Manual (inc. v2.1 addendum) — cdn.inmusicbrands.com"
+ :device/map-version      "2026-04-05"}
