@@ -1,6 +1,6 @@
 # cljseq User Manual
 
-Version 0.1.0 · April 2026
+Version 0.2.0 · April 2026
 
 ---
 
@@ -19,8 +19,10 @@ Version 0.1.0 · April 2026
 11. [FX Automation](#11-fx-automation)
 12. [Control Tree](#12-control-tree)
 13. [Generative Techniques](#13-generative-techniques)
-14. [Bach Corpus (Music21)](#14-bach-corpus-music21)
-15. [Reference: REPL Commands and Step Keys](#15-reference)
+14. [Temporal Buffer](#14-temporal-buffer)
+15. [Threshold Extractor](#15-threshold-extractor)
+16. [Bach Corpus (Music21)](#16-bach-corpus-music21)
+17. [Reference: REPL Commands and Step Keys](#17-reference)
 
 ---
 
@@ -633,7 +635,320 @@ and checkpoints. Bind a physical knob to a named path and read it from any loop.
 
 ---
 
-## 14. Bach Corpus (Music21)
+## 14. Temporal Buffer
+
+The Temporal Buffer is a beat-timestamped event store that replays events
+from a sliding window of recent history. It is inspired by loop-and-modify
+hardware (Mimeophon, Morphagene, Make Noise Phonogene) but operates in the
+MIDI note-event domain rather than audio.
+
+### Zones
+
+Eight overlapping zones define the depth of history available for playback:
+
+| Zone | Depth | Character |
+|------|-------|-----------|
+| `:z0` | 0.5 beats | Micro-repeat / flutter |
+| `:z1` | 1 beat | Sixteenth note echo |
+| `:z2` | 2 beats | Eighth note repeat |
+| `:z3` | 8 beats | Short phrase (default) |
+| `:z4` | 16 beats | Bar loop |
+| `:z5` | 32 beats | Double bar |
+| `:z6` | 64 beats | Four bars |
+| `:z7` | 128 beats | Long form / ambient |
+
+### Quick start
+
+```clojure
+(require '[cljseq.temporal-buffer :as tbuf])
+
+;; Create a buffer with default settings (zone :z3, 8 beats deep)
+(tbuf/deftemporal-buffer :echo)
+
+;; Send events into the buffer from a live loop
+(deflive-loop :melody {}
+  (tbuf/temporal-buffer-send! :echo {:pitch/midi 60 :dur/beats 1/4})
+  (sleep! 1/4))
+
+;; Stop the buffer
+(tbuf/stop! :echo)
+```
+
+### Built-in presets
+
+Presets configure zone, rate, color, feedback and halo together:
+
+```clojure
+;; Start from a named preset
+(tbuf/deftemporal-buffer-preset :my-buf :cosmos)
+
+;; Available presets:
+;;   :flux       -- dry passthrough, no processing
+;;   :tape-echo  -- warm repeat with gentle feedback
+;;   :looper     -- tight clocked loop with high feedback
+;;   :cosmos     -- drifting ambient with warm color
+;;   :mimeophon  -- dual-cursor Mimeophon-style with skew
+```
+
+### Rate and Doppler
+
+Rate multiplies the playback cycle. Values above 1.0 speed up repetition
+and pitch up (like tape); values below 1.0 slow down and pitch down.
+
+```clojure
+;; Half speed (and an octave down via Doppler)
+(tbuf/temporal-buffer-rate! :echo 0.5)
+
+;; Double speed
+(tbuf/temporal-buffer-rate! :echo 2.0)
+
+;; Clocked mode: rate affects timing only, pitch is frozen
+(tbuf/temporal-buffer-clocked! :echo true)
+
+;; Control the pitch coupling strength (cents per rate unit, default 1200)
+(tbuf/temporal-buffer-tape-scale! :echo 80.0)  ; subtle Doppler
+```
+
+### Color
+
+Color applies a per-pass transform to velocity, duration and pitch drift:
+
+```clojure
+;; Set color by preset keyword
+(tbuf/temporal-buffer-color! :echo :warm)
+
+;; Available presets:
+;;   :dark      -- quieter, longer, slightly flat
+;;   :warm      -- gentle fade, slight stretch
+;;   :neutral   -- unmodified (default)
+;;   :tape      -- slight random pitch wobble
+;;   :bright    -- shorter, slightly sharp
+;;   :crisp     -- short and bright (delay-like)
+
+;; Or supply a custom fn [ev] -> ev
+(tbuf/temporal-buffer-color! :echo
+  (fn [ev] (update ev :mod/velocity #(max 0 (- % 5)))))
+```
+
+### Feedback
+
+Feedback re-injects events back into the buffer after each playback pass:
+
+```clojure
+;; Gentle echo tail
+(tbuf/temporal-buffer-feedback! :echo {:amount 0.4 :max-generation 6
+                                        :velocity-floor 8})
+;; :amount          -- re-injection probability per event (0.0-1.0)
+;; :max-generation  -- stop feeding back after N passes
+;; :velocity-floor  -- drop events quieter than this (prevents infinite tail)
+```
+
+### Halo
+
+Halo generates temporal neighbor copies of each emitted event, creating a
+smear or reverb-wash effect:
+
+```clojure
+(tbuf/temporal-buffer-halo! :echo
+  {:amount 0.2 :copies 3 :spread 0.08 :pitch-spread 5
+   :feedback-threshold 0.7 :max-halo-depth 4})
+;; :amount              -- probability of generating halo copies
+;; :copies              -- neighbor copies per emitted event
+;; :spread              -- +/- beat offset range for copies
+;; :pitch-spread        -- +/- cents range for copy pitch
+;; :feedback-threshold  -- above this, copies enter the feedback buffer
+;; :max-halo-depth      -- generation limit (prevents runaway wash)
+```
+
+### Hold (loop slice)
+
+In Hold mode, large zones (`:z4`-`:z7`) lock a fixed window of the buffer
+rather than following the rolling cursor:
+
+```clojure
+;; Freeze current 16-beat window and loop it
+(tbuf/temporal-buffer-hold! :echo true)
+
+;; Choose which beat offset to anchor the slice at
+(tbuf/temporal-buffer-slice-start! :echo 4.0)
+
+;; Unfreeze
+(tbuf/temporal-buffer-hold! :echo false)
+```
+
+### Other controls
+
+```clojure
+;; Flip playback direction (retrograde)
+(tbuf/temporal-buffer-flip! :echo true)
+
+;; Change the active zone live
+(tbuf/temporal-buffer-zone! :echo :z5)
+
+;; Query buffer state
+(tbuf/temporal-buffer-info :echo)
+
+;; List all active buffers
+(tbuf/buffer-names)
+```
+
+### trajectory integration
+
+`temporal-buffer-set!` is a trajectory-compatible setter that lets conductor
+arcs and trajectory curves drive buffer parameters live:
+
+```clojure
+;; Drive rate from a trajectory curve over 16 bars
+(tbuf/temporal-buffer-set! :echo :rate
+  (trajectory :smooth-step {:bars 16 :range [0.5 2.0]}))
+```
+
+---
+
+## 15. Threshold Extractor
+
+The Threshold Extractor watches a continuously varying value and fires note
+or CC events whenever the value crosses a boundary. Rhythm emerges from the
+*motion* of the source curve rather than from a pattern or random process.
+
+Inspired by the MakeNoise GTE (Gestural Time Extractor), but operating in the
+note-event domain with scale awareness and harmony integration.
+
+### Core concept
+
+A threshold comb of N-1 evenly-spaced boundaries divides the `[0.0, 1.0]`
+source range into N channels. Crossing a boundary fires an `:on-cross` event.
+The crossing rate is the rhythmic density; the current channel is the pitch
+or routing target.
+
+```
+Source:   0.0 ─────────────────────────────── 1.0
+               |      |      |      |      |
+Channels: ch1    ch2    ch3    ch4    ch5    ch6
+```
+
+### Quick start
+
+```clojure
+(require '[cljseq.extractor :as ext])
+
+;; A phasor cycling every 4 beats crosses 7 thresholds per cycle
+(def my-phasor (make-phasor {:cycle-beats 4}))
+
+(ext/defthreshold-extractor :rhythm
+  {:source-fn  (fn [beat] (my-phasor beat))
+   :channels   8
+   :on-cross   {:type :note :pitch 60 :velocity 80 :duration 0.1
+                :midi-channel 1}})
+
+;; Stop it
+(ext/extractor-stop! :rhythm)
+```
+
+### Source function
+
+Any function `f(beat) -> [0.0, 1.0]` can serve as a source:
+
+```clojure
+;; Trajectory curve as source
+(ext/defthreshold-extractor :tension-rhythm
+  {:source-fn  (fn [b] ((trajectory :smooth-step {:bars 32}) b))
+   :channels   8
+   :on-cross   {:type :note :pitch 60 :velocity 80 :duration 0.05}})
+
+;; Sine LFO
+(ext/defthreshold-extractor :lfo-rhythm
+  {:source-fn  (fn [b] (/ (inc (Math/sin (* 2 Math/PI (/ b 4.0)))) 2.0))
+   :channels   4
+   :on-cross   {:type :cc :cc 48 :value 127 :midi-channel 1}})
+```
+
+### Space parameter
+
+`space` controls what fraction of `[0.0, 1.0]` the comb spans.
+`space-center` sets the midpoint (default 0.5).
+
+```clojure
+;; Tight window: hypersensitive to small gestures in the center
+(ext/defthreshold-extractor :sensitive
+  {:source-fn  my-source
+   :channels   8
+   :space      0.3   ; comb spans 30% of the range
+   :space-center 0.5
+   :on-cross   {:type :note :pitch 60}})
+
+;; Adjust space live
+(ext/extractor-set! :sensitive :space 0.6)
+(ext/extractor-set! :sensitive :space-center 0.7)
+```
+
+### Direction filter
+
+```clojure
+;; Only fire on rising crossings (source moving up)
+(ext/defthreshold-extractor :rising-only
+  {:source-fn  my-source
+   :channels   4
+   :direction  :rising    ; :both (default), :rising, :falling
+   :on-cross   {:type :note :pitch 60}})
+```
+
+### Hysteresis
+
+Hysteresis prevents rapid re-triggering when the source hovers near a
+threshold boundary. The dead-zone is `hysteresis` x the inter-threshold spacing.
+
+```clojure
+;; Default hysteresis=0.01 (1% of spacing) — usually fine
+;; Increase for a jittery source
+(ext/defthreshold-extractor :noisy
+  {:source-fn  noisy-fn
+   :channels   8
+   :hysteresis 0.05   ; 5% dead-zone
+   :on-cross   {:type :note :pitch 60}})
+```
+
+### Arbitrary event dispatch
+
+`:type :fn` gives full control over the output:
+
+```clojure
+(ext/defthreshold-extractor :custom
+  {:source-fn my-source
+   :channels  8
+   :on-cross  {:type :fn
+               :f    (fn [ch prev-ch direction beat]
+                       ;; ch          -- new channel (1..N)
+                       ;; prev-ch     -- prior channel
+                       ;; direction   -- :rising or :falling
+                       ;; beat        -- beat of crossing
+                       (device/device-send! :boss/dd-500
+                                           [:engine-a :feedback]
+                                           (* ch 16)))}})
+```
+
+### Live mutation
+
+All parameters can be changed on a running extractor:
+
+```clojure
+;; Replace source function
+(ext/extractor-set! :rhythm :source-fn new-source-fn)
+
+;; Replace on-cross config
+(ext/extractor-set! :rhythm :on-cross {:type :note :pitch 64})
+
+;; Query current state
+(ext/extractor-status :rhythm)
+;; => {:source-fn #fn :channels 8 :thresholds [...] :running? true ...}
+
+;; Stop all extractors (called automatically by stop!)
+(ext/extractor-stop-all!)
+```
+
+---
+
+## 16. Bach Corpus (Music21)
 
 cljseq integrates with [Music21](https://web.mit.edu/music21/) for the Bach
 chorale corpus. Requires Python 3.x with `music21` installed:
@@ -670,7 +985,7 @@ to disk in `~/.local/share/cljseq/corpora/m21/`.
 
 ---
 
-## 15. Reference
+## 17. Reference
 
 ### REPL commands
 
