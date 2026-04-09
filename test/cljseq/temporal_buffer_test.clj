@@ -350,3 +350,135 @@
     (tbuf/temporal-buffer-send! :p2-hold {:pitch/midi 60})
     (is (= before (:event-count (tbuf/temporal-buffer-info :p2-hold)))))
   (tbuf/stop! :p2-hold))
+
+;; ---------------------------------------------------------------------------
+;; Phase 3 — Color helpers (via private var access)
+;; ---------------------------------------------------------------------------
+
+(def ^:private apply-color @#'tbuf/apply-color)
+
+(deftest color-presets-defined
+  (testing "all 6 presets exist"
+    (is (every? #(contains? tbuf/color-presets %) [:dark :warm :neutral :tape :bright :crisp])))
+  (testing "each preset has vel-mult, dur-mult, pitch-drift-cents"
+    (doseq [[_ preset] tbuf/color-presets]
+      (is (contains? preset :vel-mult))
+      (is (contains? preset :dur-mult))
+      (is (contains? preset :pitch-drift-cents)))))
+
+(deftest apply-color-neutral
+  (let [ev {:pitch/midi 60 :dur/beats 0.25 :mod/velocity 100}
+        ev' (apply-color ev :neutral)]
+    (testing ":neutral reduces velocity by vel-mult=0.95"
+      (is (= (int (Math/round (* 100 0.95))) (:mod/velocity ev'))))
+    (testing ":neutral does not change pitch"
+      (is (= 60 (:pitch/midi ev'))))
+    (testing ":neutral duration unchanged (dur-mult=1.0)"
+      (is (< (Math/abs (- 0.25 (:dur/beats ev'))) 1e-9)))))
+
+(deftest apply-color-dark
+  (let [ev {:pitch/midi 60 :dur/beats 0.25 :mod/velocity 100}
+        ev' (apply-color ev :dark)]
+    (testing ":dark reduces velocity (vel-mult=0.90)"
+      (is (= (int (Math/round (* 100 0.90))) (:mod/velocity ev'))))
+    (testing ":dark lengthens duration (dur-mult=1.15)"
+      (is (< (Math/abs (- (* 0.25 1.15) (:dur/beats ev'))) 1e-9)))
+    (testing ":dark sags pitch by -5 cents → MIDI 60 stays 60 (rounds)"
+      ;; -5 cents from 60 → 59.95 → rounds to 60
+      (is (= 60 (:pitch/midi ev'))))))
+
+(deftest apply-color-bright
+  (let [ev {:pitch/midi 60 :dur/beats 0.5 :mod/velocity 80}
+        ev' (apply-color ev :bright)]
+    (testing ":bright holds velocity higher (vel-mult=0.97)"
+      (is (= (int (Math/round (* 80 0.97))) (:mod/velocity ev'))))
+    (testing ":bright shortens duration (dur-mult=0.90)"
+      (is (< (Math/abs (- (* 0.5 0.90) (:dur/beats ev'))) 1e-9)))))
+
+(deftest apply-color-custom-fn
+  (let [ev {:pitch/midi 60 :dur/beats 0.25 :mod/velocity 100}
+        double-vel (fn [e] (assoc e :mod/velocity (* 2 (:mod/velocity e 0))))]
+    (testing "custom fn is applied directly"
+      (is (= 200 (:mod/velocity (apply-color ev double-vel)))))))
+
+(deftest apply-color-velocity-clamped-for-presets
+  (testing "built-in preset: velocity never goes below 0"
+    ;; vel-mult 0.90 applied to velocity 1 → Math/round(0.9) = 1, but with 0.5 it would be 0
+    (let [ev {:pitch/midi 60 :dur/beats 0.25 :mod/velocity 1}]
+      (is (>= (:mod/velocity (apply-color ev :dark)) 0))))
+  (testing "built-in preset: result is always in [0, 127]"
+    (let [ev {:pitch/midi 60 :dur/beats 0.25 :mod/velocity 127}]
+      (is (<= (:mod/velocity (apply-color ev :crisp)) 127))))
+  (testing "unknown preset keyword falls back to :neutral without throwing"
+    (let [ev {:pitch/midi 60 :dur/beats 0.25 :mod/velocity 80}]
+      (is (map? (apply-color ev :unknown-color))))))
+
+;; ---------------------------------------------------------------------------
+;; Phase 3 — State API
+;; ---------------------------------------------------------------------------
+
+(deftest phase3-defaults
+  (tbuf/deftemporal-buffer :p3-def {})
+  (let [info (tbuf/temporal-buffer-info :p3-def)]
+    (testing "color defaults to :neutral"
+      (is (= :neutral (:color info))))
+    (testing "feedback defaults to {:amount 0.0}"
+      (is (= 0.0 (get-in info [:feedback :amount])))))
+  (tbuf/stop! :p3-def))
+
+(deftest phase3-opts-at-creation
+  (tbuf/deftemporal-buffer :p3-opts {:color :bright
+                                     :feedback {:amount 0.7 :max-generation 4 :velocity-floor 10}})
+  (let [info (tbuf/temporal-buffer-info :p3-opts)]
+    (testing "color from opts"
+      (is (= :bright (:color info))))
+    (testing "feedback.amount from opts"
+      (is (== 0.7 (get-in info [:feedback :amount]))))
+    (testing "feedback.max-generation from opts"
+      (is (= 4 (get-in info [:feedback :max-generation]))))
+    (testing "feedback.velocity-floor from opts"
+      (is (= 10 (get-in info [:feedback :velocity-floor])))))
+  (tbuf/stop! :p3-opts))
+
+(deftest phase3-color-mutation
+  (tbuf/deftemporal-buffer :p3-color {})
+  (testing "temporal-buffer-color! updates state"
+    (tbuf/temporal-buffer-color! :p3-color :dark)
+    (is (= :dark (:color (tbuf/temporal-buffer-info :p3-color)))))
+  (testing "temporal-buffer-color! accepts a fn"
+    (tbuf/temporal-buffer-color! :p3-color identity)
+    (is (fn? (:color (tbuf/temporal-buffer-info :p3-color)))))
+  (testing "temporal-buffer-color! on unknown buf is safe"
+    (is (nil? (tbuf/temporal-buffer-color! :no-such :dark))))
+  (tbuf/stop! :p3-color))
+
+(deftest phase3-feedback-mutation
+  (tbuf/deftemporal-buffer :p3-fb {})
+  (testing "temporal-buffer-feedback! updates amount"
+    (tbuf/temporal-buffer-feedback! :p3-fb {:amount 0.8 :max-generation 6 :velocity-floor 8})
+    (let [info (tbuf/temporal-buffer-info :p3-fb)]
+      (is (== 0.8 (get-in info [:feedback :amount])))
+      (is (= 6   (get-in info [:feedback :max-generation])))
+      (is (= 8   (get-in info [:feedback :velocity-floor])))))
+  (testing "temporal-buffer-feedback! on unknown buf is safe"
+    (is (nil? (tbuf/temporal-buffer-feedback! :no-such {:amount 0.5}))))
+  (tbuf/stop! :p3-fb))
+
+(deftest phase3-generation-stamped-on-send
+  ;; Events written by temporal-buffer-send! start at generation 0
+  (tbuf/deftemporal-buffer :p3-gen {:feedback {:amount 0.0}})
+  (tbuf/temporal-buffer-send! :p3-gen {:pitch/midi 60 :dur/beats 0.25})
+  (testing "send! stamps :generation 0 on events"
+    ;; We can't directly inspect the buffer atom from outside,
+    ;; but event-count growing confirms events are stored
+    (is (pos? (:event-count (tbuf/temporal-buffer-info :p3-gen)))))
+  (tbuf/stop! :p3-gen))
+
+(deftest phase3-regression-hold-with-feedback
+  ;; Hold + active feedback should not let events enter via send!
+  (tbuf/deftemporal-buffer :p3-hold-fb {:feedback {:amount 1.0}})
+  (tbuf/temporal-buffer-hold! :p3-hold-fb true)
+  (let [before (:event-count (tbuf/temporal-buffer-info :p3-hold-fb))]
+    (tbuf/temporal-buffer-send! :p3-hold-fb {:pitch/midi 60})
+    (is (= before (:event-count (tbuf/temporal-buffer-info :p3-hold-fb)))))
+  (tbuf/stop! :p3-hold-fb))

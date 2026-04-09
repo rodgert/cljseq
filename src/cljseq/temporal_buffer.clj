@@ -211,17 +211,65 @@
     rate))
 
 ;; ---------------------------------------------------------------------------
+;; Phase 3 — Color / Feedback helpers
+;; ---------------------------------------------------------------------------
+
+(def color-presets
+  "Built-in Color transform presets.
+
+  Each preset defines per-pass adjustments to velocity, duration, and pitch:
+    :vel-mult          — velocity multiplier  (< 1.0 fades, > 1.0 amplifies)
+    :dur-mult          — duration multiplier  (> 1.0 lengthens, < 1.0 shortens)
+    :pitch-drift-cents — cents offset per pass (negative = sag, :random-small = ±10¢)
+
+  | Preset   | Character                                        |
+  |----------|--------------------------------------------------|
+  | :dark    | Fades + lengthens + sags pitch — dark wash      |
+  | :warm    | Fades gently + slight lengthening — warm tail   |
+  | :neutral | Conservative fade, no pitch drift — clean echo  |
+  | :tape    | Slight duration shrink + random pitch flutter   |
+  | :bright  | Holds velocity longer + shortens + sharpens     |
+  | :crisp   | Near-lossless + shortest duration + sharp drift |
+
+  Custom Color: pass any 1-arg fn [ev] → ev as the :color option."
+  {:dark    {:vel-mult 0.90 :dur-mult 1.15 :pitch-drift-cents    -5}
+   :warm    {:vel-mult 0.93 :dur-mult 1.05 :pitch-drift-cents     0}
+   :neutral {:vel-mult 0.95 :dur-mult 1.00 :pitch-drift-cents     0}
+   :tape    {:vel-mult 0.95 :dur-mult 0.98 :pitch-drift-cents     :random-small}
+   :bright  {:vel-mult 0.97 :dur-mult 0.90 :pitch-drift-cents     5}
+   :crisp   {:vel-mult 0.98 :dur-mult 0.80 :pitch-drift-cents     8}})
+
+(defn- apply-color
+  "Apply the Color transform to event `ev`.
+
+  `color` — keyword from `color-presets`, or a 1-arg fn [ev] → ev.
+  Unknown keywords fall back to :neutral."
+  [ev color]
+  (if (fn? color)
+    (color ev)
+    (let [{:keys [vel-mult dur-mult pitch-drift-cents]
+           :or   {vel-mult 1.0 dur-mult 1.0 pitch-drift-cents 0}}
+          (get color-presets color (:neutral color-presets))
+          drift (cond
+                  (= :random-small pitch-drift-cents) (* (- (rand) 0.5) 20.0)
+                  (number? pitch-drift-cents)          (double pitch-drift-cents)
+                  :else                                0.0)
+          new-vel (int (max 0 (min 127 (Math/round (* (double (:mod/velocity ev 64))
+                                                      vel-mult)))))
+          new-dur (* (double (:dur/beats ev 0.25)) dur-mult)]
+      (-> ev
+          (assoc :mod/velocity new-vel :dur/beats new-dur)
+          (shift-pitch drift)))))
+
+;; ---------------------------------------------------------------------------
 ;; Playback runner
 ;; ---------------------------------------------------------------------------
 
 (defn- playback-runner
   "Daemon thread body for temporal buffer `buf-name`, cursor `cursor` (:a or :b).
 
-  Phase 2 additions over Phase 1:
-  - Effective rate = base-rate adjusted by skew for this cursor.
-  - Cycle period = zone-depth / effective-rate (Rate/Doppler).
-  - Events are pitch-shifted by doppler-pitch-cents before emission.
-  - Clocked mode suppresses pitch shift (speed-only Rate).
+  Phase 2 additions: Rate/Doppler, clocked mode, Skew (cursor A / B).
+  Phase 3 additions: Color per-pass transform, Feedback re-injection.
 
   Each cycle:
   1. Determine zone depth D and effective rate R for this cursor.
@@ -229,7 +277,11 @@
   3. Park until next cycle boundary (cycle-start + P).
   4. Collect events written during [cycle-start, cycle-start + P).
   5. Apply Doppler pitch shift; emit in forward or retrograde order.
-  6. Advance cycle-start by P."
+  6. If feedback is active, apply Color to each event and re-inject into
+     buffer at play-beat (lands in next cycle's window) with generation+1.
+     Events exceeding max-generation or below velocity-floor are dropped.
+  7. Prune buffer of events beyond max-depth.
+  8. Advance cycle-start by P."
   [buf-name running? cursor]
   (loop [cycle-start (current-beat)]
     (when @running?
@@ -267,7 +319,35 @@
                   (let [rel-offset (- (double (:beat ev 0.0)) cycle-start)
                         play-beat  (+ next-wake rel-offset)
                         ev'        (shift-pitch ev pitch-cents)]
-                    (emit-event! ev' play-beat)))))
+                    (emit-event! ev' play-beat)))
+                ;; Phase 3: Feedback re-injection
+                (let [fb-cfg    (or (:feedback state') {:amount 0.0})
+                      fb-amt    (double (:amount fb-cfg 0.0))
+                      max-gen   (int (:max-generation fb-cfg 8))
+                      vel-floor (int (:velocity-floor fb-cfg 5))
+                      color     (or (:color state') :neutral)]
+                  (when (pos? fb-amt)
+                    (doseq [ev ordered]
+                      (let [gen (int (:generation ev 0))]
+                        (when (< gen max-gen)
+                          (when (< (rand) fb-amt)
+                            (let [rel-offset (- (double (:beat ev 0.0)) cycle-start)
+                                  play-beat  (+ next-wake rel-offset)
+                                  ev-colored (apply-color ev color)
+                                  fb-vel     (int (:mod/velocity ev-colored 64))]
+                              (when (>= fb-vel vel-floor)
+                                (swap! (:buffer-atom entry)
+                                       conj (assoc ev-colored
+                                                   :beat       play-beat
+                                                   :generation (inc gen)
+                                                   :halo-depth 0))))))))
+                    ;; Prune feedback-injected events beyond max-depth
+                    (let [md (double (:max-depth @(:state-atom entry) 128.0))
+                          cb (current-beat)]
+                      (swap! (:buffer-atom entry)
+                             (fn [buf]
+                               (filterv #(>= (double (:beat % 0.0)) (- cb md))
+                                        buf))))))))
             (recur next-wake)))))))
 
 ;; ---------------------------------------------------------------------------
@@ -295,6 +375,14 @@
                    Starts a second cursor B at (rate − amount) alongside
                    cursor A at (rate + amount).
 
+  Phase 3 options:
+    :color       — per-pass event transform (default :neutral)
+                   keyword from `color-presets`, or a 1-arg fn [ev] → ev
+    :feedback    — feedback re-injection config (default {:amount 0.0})
+                   {:amount         0.0   ; [0.0, 1.0] — re-injection probability
+                    :max-generation 8     ; stop feedback after N generations
+                    :velocity-floor 5}    ; drop events below this velocity
+
   Re-evaluating with the same name stops the prior instance and starts fresh.
 
   Returns `buf-name`."
@@ -309,6 +397,8 @@
          tape-scale  (double (or (:tape-scale opts) default-tape-scale))
          clocked?    (boolean (or (:clocked? opts) false))
          skew        (:skew opts)
+         color       (or (:color opts) :neutral)
+         feedback    (or (:feedback opts) {:amount 0.0})
          state-atom  (atom {:active-zone active-zone
                             :hold?       false
                             :flip?       false
@@ -316,7 +406,9 @@
                             :rate        rate
                             :tape-scale  tape-scale
                             :clocked?    clocked?
-                            :skew        skew})
+                            :skew        skew
+                            :color       color
+                            :feedback    feedback})
          buffer-atom (atom [])
          running?    (atom true)
          entry       {:opts        opts
@@ -466,6 +558,46 @@
     (swap! (:state-atom entry) assoc :clocked? (boolean clocked?)))
   nil)
 
+(defn temporal-buffer-color!
+  "Set the per-pass Color transform for `buf-name`.
+
+  `color` — keyword from `color-presets` (:dark :warm :neutral :tape :bright :crisp),
+            or a 1-arg fn [ev] → ev for a custom transform.
+
+  Color is applied to each event before it is re-injected into the feedback
+  path. It shapes the timbral character of the feedback tail:
+    :dark   — fades + lengthens + sags pitch; dense, sombre wash
+    :warm   — gentle fade + slight lengthening; warm, receding tail
+    :neutral — conservative fade, no drift; clean echo (default)
+    :tape   — slight shortening + random ±10¢ flutter; analog texture
+    :bright — holds velocity + shortens + sharpens; bright, cutting tail
+    :crisp  — near-lossless + shortest + sharp drift; almost self-oscillating
+
+  Has no effect when feedback amount is 0.0."
+  [buf-name color]
+  (when-let [entry (get @registry buf-name)]
+    (swap! (:state-atom entry) assoc :color color))
+  nil)
+
+(defn temporal-buffer-feedback!
+  "Set the feedback re-injection config for `buf-name`.
+
+  `feedback-map`:
+    :amount         — re-injection probability per event per cycle [0.0, 1.0]
+                      0.0 = no feedback (default); 1.0 = every event is re-injected
+    :max-generation — maximum number of feedback generations (default 8)
+                      prevents runaway accumulation; events beyond this are dropped
+    :velocity-floor — velocity below which feedback events are discarded (default 5)
+                      provides a natural decay floor
+
+  Self-oscillation emerges above ~0.85 when Color velocity multiplier is close
+  to 1.0 (e.g. :crisp at 0.98 × amount 0.90 ≈ 0.88 per pass). Below
+  :velocity-floor, the tail decays to silence regardless of feedback amount."
+  [buf-name feedback-map]
+  (when-let [entry (get @registry buf-name)]
+    (swap! (:state-atom entry) assoc :feedback feedback-map))
+  nil)
+
 (defn temporal-buffer-skew!
   "Set or clear the Skew configuration for `buf-name`.
 
@@ -498,6 +630,8 @@
      :tape-scale  1200.0
      :clocked?    false
      :skew        nil
+     :color       :neutral
+     :feedback    {:amount 0.0 :max-generation 8 :velocity-floor 5}
      :event-count 42
      :oldest-beat 34.375}"
   [buf-name]
