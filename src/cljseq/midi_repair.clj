@@ -77,6 +77,18 @@
 ;; 2. Key / mode detection
 ;; ---------------------------------------------------------------------------
 
+(def ^:private mode->scale-name
+  "Map from detect-mode output names to cljseq scale library names.
+  detect-mode returns church mode names; the scale library uses :major and
+  :natural-minor for the diatonic endpoints."
+  {:ionian     :major
+   :aeolian    :natural-minor
+   :dorian     :dorian
+   :phrygian   :phrygian
+   :lydian     :lydian
+   :mixolydian :mixolydian
+   :locrian    :locrian})
+
 (defn detect-key!
   "Detect the tonic and church mode from a collection of notes or MIDI ints.
 
@@ -95,7 +107,8 @@
                     (mapv :pitch/midi (:notes notes-or-parsed))
                     (vec notes-or-parsed))
         result    (analyze/detect-mode midi-ints)
-        sc        (scale/scale (:tonic result) 4 (:mode result))]
+        sc        (scale/scale (:tonic result) 4
+                               (mode->scale-name (:mode result) (:mode result)))]
     (assoc result :scale sc)))
 
 ;; ---------------------------------------------------------------------------
@@ -103,13 +116,18 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:private ndlr-thresholds
-  "Heuristic thresholds for NDLR voice classification."
+  "Heuristic thresholds for NDLR voice classification.
+
+  Voice separation is duration-first: notes are bucketed by duration before
+  any chord-cluster analysis. This prevents dense motif runs (where consecutive
+  notes may be <60ms apart) from being misidentified as pad chords."
   {:drone-dur-beats    4.0    ; notes held ≥ 4 beats are drone candidates
    :drone-midi-max     50     ; drone lives below MIDI 50 (D3)
-   :pad-cluster-ms     60     ; notes within 60ms are a chord cluster (pad spread)
-   :pad-dur-min        0.4    ; pad notes are at least 0.4 beats (16th at 150bpm)
-   :pad-midi-range     [48 72]; pad lives between C3 and C5
-   :motif-dur-max      0.6    ; motif notes are shorter than 0.6 beats
+   :pad-dur-min        0.5    ; pad notes are ≥ 0.5 beats (eighth note at 120 BPM)
+   :pad-dur-max        4.0    ; pad notes are < 4 beats (else they'd be drone)
+   :pad-cluster-ms     80     ; within pad-dur subset: notes within 80ms = chord spread
+   :pad-midi-range     [48 84]; pad lives between C3 and C6
+   :motif-dur-max      0.5    ; motif notes are shorter than 0.5 beats
    :motif-split-midi   62})   ; motif-1 above this, motif-2 at/below
 
 (defn- cluster-by-time
@@ -128,57 +146,70 @@
 (defn separate-voices!
   "Separate a flat note stream into NDLR structural voices.
 
-  Uses duration, register, and chord-cluster detection as the primary
-  discriminants. The NDLR's known architecture (drone/pad/motif-1/motif-2)
-  is the prior — this is not generic voice separation.
+  Uses a duration-first strategy:
+    1. Drone: long duration (≥ 4 beats) AND low register
+    2. Motif candidates: short duration (< pad-dur-min beats) — pulled out BEFORE
+       any cluster analysis so that dense motif runs are not mistaken for pad chords
+    3. Pad candidates: medium duration notes, then chord-cluster analysis within that set
+    4. Motif-1 vs motif-2: split by register
+
+  This ordering is critical for dense recordings where consecutive motif notes
+  may be closer than the pad-cluster-ms window.
 
   `parsed`  — result map from parse-midi!, or a flat note vector
   `opts`:
     :structure  — :ndlr (default) or :generic (4-voice, less accurate)
     :thresholds — override any entry in ndlr-thresholds
+    :tempo      — BPM used for ms→beats conversion (default 120)
 
   Returns:
     {:drone    [notes...]
-     :pad      [notes...]        ; each entry has :chord [midi...] merged
+     :pad      [notes...]
      :motif-1  [notes...]
      :motif-2  [notes...]
      :ambiguous [notes...]}      ; notes that failed classification"
   ([parsed] (separate-voices! parsed {}))
-  ([parsed {:keys [structure thresholds]
-            :or   {structure :ndlr}}]
+  ([parsed {:keys [structure thresholds tempo]
+            :or   {structure :ndlr tempo 120}}]
    (let [notes     (if (map? parsed) (:notes parsed) (vec parsed))
+         bpm       (if (map? parsed) (get parsed :tempo tempo) tempo)
          t         (merge ndlr-thresholds thresholds)
          sorted    (sort-by :start/beats notes)
 
-         ;; Step 1: drone candidates — long duration + low register
+         ;; Step 1: drone — long duration + low register
          {drone-cands true rest-1 false}
          (group-by #(and (>= (:dur/beats %) (:drone-dur-beats t))
                          (<= (:pitch/midi %) (:drone-midi-max t)))
                    sorted)
 
-         ;; Step 2: chord clusters (pad) — notes firing within 60ms window
-         ;; Convert beats to approx ms assuming 120 BPM if tempo unknown
-         cluster-window (/ (:pad-cluster-ms t) 1000.0 (/ 60.0 120.0))
-         clusters  (cluster-by-time rest-1 cluster-window)
-         {pad-clusters true mono-notes false}
+         ;; Step 2: duration-first split — separate motif candidates from pad candidates
+         ;; BEFORE any time-clustering so dense motif runs don't absorb into pad
+         {motif-cands true pad-cands false}
+         (group-by #(< (:dur/beats %) (:motif-dur-max t)) rest-1)
+
+         ;; Step 3: chord cluster analysis — applied ONLY to pad-duration candidates
+         ;; Convert ms window to beats using actual tempo
+         cluster-window (/ (:pad-cluster-ms t) 1000.0 (/ 60.0 bpm))
+         clusters  (cluster-by-time pad-cands cluster-window)
+         {pad-clusters true lone-pad false}
          (group-by #(> (count %) 1) clusters)
 
          pad-notes  (mapcat identity pad-clusters)
-         mono-notes (mapcat identity mono-notes)
+         ;; Single pad-duration notes that don't cluster: treat as ambiguous
+         ambiguous-pad (mapcat identity lone-pad)
 
          ;; Validate pad register
-         {pad-in-range true rest-2 false}
+         {pad-in-range true out-of-range false}
          (group-by #(let [lo (first (:pad-midi-range t))
                           hi (second (:pad-midi-range t))]
                       (and (>= (:pitch/midi %) lo) (<= (:pitch/midi %) hi)))
                    pad-notes)
 
-         ;; Step 3: split remaining single notes by register into motif-1/2
+         ;; Step 4: split motif candidates by register into motif-1/2
          {motif-1 true motif-2 false}
-         (group-by #(> (:pitch/midi %) (:motif-split-midi t)) mono-notes)
+         (group-by #(> (:pitch/midi %) (:motif-split-midi t)) motif-cands)
 
-         ;; Ambiguous: pad notes outside expected range, and rest-2
-         ambiguous (concat rest-2)]
+         ambiguous (concat ambiguous-pad out-of-range)]
 
      {:drone     (vec (or drone-cands []))
       :pad       (vec (or pad-in-range []))
@@ -342,7 +373,68 @@
           (get-in score [:corrections :corrected] [])))
 
 ;; ---------------------------------------------------------------------------
-;; 6. Resolution generation — corpus-guided harmonic completion
+;; 6. Ambiguous note resolution — secondary voice classification
+;; ---------------------------------------------------------------------------
+
+(defn resolve-ambiguous!
+  "Attempt secondary classification of notes the primary heuristic left ambiguous.
+
+  The ambiguous pool consists of mid-duration notes (0.5–4 beats) that did not
+  cluster with neighbouring notes in the pad spread window. Three passes:
+
+  Pass 1 — temporal context: if a note's nearest neighbours (within 1 beat) are
+  predominantly motif notes, pull it into the appropriate motif voice.
+
+  Pass 2 — pitch register: notes above :motif-split-midi → motif-1;
+  at/below → motif-2.  This handles single sustained notes in the upper register
+  that a melodic player held between motif runs.
+
+  Pass 3 — what remains goes to pad as single sparse harmonics.
+
+  `voices`  — result map from separate-voices! (must include :ambiguous key)
+  `opts`:
+    :thresholds — override ndlr-thresholds entries
+
+  Returns an updated voices map with :ambiguous merged into the named voices."
+  ([voices] (resolve-ambiguous! voices {}))
+  ([voices {:keys [thresholds]}]
+   (let [t          (merge ndlr-thresholds thresholds)
+         ambiguous  (:ambiguous voices [])
+         motif-all  (into (vec (:motif-1 voices [])) (:motif-2 voices []))
+         motif-set  (set (map :start/beats motif-all))
+
+         context-window 1.0   ; beats: look within this window for motif neighbours
+
+         ;; Pass 1: temporal context — is this note surrounded by motif activity?
+         {ctx-motif true ctx-rest false}
+         (group-by (fn [n]
+                     (let [lo (- (:start/beats n) context-window)
+                           hi (+ (:start/beats n) context-window)]
+                       (boolean (some #(and (>= % lo) (<= % hi)) motif-set))))
+                   ambiguous)
+
+         ;; ctx-motif notes: assign by register
+         {ctx-motif-1 true ctx-motif-2 false}
+         (group-by #(> (:pitch/midi %) (:motif-split-midi t)) (or ctx-motif []))
+
+         ;; Pass 2: remaining notes — register-only decision
+         {reg-motif-1 true reg-rest false}
+         (group-by #(> (:pitch/midi %) (:motif-split-midi t)) (or ctx-rest []))
+
+         ;; Pass 3: reg-rest goes to pad (sparse single harmonics in lower register)
+         new-pad     (concat (:pad voices []) reg-rest)
+         new-motif-1 (concat (:motif-1 voices []) ctx-motif-1 reg-motif-1)
+         new-motif-2 (concat (:motif-2 voices []) ctx-motif-2)]
+
+     (-> voices
+         (assoc :drone    (:drone voices []))
+         (assoc :pad      (vec (sort-by :start/beats new-pad)))
+         (assoc :motif-1  (vec (sort-by :start/beats new-motif-1)))
+         (assoc :motif-2  (vec (sort-by :start/beats new-motif-2)))
+         (assoc :ambiguous [])))))
+
+;; ---------------------------------------------------------------------------
+;; 7. Resolution generation — corpus-guided harmonic completion
 ;; ---------------------------------------------------------------------------
 
 (defn- resolution-progression
@@ -415,13 +507,32 @@
          drone-note {:pitch/midi  (- tonic-midi 12)   ; one octave below
                      :start/beats 0.0
                      :dur/beats   (* bars 4.0)
-                     :velocity    45}]
+                     :velocity    45}
+
+         ;; Motif-1: descending scale walk from degree 7 to tonic over the resolution
+         ;; Notes get quieter and shorter as the passage approaches bar end (fade-out)
+         total-beats   (* bars 4.0)
+         motif-degrees (range 7 -1 -1)   ; degrees 7..0 inclusive = 8 notes
+         motif-spacing (/ total-beats (count motif-degrees))
+         motif-1-notes (mapv (fn [i deg]
+                               (let [midi (pitch/pitch->midi (scale/pitch-at sc deg))
+                                     ;; Keep motif in singable upper register (oct 4-5)
+                                     midi (cond (< midi 60) (+ midi 12)
+                                                (> midi 84) (- midi 12)
+                                                :else midi)
+                                     frac (/ i (double (dec (count motif-degrees))))
+                                     vel  (int (Math/round (* 65.0 (- 1.0 (* frac 0.6)))))]
+                                 {:pitch/midi  midi
+                                  :start/beats (* i motif-spacing)
+                                  :dur/beats   (max 0.25 (* motif-spacing 0.85))
+                                  :velocity    vel}))
+                             (range) motif-degrees)]
      {:bars       bars
       :style      style
       :progression prog
       :voices     {:drone   [drone-note]
                    :pad     pad-notes
-                   :motif-1 []    ; motifs thin to silence in resolution
+                   :motif-1 motif-1-notes
                    :motif-2 []}})))
 
 ;; ---------------------------------------------------------------------------
@@ -462,13 +573,21 @@
                                    (name (:mode key-res))
                                    (:confidence key-res)))
          _        (println "Separating voices...")
-         voices   (separate-voices! parsed {:structure structure})
-         _        (println (format "  drone=%d pad=%d motif-1=%d motif-2=%d ambiguous=%d"
-                                   (count (:drone voices))
-                                   (count (:pad voices))
-                                   (count (:motif-1 voices))
-                                   (count (:motif-2 voices))
-                                   (count (:ambiguous voices))))
+         voices-raw (separate-voices! parsed {:structure structure :tempo (:tempo parsed)})
+         _          (println (format "  drone=%d pad=%d motif-1=%d motif-2=%d ambiguous=%d"
+                                     (count (:drone voices-raw))
+                                     (count (:pad voices-raw))
+                                     (count (:motif-1 voices-raw))
+                                     (count (:motif-2 voices-raw))
+                                     (count (:ambiguous voices-raw))))
+         _          (println "Resolving ambiguous notes...")
+         voices     (resolve-ambiguous! voices-raw)
+         _          (println (format "  → drone=%d pad=%d motif-1=%d motif-2=%d ambiguous=%d"
+                                     (count (:drone voices))
+                                     (count (:pad voices))
+                                     (count (:motif-1 voices))
+                                     (count (:motif-2 voices))
+                                     (count (:ambiguous voices))))
          _        (println "Annotating structure...")
          struct   (annotate-structure! voices key-res)
          _        (println (format "  %d chords, peak tension %.2f at bar %d, final tension %.2f"
@@ -539,3 +658,308 @@
   "Load a score map from an EDN string produced by save-score."
   [edn-str]
   (edn/read-string edn-str))
+
+;; ---------------------------------------------------------------------------
+;; 9. MIDI export — round-trip back to a .mid file for DAW import
+;; ---------------------------------------------------------------------------
+
+(defn- beats->ticks ^long [beats ppq]
+  (long (Math/round (double (* beats ppq)))))
+
+(defn- make-tempo-track!
+  "Add a tempo MetaMessage (type 0x51) to track 0."
+  [^javax.sound.midi.Sequence sequence bpm]
+  (let [track  (.createTrack sequence)
+        uspqn  (long (/ 60000000.0 bpm))
+        bytes  (byte-array [(unchecked-byte (bit-and (bit-shift-right uspqn 16) 0xFF))
+                            (unchecked-byte (bit-and (bit-shift-right uspqn 8)  0xFF))
+                            (unchecked-byte (bit-and uspqn 0xFF))])
+        msg    (doto (javax.sound.midi.MetaMessage.)
+                 (.setMessage 0x51 bytes 3))]
+    (.add track (javax.sound.midi.MidiEvent. msg 0))
+    track))
+
+(defn- add-note-events!
+  "Emit NOTE_ON + NOTE_OFF pair onto `track` at the given tick positions.
+  `ch` is 1-based (as used throughout cljseq); MIDI API is 0-based."
+  [^javax.sound.midi.Track track ch midi vel start-tick dur-ticks]
+  (let [ch0     (dec (int ch))
+        on-msg  (doto (javax.sound.midi.ShortMessage.)
+                  (.setMessage javax.sound.midi.ShortMessage/NOTE_ON ch0 (int midi) (int vel)))
+        off-msg (doto (javax.sound.midi.ShortMessage.)
+                  (.setMessage javax.sound.midi.ShortMessage/NOTE_OFF ch0 (int midi) 0))]
+    (.add track (javax.sound.midi.MidiEvent. on-msg  start-tick))
+    (.add track (javax.sound.midi.MidiEvent. off-msg (+ start-tick (max 1 dur-ticks))))))
+
+(defn- voice->track!
+  "Write a sequence of note maps onto a new MIDI track.
+
+  Handles both:
+    {:pitch/midi N ...}        — single note (drone, motif)
+    {:chord [N N N] ...}       — simultaneous notes (resolution pad)"
+  [^javax.sound.midi.Sequence sequence notes ch ppq beat-offset]
+  (let [track (.createTrack sequence)]
+    (doseq [n notes]
+      (let [start (beats->ticks (+ (double (:start/beats n 0)) beat-offset) ppq)
+            dur   (beats->ticks (double (:dur/beats n 0.25)) ppq)
+            vel   (int (:velocity n 64))
+            midis (or (:chord n)
+                      (when-let [m (:pitch/midi n)] [m]))]
+        (doseq [midi midis]
+          (add-note-events! track ch midi vel start dur))))
+    track))
+
+(defn save-midi!
+  "Write the repaired score to a Standard MIDI File for DAW import.
+
+  Produces Format 1 MIDI (multi-track) so each voice lands on a separate
+  lane in Bitwig/Ableton/Logic:
+    Track 0 — tempo map
+    Track 1 — drone    (ch 1)
+    Track 2 — pad      (ch 2)
+    Track 3 — motif-1  (ch 3)
+    Track 4 — motif-2  (ch 4)
+
+  The resolution passage (if included) is appended after the last original
+  bar, time-shifted so it starts exactly at bar (:bars meta).
+
+  `score`  — result map from repair-pipeline! or load-score
+  `path`   — output path, e.g. \"shipwreck-piano-repaired.mid\"
+  `opts`:
+    :include-resolution? — append resolution passage (default true)
+    :channels — voice-kw → MIDI-channel map
+    :ppq      — ticks per quarter note (default 480)"
+  ([score path] (save-midi! score path {}))
+  ([score path {:keys [include-resolution? channels ppq]
+                :or   {include-resolution? true
+                       channels {:drone 1 :pad 2 :motif-1 3 :motif-2 4}
+                       ppq 480}}]
+   (let [bpm           (double (get-in score [:meta :tempo] 120.0))
+         bars          (get-in score [:meta :bars] 0)
+         time-sig      (get-in score [:meta :time-sig] "4/4")
+         beats-per-bar (Double/parseDouble (first (str/split time-sig #"/")))
+         score-beats   (* bars beats-per-bar)
+         sequence      (javax.sound.midi.Sequence. javax.sound.midi.Sequence/PPQ ppq)]
+     (make-tempo-track! sequence bpm)
+     (doseq [[voice-kw ch] channels]
+       (let [orig-notes (get-in score [:voices voice-kw] [])
+             res-notes  (when include-resolution?
+                          (mapv #(update % :start/beats + score-beats)
+                                (get-in score [:resolution :voices voice-kw] [])))]
+         (voice->track! sequence
+                        (into (vec orig-notes) res-notes)
+                        ch ppq 0)))
+     ;; Any remaining ambiguous notes get their own track (ch 5) so nothing is lost
+     (when-let [ambig (seq (get-in score [:voices :ambiguous]))]
+       (voice->track! sequence ambig 5 ppq 0))
+     (with-open [out (java.io.FileOutputStream. path)]
+       (javax.sound.midi.MidiSystem/write sequence 1 out))
+     (println (format "Wrote %s  (%.1f BPM, %d bars%s)"
+                      path bpm bars
+                      (if include-resolution?
+                        (format " + %d bar resolution" (get-in score [:resolution :bars] 0))
+                        "")))
+     path)))
+
+;; ---------------------------------------------------------------------------
+;; Phase 3 — Composition as data
+;;   to-score, transpose, mode-shift, retrograde
+;; ---------------------------------------------------------------------------
+
+;; --- Internal helpers -------------------------------------------------------
+
+(def ^:private tonic->pc
+  "Pitch-class (0–11) for each tonic keyword."
+  {:C 0 :C# 1 :Db 1 :D 2 :D# 3 :Eb 3 :E 4 :F 5 :F# 6 :Gb 6 :G 7 :G# 8 :Ab 8 :A 9 :A# 10 :Bb 10 :B 11})
+
+(def ^:private pc->tonic
+  "Canonical tonic keyword for each pitch-class 0–11 (flat spellings for black keys)."
+  {0 :C 1 :Db 2 :D 3 :Eb 4 :E 5 :F 6 :Gb 7 :G 8 :Ab 9 :A 10 :Bb 11 :B})
+
+(defn- shift-note
+  "Shift all MIDI pitch values in a note map by `semitones`."
+  [note semitones]
+  (cond-> note
+    (:pitch/midi note) (update :pitch/midi + semitones)
+    (:chord note)      (update :chord #(mapv (fn [m] (+ m semitones)) %))))
+
+(defn- shift-voices
+  "Transpose all notes in every voice of `voices` by `semitones`."
+  [voices semitones]
+  (reduce-kv (fn [m k notes]
+               (assoc m k (mapv #(shift-note % semitones) notes)))
+             {}
+             voices))
+
+(defn- note-end-beat
+  "Return the beat at which `note` ends."
+  [note]
+  (+ (:start/beats note 0.0) (:dur/beats note 0.0)))
+
+(defn- voice-span
+  "Return the total beat span of a voice (latest note end time)."
+  [notes]
+  (if (seq notes)
+    (apply max (map note-end-beat notes))
+    0.0))
+
+(defn- retrograde-voice
+  "Time-reverse the notes in `notes` within `span` beats."
+  [notes span]
+  (->> notes
+       (mapv (fn [note]
+               (assoc note :start/beats (- span (note-end-beat note)))))
+       (sort-by :start/beats)
+       vec))
+
+(defn- nearest-in-scale-degree
+  "Return the scale degree of the nearest in-scale neighbor to `midi` in `sc`.
+  Searches ±6 semitones. Returns nil if none found."
+  [sc midi]
+  (let [candidates (->> (range (max 0 (- midi 6)) (min 128 (+ midi 7)))
+                        (keep (fn [m]
+                                (when-let [d (scale/degree-of sc (pitch/midi->pitch m))]
+                                  [(Math/abs (- m midi)) d])))
+                        (sort-by first))]
+    (second (first candidates))))
+
+(defn- remap-note-midi
+  "Remap `midi` from `old-sc` to `new-sc` by scale degree.
+  Preserves harmonic function; adjusts pitch class where modes diverge."
+  [midi old-sc new-sc]
+  (let [degree (or (scale/degree-of old-sc (pitch/midi->pitch midi))
+                   (nearest-in-scale-degree old-sc midi))
+        new-p  (when (some? degree) (scale/pitch-at new-sc degree))]
+    (if new-p (pitch/pitch->midi new-p) midi)))
+
+(defn- remap-note
+  "Remap all MIDI pitch values in `note` from `old-sc` to `new-sc`."
+  [note old-sc new-sc]
+  (cond-> note
+    (:pitch/midi note)
+    (update :pitch/midi remap-note-midi old-sc new-sc)
+    (:chord note)
+    (update :chord #(mapv (fn [m] (remap-note-midi m old-sc new-sc)) %))))
+
+(defn- remap-all-voices
+  "Remap all notes in `voices` from `old-sc` to `new-sc`."
+  [voices old-sc new-sc]
+  (reduce-kv (fn [m k notes]
+               (assoc m k (mapv #(remap-note % old-sc new-sc) notes)))
+             {}
+             voices))
+
+;; --- Public API -------------------------------------------------------------
+
+(defn to-score
+  "Convert the repair-pipeline! output to a canonical EDN-serializable cljseq score.
+
+  The score is the composition as a Clojure value: simultaneously the analysis
+  and the artefact. Standard Clojure operates on it directly — no special API,
+  no query language.
+
+  `repair-out` — result of repair-pipeline!
+  opts:
+    :apply-corrections? — apply proposed corrections before building (default false)
+    :include-coda?      — include generated resolution as :coda (default true)
+
+  Returns:
+    {:meta    {:tonic :G :mode :ionian :tempo 110.0 :bars 117 :time-sig \"4/4\"
+               :key-sig \"G ionian\"}
+     :voices  {:drone [...] :pad [...] :motif-1 [...] :motif-2 [...] :ambiguous [...]}
+     :arc     {:progression [...] :tension-arc [...] :peak-bar N :peak-tension F
+               :final-chord {...}}
+     :coda    {:bars 4 :style :ambient-fade :voices {...}}}"
+  ([repair-out] (to-score repair-out {}))
+  ([repair-out {:keys [apply-corrections? include-coda?]
+                :or   {apply-corrections? false include-coda? true}}]
+   (let [{:keys [meta voices structure corrections resolution]} repair-out
+         voices' (if (and apply-corrections? (seq (:corrected corrections)))
+                   (:voices (accept-corrections {:voices voices :corrections corrections}))
+                   voices)
+         meta'   (assoc meta :key-sig (str (name (:tonic meta)) " " (name (:mode meta))))]
+     (cond-> {:meta   meta'
+              :voices voices'
+              :arc    (select-keys structure [:progression :tension-arc
+                                              :peak-bar :peak-tension :final-chord])}
+       include-coda? (assoc :coda resolution)))))
+
+(defn transpose
+  "Shift all note pitches in a score by `semitones`. Updates :meta :tonic and :key-sig.
+
+  Works on both to-score output (with :arc / :coda) and raw repair-pipeline!
+  output (with :structure / :resolution).
+
+  `score`     — score map from to-score or repair-pipeline!
+  `semitones` — integer semitone offset (positive = up, negative = down)"
+  [score semitones]
+  (let [old-tonic (get-in score [:meta :tonic])
+        new-pc    (mod (+ (get tonic->pc old-tonic 0) semitones) 12)
+        new-tonic (pc->tonic new-pc)]
+    (cond-> score
+      true
+      (assoc-in [:meta :tonic] new-tonic)
+      (get-in score [:meta :mode])
+      (assoc-in [:meta :key-sig]
+                (str (name new-tonic) " " (name (get-in score [:meta :mode]))))
+      (:voices score)
+      (update :voices shift-voices semitones)
+      (:coda score)
+      (update-in [:coda :voices] shift-voices semitones)
+      (:resolution score)
+      (update-in [:resolution :voices] shift-voices semitones))))
+
+(defn mode-shift
+  "Re-colour a score's harmony to a new mode while keeping the same tonic.
+
+  Maps each note from its degree in the original mode to the corresponding
+  pitch in `new-mode` (same harmonic function, different pitch class where
+  the modes diverge — e.g. Dorian ♮6 → Aeolian ♭6).
+
+  Notes outside the original scale are snapped to the nearest in-scale
+  neighbor before remapping.
+
+  `score`    — score map from to-score or repair-pipeline!
+  `new-mode` — target mode keyword, e.g. :aeolian, :phrygian, :mixolydian"
+  [score new-mode]
+  (let [tonic    (get-in score [:meta :tonic])
+        old-mode (get-in score [:meta :mode])
+        old-sc   (scale/scale tonic 4 old-mode)
+        new-sc   (scale/scale tonic 4 new-mode)]
+    (cond-> score
+      true
+      (-> (assoc-in [:meta :mode] new-mode)
+          (assoc-in [:meta :key-sig] (str (name tonic) " " (name new-mode))))
+      (:voices score)
+      (update :voices remap-all-voices old-sc new-sc)
+      (:coda score)
+      (update-in [:coda :voices] remap-all-voices old-sc new-sc)
+      (:resolution score)
+      (update-in [:resolution :voices] remap-all-voices old-sc new-sc))))
+
+(defn retrograde
+  "Time-reverse the notes in a score.
+
+  Without options: retrograde all voices using a common span (the full piece
+  duration), so voices remain mutually aligned after reversal.
+
+  With :voice kw: retrograde only that voice using its own span.
+
+  `score` — score map from to-score or repair-pipeline!
+  opts:
+    :voice — keyword of a single voice to retrograde (e.g. :motif-1)
+             omit to retrograde all voices"
+  ([score] (retrograde score {}))
+  ([score {:keys [voice]}]
+   (let [voices (:voices score {})]
+     (if voice
+       (let [notes (get voices voice [])
+             span  (voice-span notes)]
+         (assoc-in score [:voices voice] (retrograde-voice notes span)))
+       (let [all-spans (map voice-span (vals voices))
+             span      (if (seq all-spans) (apply max all-spans) 0.0)]
+         (update score :voices
+                 (fn [vs]
+                   (reduce-kv (fn [m k notes]
+                                (assoc m k (retrograde-voice notes span)))
+                              {} vs))))))))

@@ -248,7 +248,7 @@ def _handle_parse_midi(req):
             return {"status": "error", "message": f"file not found: {path}"}
 
         score = m21conv.parse(path)
-        flat  = score.flat
+        flat  = score.flatten()
 
         # Extract tempo
         tempos = flat.getElementsByClass(m21tempo.MetronomeMark)
