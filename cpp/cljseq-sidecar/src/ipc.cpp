@@ -22,6 +22,7 @@
 
 #include "ipc.h"
 #include "midi_clock.h"
+#include "midi_dispatch.h"
 #include "midi_monitor.h"
 
 #include <cljseq/link_bridge.h>
