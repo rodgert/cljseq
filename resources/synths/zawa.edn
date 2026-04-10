@@ -1,0 +1,23 @@
+{:synth/id   :zawa
+ :synth/tags [:bass :analog :modulated :pitched]
+ :synth/doc  "VarSaw with LFO-modulated pulse width through RLPF — Sonic-Pi :zawa equivalent.
+  A SinOsc running at :lfo-rate Hz sweeps the VarSaw's width from 0.0 to 1.0.
+  :cutoff and :res shape the output filter."
+ :args  {:freq     440
+         :amp      0.5
+         :lfo-rate 1.0
+         :cutoff   80
+         :res      0.5
+         :attack   0.01
+         :decay    0.1
+         :sustain  0.8
+         :release  1.0
+         :pan      0.0}
+ :graph [:out 0
+          [:pan2
+           [:rlpf
+            [:* [:env-gen [:adsr :attack :decay :sustain :release] :gate :amp]
+                [:var-saw :freq 0 [:+ 0.5 [:* 0.5 [:sin-osc :lfo-rate]]]]]
+            [:* :cutoff 125.0]
+            :res]
+           :pan]]}

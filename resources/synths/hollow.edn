@@ -1,0 +1,23 @@
+{:synth/id   :hollow
+ :synth/tags [:pad :resonant :hollow :pitched]
+ :synth/doc  "Hollow resonant pad — Sonic-Pi :hollow equivalent.
+  Saw mix through a narrow band-pass filter centred on the fundamental.
+  High :res values (0.9+) produce strong resonance; lower values open up the sound."
+ :args  {:freq    440
+         :amp     0.4
+         :res     0.85
+         :attack  0.3
+         :decay   0.2
+         :sustain 0.7
+         :release 2.0
+         :pan     0.0}
+ :graph [:out 0
+          [:pan2
+           [:bpf
+            [:* [:env-gen [:adsr :attack :decay :sustain :release] :gate :amp]
+                [:mix [[:saw :freq]
+                       [:* 0.5 [:saw [:* :freq 2.0]]]
+                       [:* 0.3 [:white-noise]]]]]
+            :freq
+            :res]
+           :pan]]}
