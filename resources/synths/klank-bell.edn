@@ -1,0 +1,57 @@
+{:synth/id   :klank-bell
+ :synth/tags [:physical-model :resonator :dyn-klank :bell :inharmonic :pitched]
+ :synth/doc  "Inharmonic bell voice via DynKlank resonant filter bank.
+
+  DynKlank implements a bank of second-order resonant filters (parallel band-pass).
+  A brief noise burst or impulse excitation sets the filters ringing at their
+  resonant frequencies, producing a physically-plausible struck-metal timbre.
+
+  The default partial ratios are based on analysis of real bell acoustics
+  (Chowning / Fletcher & Rossing, 'The Physics of Musical Instruments'):
+    f1: 1.000 x freq  -- hum (fundamental)
+    f2: 2.756 x freq  -- prime (first strong overtone, inharmonic)
+    f3: 5.404 x freq  -- tierce (the bell's characteristic 'color')
+    f4: 8.933 x freq  -- quint (upper partial)
+
+  The inharmonic ratios are what give bells their characteristic 'wrong note'
+  quality: the partials do not land on integer multiples of the fundamental,
+  so the pitch is ambiguous and the decay sounds metallic rather than tonal.
+
+  :freq-scale applies a global pitch shift to all four partials simultaneously,
+  making it the primary tuning control. Individual partial ratios (:f1-:f4) can
+  be detuned from defaults to model different metals and geometries.
+
+  Excitation: a short burst of white noise through a BPF centered at :freq,
+  gated by a very fast perc envelope (1ms attack, 20ms release). This models
+  the 'click' of a mallet or hammer strike better than a pure impulse.
+
+  Decay times (:d1-:d4) follow typical bell physics: lower partials decay
+  slower than upper partials. Increase all decay values for a larger bell.
+
+  Primary arc targets: :freq-scale (retune), individual :dN decay times
+
+  Example:
+    (sc/sc-play! {:synth :klank-bell :freq-scale 1.0 :amp 0.6})
+    ;; Larger bell (longer decays):
+    (sc/sc-play! {:synth :klank-bell :freq-scale 0.5 :d1 3.0 :d2 2.0 :amp 0.7})
+    ;; Detune for metallic percussion character:
+    (sc/sc-play! {:synth :klank-bell :f2 3.1 :f3 5.8 :f4 9.5 :amp 0.5})"
+ :args  {:freq-scale 440.0
+         :amp        0.6
+         :f1 1.0     :a1 1.0    :d1 1.2
+         :f2 2.756   :a2 0.67   :d2 0.9
+         :f3 5.404   :a3 0.35   :d3 0.55
+         :f4 8.933   :a4 0.18   :d4 0.35
+         :pan        0.0}
+ :graph [:out 0
+          [:pan2
+           [:* :amp
+               [:dyn-klank
+                [:* 0.3 [:* [:env-gen [:perc 0.001 0.02] :gate 1.0]
+                             [:white-noise]]]
+                :freq-scale
+                :f1 :a1 :d1
+                :f2 :a2 :d2
+                :f3 :a3 :d3
+                :f4 :a4 :d4]]
+           :pan]]}

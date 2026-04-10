@@ -1,6 +1,6 @@
 # cljseq User Manual
 
-Version 0.5.0 · April 2026
+Version 0.7.0 · April 2026
 
 ---
 
@@ -32,7 +32,9 @@ Version 0.5.0 · April 2026
 24. [Spatial Field](#24-spatial-field)
 25. [Sample Player and Freesound](#25-sample-player-and-freesound)
 26. [SC Synthesis Showcase](#26-sc-synthesis-showcase)
-27. [Reference: REPL Commands and Step Keys](#27-reference)
+27. [Waveshaping and Spectral Bridge](#27-waveshaping-and-spectral-bridge)
+28. [DynKlank Physical Modeling](#28-dynklank-physical-modeling)
+29. [Reference: REPL Commands and Step Keys](#29-reference)
 
 ---
 
@@ -2216,7 +2218,232 @@ The `:chaos-ensemble` patch combines two Lorenz voices (different Prandtl number
 
 See `examples/chaos_demo.clj` for bifurcation arcs, ensemble configuration, and a live loop that samples the current chaos level to drive melodic filter color.
 
-### Built-in SC patches
+---
+
+## 27. Waveshaping and Spectral Bridge
+
+Waveshaping applies non-linear transfer functions to audio signals, adding
+harmonics in a musically controllable way. Two built-in voices are available,
+both natural targets for `apply-trajectory!` and `bind-spectral!`.
+
+### Saturation — `:wshape-saturate`
+
+Uses a `tanh` transfer function (soft clipper) applied to a VarSaw oscillator.
+Saturation adds **odd harmonics only**, monotonically: the timbre evolves from
+clean sine-like through warm tube overdrive to square-ish as `:drive` rises.
+
+| Arg | Default | Description |
+|-----|---------|-------------|
+| `:freq` | 440.0 | Fundamental frequency (Hz) |
+| `:drive` | 0.2 | Saturation depth 0.0–1.0 |
+| `:width` | 0.0 | VarSaw pulse width |
+| `:attack` | 0.01 | Envelope attack (s) |
+| `:release` | 2.0 | Envelope release (s) |
+| `:amp` | 0.45 | Output amplitude |
+| `:pan` | 0.0 | Stereo position |
+
+```clojure
+;; Start clean and drive into saturation over 32 beats
+(def sat (sc/sc-synth! :wshape-saturate {:freq 220 :drive 0.0 :amp 0.4}))
+(apply-trajectory! sat :drive
+  (trajectory :from 0.0 :to 1.0 :beats 32 :curve :s-curve :start (now)))
+```
+
+### Wavefold — `:wshape-fold`
+
+Uses `fold2` (wavefolding) applied to a SinOsc, with optional FM input.
+Wavefold adds **both even and odd harmonics** in a non-monotonic pattern:
+each fold depth is a qualitatively different timbral state, not just "more."
+The character changes non-predictably as `:drive` sweeps — first fold adds
+brightness, second fold adds density, deep folds create percussive texture.
+
+| Arg | Default | Description |
+|-----|---------|-------------|
+| `:freq` | 440.0 | Carrier frequency (Hz) |
+| `:drive` | 0.2 | Fold depth 0.0–1.0 |
+| `:freq-mod` | 0.0 | FM depth (0 = no FM) |
+| `:mod-ratio` | 2.0 | FM modulator ratio relative to carrier |
+| `:attack` | 0.01 | Envelope attack (s) |
+| `:release` | 2.0 | Envelope release (s) |
+| `:amp` | 0.45 | Output amplitude |
+| `:pan` | 0.0 | Stereo position |
+
+```clojure
+;; Two voices, same arc, different transfer functions
+(def sat-a  (sc/sc-synth! :wshape-saturate {:freq 165 :drive 0.02 :pan -0.4}))
+(def fold-a (sc/sc-synth! :wshape-fold     {:freq 220 :drive 0.02 :pan  0.4}))
+
+(def arc (trajectory :from 0.02 :to 0.85 :beats 48 :curve :s-curve :start (now)))
+(apply-trajectory! sat-a  :drive arc)
+(apply-trajectory! fold-a :drive arc)
+;; Both voices start clean and evolve to opposite timbral destinations.
+```
+
+### bind-spectral! — audio-reactive parameter control
+
+`bind-spectral!` connects spectral analysis output (from `cljseq.spectral`) to
+any live SC node parameter. It watches the `[:spectral :state]` ctrl path and
+fires a callback after every SAM tick, mapping the spectral value through a
+user-supplied transform function.
+
+```clojure
+;; Prerequisite: Temporal Buffer and spectral SAM loop running
+(def buf (start-temporal-buffer! :main 4.0))
+(def sam (start-spectral! :main :cadence 1/4))
+
+;; Dense playing -> high drive (saturated timbre)
+;; Sparse playing -> low drive (clean timbre)
+(def spectral-sat (sc/sc-synth! :wshape-saturate {:freq 220 :drive 0.05 :amp 0.4}))
+(def cancel!
+  (bind-spectral! spectral-sat :drive :spectral/density
+                  (fn [density] (+ 0.05 (* 0.7 density)))))
+
+;; Stop binding
+(cancel!)
+```
+
+`bind-spectral!` returns a cancel fn (call with no args to detach). The
+complementary `unbind-spectral!` detaches by node id and param:
+
+```clojure
+(unbind-spectral! spectral-sat :drive)
+```
+
+**Spectral keys available** (published by `start-spectral!`):
+
+| Key | Range | Description |
+|-----|-------|-------------|
+| `:spectral/centroid` | Hz | Weighted average frequency (brightness) |
+| `:spectral/density` | 0–1 | Normalised harmonic density (busyness) |
+| `:spectral/blur` | 0–1 | Spectral spread / diffuseness |
+
+Both `bind-spectral!` and `unbind-spectral!` are available in `cljseq.user`
+without a namespace prefix.
+
+See `examples/waveshaper_demo.clj` for a complete session including saturation
+vs fold comparison, drive arcs, and the chaos-to-waveshaper compound arc.
+
+---
+
+## 28. DynKlank Physical Modeling
+
+DynKlank models struck resonators (bells, bars, plates) as a bank of parallel
+second-order band-pass filters. Each filter represents one resonant mode of the
+physical object. The instrument character is encoded in partial frequency ratios
+(`:fN`) and decay times (`:dN`).
+
+### Why DynKlank vs Karplus-Strong
+
+| | Karplus-Strong (`:pluck`, `:superkar`) | DynKlank (`:klank-bell`, `:klank-bars`) |
+|---|---|---|
+| **Physical model** | Plucked/bowed string | Struck bar, plate, or bell |
+| **Excitation** | Initial noise burst in delay line | White-noise impulse |
+| **Pitch control** | Delay time = 1/freq | Explicit partial ratios |
+| **Inharmonicity** | Via `:warp` parameter | Via `:fN` ratio detuning |
+| **Decay** | Single feedback coefficient | Per-partial decay times |
+
+### Bell — `:klank-bell`
+
+Classic inharmonic bell using Chowning/Fletcher-Rossing partial ratios.
+
+| Arg | Default | Description |
+|-----|---------|-------------|
+| `:freq-scale` | 440.0 | Fundamental pitch (Hz) — retunes all modes |
+| `:f1`–`:f4` | 1.0, 2.756, 5.404, 8.933 | Partial frequency ratios |
+| `:a1`–`:a4` | 1.0, 0.67, 0.35, 0.18 | Partial amplitudes |
+| `:d1`–`:d4` | 1.2, 0.9, 0.55, 0.35 | Partial decay times (s) |
+| `:amp` | 0.6 | Output amplitude |
+| `:pan` | 0.0 | Stereo position |
+
+The non-integer partial ratios (2.756, 5.404, 8.933) create an ambiguous pitch
+centre — characteristic of struck metal bells. Changing `:f2` from 2.756 to 2.0
+gives a cleaner octave; to 3.1 produces a harder, more metallic timbre.
+
+```clojure
+;; Default bell
+(sc/sc-play! {:synth :klank-bell :freq-scale 440 :amp 0.6})
+
+;; Larger, longer-decaying bell
+(sc/sc-play! {:synth :klank-bell :freq-scale 220 :d1 3.0 :d2 2.2 :d3 1.4 :d4 0.8})
+
+;; Decay arc: xylophone character -> vibraphone -> bell
+(def bell (sc/sc-synth! :klank-bell {:freq-scale 330 :d1 0.3 :d2 0.2 :d3 0.1 :amp 0.6}))
+(apply-trajectory! bell :d1 (trajectory :from 0.3 :to 3.5 :beats 32 :curve :exp :start (now)))
+(apply-trajectory! bell :d2 (trajectory :from 0.2 :to 2.5 :beats 32 :curve :exp :start (now)))
+(apply-trajectory! bell :d3 (trajectory :from 0.1 :to 1.5 :beats 32 :curve :exp :start (now)))
+```
+
+### Bar instruments — `:klank-bars`
+
+Marimba / vibraphone / glockenspiel using BPF noise excitation. Three modes
+with an additional `:exc-bw` (excitation bandwidth) parameter that controls
+mallet hardness — narrow BPF = soft mallet, wide BPF = hard mallet.
+
+| Arg | Default | Description |
+|-----|---------|-------------|
+| `:freq-scale` | 440.0 | Fundamental pitch (Hz) |
+| `:f1`–`:f3` | 1.0, 2.756, 5.404 | Partial ratios (fewer than bell) |
+| `:a1`–`:a3` | 1.0, 0.5, 0.25 | Partial amplitudes |
+| `:d1`–`:d3` | 0.8, 0.4, 0.2 | Partial decay times (s) |
+| `:exc-bw` | 200.0 | Excitation BPF bandwidth (Hz) |
+| `:amp` | 0.5 | Output amplitude |
+| `:pan` | 0.0 | Stereo position |
+
+Common voicings:
+
+```clojure
+;; Marimba: short, percussive decay
+(sc/sc-play! {:synth :klank-bars :freq-scale 440 :d1 0.4 :d2 0.2 :amp 0.65})
+
+;; Vibraphone: octave f2, long singing decay
+(sc/sc-play! {:synth :klank-bars :freq-scale 440 :f2 4.0 :d1 2.5 :d2 1.5 :amp 0.6})
+
+;; Glockenspiel: high pitch, long sustain
+(sc/sc-play! {:synth :klank-bars :freq-scale 1760 :d1 3.0 :d2 2.5 :d3 2.0 :amp 0.5})
+```
+
+### Ensemble patch — `:klank-ensemble`
+
+Two bell voices and one bars voice routed through a shared reverb.
+
+```clojure
+(def klank (sc/instantiate-patch! :klank-ensemble))
+
+;; Tune to an open fifth
+(sc/set-patch-param! klank :bars-freq  220)
+(sc/set-patch-param! klank :bell1-freq 330)
+(sc/set-patch-param! klank :bell2-freq 440)
+
+;; Add reverb
+(sc/set-patch-param! klank :effects-room 0.85)
+(sc/set-patch-param! klank :effects-mix  0.5)
+
+(sc/free-patch! klank)
+```
+
+Addressable params: `:bell1-freq`, `:bell1-amp`, `:bell1-d1`–`:bell1-d4`,
+`:bell2-freq`, `:bell2-amp`, `:bell2-d1`–`:bell2-d4`, `:bars-freq`,
+`:bars-amp`, `:bars-d1`–`:bars-d3`, `:effects-room`, `:effects-mix`.
+
+### Decay time as compositional arc
+
+DynKlank `:dN` parameters are natural `apply-trajectory!` targets. The decay
+envelope *is* the instrument — sweeping from short to long morphs a dry
+woodblock into a ringing bell in real time.
+
+Combined with `bind-spectral!`, sparse playing lets the resonances bloom while
+dense playing compresses them to a tight, percussive response:
+
+```clojure
+(def bell (sc/sc-synth! :klank-bell {:freq-scale 440 :d1 2.0 :d2 1.5 :amp 0.5}))
+(def cancel!
+  (bind-spectral! bell :d1 :spectral/density
+                  (fn [density]
+                    ;; Dense playing -> short decay; sparse -> long
+                    (+ 0.3 (* 2.5 (- 1.0 density))))))
+```
+
+### Built-in SC patches (updated)
 
 | Patch | Voices | Key params |
 |-------|--------|------------|
@@ -2224,11 +2451,16 @@ See `examples/chaos_demo.clj` for bifurcation arcs, ensemble configuration, and 
 | `:granular-cloud` | granular voice → reverb | `:buf`, `:density`, `:pos`, `:rate` |
 | `:solar42` | 4 drone + 2 VCO + 2 papa → filter → reverb | `:filter-cutoff`, `:droneN-freq`, `:vcoN-freq` |
 | `:superkar` | 4 warpable KS voices → reverb | `:voiceN-warp`, `:voiceN-coef`, `:voiceN-body-freq` |
-| `:chaos-ensemble` | 2 Lorenz + 1 Hénon → reverb | `:lorenzN-chaos`, `:henon-chaos`, `:effects-mix` |
+| `:chaos-ensemble` | 2 Lorenz + 1 Henon → reverb | `:lorenzN-chaos`, `:henon-chaos`, `:effects-mix` |
+| `:klank-ensemble` | bell1 + bell2 + bars → reverb | `:bell1-freq`, `:bars-freq`, `:effects-room` |
+
+See `examples/klank_demo.clj` for a complete session covering all bell and bar
+variants, the ensemble patch, the partial-ratio detuning guide, decay arcs, and
+the `bind-spectral!` audio-reactive decay sculpting example.
 
 ---
 
-## 27. Reference
+## 29. Reference
 
 ### REPL commands
 

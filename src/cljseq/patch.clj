@@ -472,4 +472,44 @@
                 :henon-amp     [:henon :amp]
                 :effects-mix   [:verb :mix]
                 :effects-room  [:verb :room]}})
+
+    ;; ---------------------------------------------------------------------------
+    ;; :klank-ensemble — three DynKlank resonator voices + reverb.
+    ;;
+    ;; Two bell voices (different freq-scale + partial ratios) and one marimba-bar
+    ;; voice. Each has independent decay and tuning controls. The reverb tail
+    ;; blends the three physical-model voices into a shared acoustic space.
+    ;;
+    ;; Key params via set-patch-param! or apply-trajectory!:
+    ;;   :bell1-freq / :bell2-freq / :bars-freq  -- retune voices
+    ;;   :bell1-d1   / :bell2-d1   / :bars-d1   -- decay of fundamental partial
+    ;;   :effects-mix                             -- reverb wet/dry
+    ;; ---------------------------------------------------------------------------
+    (defpatch! :klank-ensemble
+      {:buses  {:klank-bus {:channels 2 :rate :audio}}
+       :nodes  [{:id :bell1 :synth :klank-bell
+                 :args {:freq-scale 440 :amp 0.5
+                        :f2 2.756 :d1 1.2 :d2 0.9 :pan -0.4}
+                 :out {:out-bus 0}}
+                {:id :bell2 :synth :klank-bell
+                 :args {:freq-scale 660 :amp 0.4
+                        :f2 2.95 :d1 1.8 :d2 1.2 :pan 0.4}
+                 :out {:out-bus 0}}
+                {:id :bars :synth :klank-bars
+                 :args {:freq-scale 220 :amp 0.55 :d1 0.8 :pan 0.0}
+                 :out {:out-bus 0}}
+                {:id :verb :synth :reverb-bus
+                 :args {:room 0.7 :mix 0.35 :damp 0.4 :amp 1.0}
+                 :in {:in-bus 0} :out {:out 0}}]
+       :params {:bell1-freq [:bell1 :freq-scale]
+                :bell2-freq [:bell2 :freq-scale]
+                :bars-freq  [:bars  :freq-scale]
+                :bell1-d1   [:bell1 :d1]
+                :bell2-d1   [:bell2 :d1]
+                :bars-d1    [:bars  :d1]
+                :bell1-amp  [:bell1 :amp]
+                :bell2-amp  [:bell2 :amp]
+                :bars-amp   [:bars  :amp]
+                :effects-mix  [:verb :mix]
+                :effects-room [:verb :room]}})
     true))

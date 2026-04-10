@@ -47,6 +47,7 @@
   (:require [clojure.string  :as str]
             [cljseq.clock    :as clock]
             [cljseq.core     :as core]
+            [cljseq.ctrl     :as ctrl]
             [cljseq.osc      :as osc]
             [cljseq.patch    :as patch]
             [cljseq.synth    :as synth]))
@@ -250,6 +251,30 @@
         ;; Lag, Lag2, Slew — method call style
         (#{:lag :lag2 :slew} op)
         (str (emit-node (first args)) "." (name op) "(" (emit-node (second args)) ")")
+
+        ;; Waveshaping — zero-arg method calls: signal.tanh / .softclip / .distort
+        (#{:tanh :softclip :distort} op)
+        (str (emit-node (first args)) "." (name op))
+
+        ;; Fold2 — 1-arg method call: signal.fold2(amount)
+        (= :fold2 op)
+        (str (emit-node (first args)) ".fold2(" (emit-node (second args)) ")")
+
+        ;; DynKlank — resonant filter bank with backtick-Ref array syntax.
+        ;; args: [excitation freq-scale f1 a1 d1 f2 a2 d2 ...]
+        ;; Emits: DynKlank.ar(`[[freqs],[amps],[decays]], excitation, freq_scale)
+        (= :dyn-klank op)
+        (let [[excitation freq-scale & modes] args
+              triples (partition 3 modes)
+              freqs   (map first  triples)
+              amps    (map second triples)
+              decays  (map #(nth % 2) triples)]
+          (str "DynKlank.ar(`[["
+               (str/join ", " (map emit-node freqs)) "], ["
+               (str/join ", " (map emit-node amps))  "], ["
+               (str/join ", " (map emit-node decays)) "]], "
+               (emit-node excitation) ", "
+               (emit-node freq-scale) ")"))
 
         ;; BufFrames — initialization rate (buffer size is static after alloc)
         (= :buf-frames op)
@@ -457,6 +482,51 @@
   (core/apply-trajectory!
     (fn [v] (when (sc-connected?) (set-param! node-id param v)))
     traj))
+
+;; ---------------------------------------------------------------------------
+;; Spectral bridge — ctrl-tree → live SC node parameter
+;; ---------------------------------------------------------------------------
+
+(defn bind-spectral!
+  "Bind a spectral analysis key to a live SC node parameter.
+
+  Watches the ctrl tree at [:spectral :state] — updated by cljseq.spectral's
+  SAM analysis loop — and calls set-param! on `node-id` after every update.
+
+  `spectral-key` — one of :spectral/centroid, :spectral/density, :spectral/blur
+  `transform-fn`  — (fn [v]) maps the spectral value [0..1] to the param range
+
+  Returns a zero-argument cancel function.
+
+  Requires cljseq.spectral to be running (start-spectral!) to produce updates.
+
+  Example:
+    ;; Drive a filter cutoff from spectral centroid (brighter notes → open filter)
+    (def cancel! (bind-spectral! node-id :cutoff :spectral/centroid
+                                 (fn [v] (+ 200 (* v 3800)))))
+
+    ;; Drive chaos level from event density (busier playing → more chaos)
+    (def cancel! (bind-spectral! node-id :chaos :spectral/density
+                                 (fn [v] (* 0.8 v))))
+
+    ;; Stop
+    (cancel!)"
+  [node-id param spectral-key transform-fn]
+  (let [watch-key [::spectral-bind node-id param]]
+    (ctrl/watch! [:spectral :state] watch-key
+                 (fn [_path state]
+                   (when (sc-connected?)
+                     (when-let [v (get state spectral-key)]
+                       (set-param! node-id param (transform-fn v))))))
+    (fn [] (ctrl/unwatch! [:spectral :state] watch-key))))
+
+(defn unbind-spectral!
+  "Remove a spectral binding registered by bind-spectral!.
+  Equivalent to calling the cancel function returned by bind-spectral!.
+
+  `node-id` and `param` must match the original bind-spectral! call."
+  [node-id param]
+  (ctrl/unwatch! [:spectral :state] [::spectral-bind node-id param]))
 
 ;; ---------------------------------------------------------------------------
 ;; core/play! dispatch — register SC backend at namespace load time
