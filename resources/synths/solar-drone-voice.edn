@@ -1,0 +1,39 @@
+{:synth/id   :solar-drone-voice
+ :synth/tags [:drone :saw :multi-oscillator :bus-aware :solar42]
+ :synth/doc  "Six sawtooth drone oscillators with individual gate and tuning — Solar42 drone voice.
+
+  Each of the six oscillators has:
+    :on1–:on6  — 0 (off) or 1 (on); gating is a 0/1 multiply, same as the hardware switch
+    :tune1–:tune6 — frequency ratio from :freq (1.0 = root, 1.5 = fifth, 2.0 = octave, etc.)
+
+  :detune applies a slightly different spread to each oscillator (fixed per-osc fractions of
+  the :detune value), creating richness when non-zero without disturbing the chord voicing.
+
+  Default tuning covers a spread voicing: sub (0.5), root (1.0), major-third (1.25),
+  fifth (1.5), octave (2.0), and upper fifth (3.0).
+
+  Uses an ASR envelope: the sustain holds at level 1.0 while gate=1, then releases.
+  Outputs to :out-bus for use in the :solar42 patch."
+ :args  {:freq    110
+         :amp     0.3
+         :attack  0.5
+         :release 2.0
+         :detune  0.02
+         :on1     1   :tune1 0.5
+         :on2     1   :tune2 1.0
+         :on3     1   :tune3 1.25
+         :on4     1   :tune4 1.5
+         :on5     1   :tune5 2.0
+         :on6     1   :tune6 3.0
+         :pan     0.0
+         :out-bus 8}
+ :graph [:out :out-bus
+          [:pan2
+           [:* [:env-gen [:asr :attack 1.0 :release] :gate :amp]
+               [:mix [[:* :on1 [:saw [:* :freq :tune1]]]
+                      [:* :on2 [:saw [:* :freq :tune2]]]
+                      [:* :on3 [:saw [:* :freq [:* :tune3 [:+ 1.0 [:* :detune 0.01]]]]]]
+                      [:* :on4 [:saw [:* :freq [:* :tune4 [:- 1.0 [:* :detune 0.007]]]]]]
+                      [:* :on5 [:saw [:* :freq [:* :tune5 [:+ 1.0 [:* :detune 0.013]]]]]]
+                      [:* :on6 [:saw [:* :freq [:* :tune6 [:- 1.0 [:* :detune 0.005]]]]]]]]]
+           :pan]]}

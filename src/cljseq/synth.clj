@@ -221,4 +221,9 @@
     (load-builtin! "growl.edn")
     (load-builtin! "noise.edn")
     (load-builtin! "bass.edn")
+    ;; Solar42 instrument model
+    (load-builtin! "solar-drone-voice.edn")
+    (load-builtin! "solar-vco-voice.edn")
+    (load-builtin! "solar-papa-voice.edn")
+    (load-builtin! "solar-filter.edn")
     true))

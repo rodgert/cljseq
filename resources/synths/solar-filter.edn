@@ -1,0 +1,26 @@
+{:synth/id   :solar-filter
+ :synth/tags [:filter :polivoks :12db :stereo :bus-aware :solar42]
+ :synth/doc  "Dual cascaded 12dB/oct resonant LPF — Polivoks-style approximation.
+
+  The Solar42 uses a pair of Polivoks-derived 12dB/oct lowpass filters. This synth
+  approximates that topology by cascading two RLPF stages in series:
+
+    In → RLPF(cutoff, res) → RLPF(cutoff, res) → Out
+
+  Two 12dB stages in series produce 24dB/oct slope — a steeper, more aggressive
+  character that honours the Polivoks heritage (though the analog character differs).
+
+  Reads stereo from :in-bus (2 channels) and writes stereo to :out-bus.
+  :cutoff is in the same [0–127] scale used across cljseq filters (× 125 Hz internally).
+  :res is reciprocal Q (0–1; higher = more resonant, approaching self-oscillation)."
+ :args  {:in-bus  8
+         :out-bus 10
+         :cutoff  60
+         :res     0.35
+         :amp     0.85}
+ :graph [:out :out-bus
+          [:* :amp
+           [:rlpf
+            [:rlpf [:in :in-bus 2] [:* :cutoff 125.0] :res]
+            [:* :cutoff 125.0]
+            :res]]]}
