@@ -28,7 +28,8 @@ Version 0.3.0 · April 2026
 20. [Peer Discovery](#20-peer-discovery)
 21. [Note Transformers](#21-note-transformers)
 22. [Bach Corpus (Music21)](#22-bach-corpus-music21)
-23. [Reference: REPL Commands and Step Keys](#23-reference)
+23. [SuperCollider Integration](#23-supercollider-integration)
+24. [Reference: REPL Commands and Step Keys](#24-reference)
 
 ---
 
@@ -566,6 +567,42 @@ and checkpoints. Bind a physical knob to a named path and read it from any loop.
 (ctrl/set! [:filter/cutoff] 100)
 (ctrl/undo!)   ; => restores 64
 ```
+
+### HTTP control server
+
+The ctrl tree is also exposed over HTTP so that peer nodes can poll it. Start
+the server before calling `peer/mount-peer!` on a remote host.
+
+```clojure
+(require '[cljseq.server :as server])
+
+;; Start on default port 7177
+(server/start-server!)
+
+;; Or choose a port
+(server/start-server! :port 7278)
+
+;; Check status
+(server/server-running?)  ; => true
+(server/server-port)      ; => 7278
+
+;; Stop
+(server/stop-server!)
+```
+
+The server exposes the following endpoints:
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET`  | `/ping` | Health check — returns `{"ok": true}` |
+| `GET`  | `/bpm` | Current BPM |
+| `PUT`  | `/bpm` | Set BPM — body `{"bpm": 140}` |
+| `GET`  | `/ctrl` | Full ctrl-tree dump (JSON array) |
+| `GET`  | `/ctrl/<path>` | Read one node by slash-separated path |
+| `PUT`  | `/ctrl/<path>` | Write one node — body `{"value": ...}` |
+
+Peer nodes poll `/ctrl/ensemble/harmony-ctx` and `/ctrl/spectral/state`
+automatically when mounted via `peer/mount-peer!`.
 
 ---
 
@@ -1692,7 +1729,107 @@ to disk in `~/.local/share/cljseq/corpora/m21/`.
 
 ---
 
-## 23. Reference
+## 23. SuperCollider Integration
+
+cljseq talks to SuperCollider on two ports:
+
+- **sclang** (default 57120) — receives sclang code strings for SynthDef compilation
+- **scsynth** (default 57110) — receives OSC node control messages
+
+### Connecting
+
+```clojure
+(require '[cljseq.user :refer :all])
+(session!)
+
+(connect-sc!)                           ; localhost, defaults
+(connect-sc! :host "192.168.1.5")       ; remote SC
+(sc-connected?)                         ; => true
+```
+
+### SynthDef lifecycle
+
+cljseq ships built-in synths (`:beep`, `:sine`, `:saw-pad`, `:blade`, `:prophet`,
+`:supersaw`, `:dull-bell`, `:fm`, `:tb303`, `:perc`). Load them into a running SC
+server with `send-synthdef!`:
+
+```clojure
+(send-synthdef! :blade)        ; compile + load one synth
+(send-all-synthdefs!)          ; load every registered synth
+(ensure-synthdef! :blade)      ; lazy — only sends if not already loaded this session
+```
+
+Inspect the generated sclang:
+
+```clojure
+(synthdef-str :prophet)
+;=> "SynthDef(\\prophet, {\n  |freq=440.0, ...|\n  ...\n}).add;"
+```
+
+### Playing notes via SC
+
+Once connected, `play!` routes any step map containing `:synth` to SC automatically:
+
+```clojure
+;; Route to SC — :synth key triggers the SC backend
+(play! {:synth :blade :pitch/midi 60 :dur/beats 1/2})
+(play! {:synth :sine  :pitch/midi 69 :pitch/midi 69 :dur/beats 1})
+
+;; Inside a live loop
+(deflive-loop :sc-bass {}
+  (play! {:synth :tb303 :pitch/midi 36 :dur/beats 1/2})
+  (sleep! 1))
+```
+
+Step maps without `:synth` continue to route through MIDI as before.
+
+### Manual node control
+
+```clojure
+(sc-synth! :blade {:freq 440 :amp 0.6})   ; => node-id (e.g. 1001)
+(set-param! 1001 :cutoff 60)              ; live update
+(free-synth! 1001)                        ; gate=0 — envelope tail
+(kill-synth! 1001)                        ; immediate removal
+```
+
+### Trajectory control
+
+`apply-trajectory!` drives a live SC node parameter continuously over time using
+cljseq's temporal vocabulary:
+
+```clojure
+;; 3-arity: drive node-id param with an ITemporalValue
+(let [node (sc-synth! :blade {:freq 220 :amp 0.5})]
+  (apply-trajectory! node :cutoff
+    (trajectory :from 0.1 :to 0.9 :beats 16 :curve :s-curve :start (now))))
+
+;; 2-arity: general form — any setter function
+(apply-trajectory! #(println "val:" %)
+  (trajectory :from 0.0 :to 1.0 :beats 8 :start (now)))
+```
+
+Both forms return a cancel function. Call it to stop the trajectory early.
+
+### Defining custom synths
+
+```clojure
+(defsynth! :my-pad
+  {:args  {:freq 440 :amp 0.5 :attack 0.5 :release 2.0}
+   :graph [:out 0 [:pan2 [:* [:env-gen [:adsr :attack 0.1 0.8 :release] :gate :amp]
+                              [:sin-osc :freq]] 0.0]]})
+
+(send-synthdef! :my-pad)
+(sc-synth! :my-pad {:freq 330 :amp 0.3})
+```
+
+The graph DSL supports: oscillators (`:sin-osc`, `:saw`, `:pulse`, `:var-saw`, ...),
+filters (`:lpf`, `:hpf`, `:rlpf`, `:bpf`, `:moog-ff`), envelopes (`:adsr`, `:perc`,
+`:asr`), effects (`:free-verb`, `:comb-l`, `:allpass-n`, `:delay-l`),
+pan/mix (`:pan2`, `:mix`), and math operators (`:*`, `:+`, `:-`, `:/`).
+
+---
+
+## 24. Reference
 
 ### REPL commands
 
@@ -1706,6 +1843,11 @@ to disk in `~/.local/share/cljseq/corpora/m21/`.
 | `(start-sidecar! :midi-port "IAC")` | Connect by port name substring |
 | `(stop-sidecar!)` | Disconnect MIDI output |
 | `(list-midi-ports)` | Enumerate MIDI output and input ports |
+| `(start-server!)` | Start the HTTP ctrl-tree server (port 7177) |
+| `(start-server! :port 7278)` | Start on a custom port |
+| `(stop-server!)` | Stop the HTTP server |
+| `(server-running?)` | Returns true if the server is running |
+| `(server-port)` | Returns the current server port |
 
 ### play! step keys
 

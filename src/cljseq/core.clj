@@ -193,6 +193,21 @@
         (+ (* (+ oct 1) 12) base shift)))))
 
 ;; ---------------------------------------------------------------------------
+;; ---------------------------------------------------------------------------
+;; SC dispatch — optional backend, registered by cljseq.sc at load time
+;; ---------------------------------------------------------------------------
+
+;; Backends register a (fn [note dur bpm]) handler here.
+;; Avoids a compile-time dependency on cljseq.sc (which would create a cycle
+;; through cljseq.osc → cljseq.core).
+(defonce ^:private sc-dispatch (atom nil))
+
+(defn ^:no-doc register-sc-dispatch!
+  "Register a function to handle :synth play! events.
+  Called automatically when cljseq.sc is loaded. Not part of the public API."
+  [f]
+  (reset! sc-dispatch f))
+
 ;; play! — Phase 0 stdout stub
 ;; ---------------------------------------------------------------------------
 
@@ -217,55 +232,115 @@
   ([note]
    (play! note nil))
   ([note dur]
-   (let [midi     (cond
-                    (map? note)     (:pitch/midi note)
-                    (keyword? note) (keyword->midi note)
-                    (integer? note) note
-                    :else           (throw (ex-info "play!: unrecognised note form"
-                                                    {:note note})))
-         beats    (or (and (map? note) (:dur/beats note))
-                      dur
-                      1/4)
-         now-beat (double loop-ns/*virtual-time*)]
-     (if (sidecar/connected?)
-       (let [tl       (:timeline @system-state)
-             timing   loop-ns/*timing-ctx*
-             t-off-ns (if timing
-                        (long (Math/round (* (clock/sample timing now-beat)
-                                             (clock/beats->ms 1.0 (double (:bpm tl)))
-                                             1000000.0)))
-                        0)
-             step     (if (map? note) note {:pitch/midi midi :dur/beats beats})]
-         ;; Route through MPE allocator when enabled and step has per-note expression keys
-         (if (and (mpe/mpe-enabled?) (mpe/mpe-step? step))
-           (mpe/play-mpe! step now-beat tl)
-           (let [channel   (or (and (map? note) (:midi/channel note)) 1)
-                 velocity  (or (and (map? note) (:mod/velocity note)) 64)
-                 wall-ns   (* (System/currentTimeMillis) 1000000)
-                 on-ns     (max wall-ns (clock/beat->epoch-ns now-beat tl))
-                 off-ns    (max (+ on-ns (* (long (clock/beats->ms beats (double (:bpm tl)))) 1000000))
-                                (clock/beat->epoch-ns (+ now-beat (double beats)) tl))
-                 t-on-ns   (+ on-ns t-off-ns)]
-             ;; Dispatch ctrl-path step-mods at note-on time (§24.6 Phase 3)
-             (doseq [[k mod] (or loop-ns/*step-mod-ctx* [])
-                     :when (vector? k)]
-               (let [val (if (satisfies? clock/ITemporalValue mod)
-                           (clock/sample mod now-beat)
-                           mod)]
-                 (ctrl/send-at! t-on-ns k val)))
-             ;; Microtonal pitch bend — send before note-on, reset after note-off
-             (let [bend-cents (when (map? note) (:pitch/bend-cents note))
-                   bend-14bit (when (and bend-cents (not (zero? (double bend-cents))))
-                                (cents->bend14 bend-cents))]
-               (when bend-14bit
-                 (sidecar/send-pitch-bend! t-on-ns channel bend-14bit))
-               (sidecar/send-note-on!  t-on-ns channel midi velocity)
-               (sidecar/send-note-off! (+ off-ns t-off-ns) channel midi)
-               (when bend-14bit
-                 (sidecar/send-pitch-bend! (+ off-ns t-off-ns) channel 8192))))))
-       (let [ms (long (clock/beats->ms beats (get-bpm)))]
-         (println (format "[play!] beat=%-8s midi=%-3d dur=%s beats (%dms)"
-                          (str now-beat) midi (str beats) ms)))))))
+   ;; SC dispatch — routes :synth events to SuperCollider, bypassing MIDI
+   (if (and (map? note) (contains? note :synth) @sc-dispatch)
+     (@sc-dispatch note dur (get-bpm))
+     (let [midi     (cond
+                      (map? note)     (:pitch/midi note)
+                      (keyword? note) (keyword->midi note)
+                      (integer? note) note
+                      :else           (throw (ex-info "play!: unrecognised note form"
+                                                      {:note note})))
+           beats    (or (and (map? note) (:dur/beats note))
+                        dur
+                        1/4)
+           now-beat (double loop-ns/*virtual-time*)]
+       (if (sidecar/connected?)
+         (let [tl       (:timeline @system-state)
+               timing   loop-ns/*timing-ctx*
+               t-off-ns (if timing
+                          (long (Math/round (* (clock/sample timing now-beat)
+                                               (clock/beats->ms 1.0 (double (:bpm tl)))
+                                               1000000.0)))
+                          0)
+               step     (if (map? note) note {:pitch/midi midi :dur/beats beats})]
+           ;; Route through MPE allocator when enabled and step has per-note expression keys
+           (if (and (mpe/mpe-enabled?) (mpe/mpe-step? step))
+             (mpe/play-mpe! step now-beat tl)
+             (let [channel   (or (and (map? note) (:midi/channel note)) 1)
+                   velocity  (or (and (map? note) (:mod/velocity note)) 64)
+                   wall-ns   (* (System/currentTimeMillis) 1000000)
+                   on-ns     (max wall-ns (clock/beat->epoch-ns now-beat tl))
+                   off-ns    (max (+ on-ns (* (long (clock/beats->ms beats (double (:bpm tl)))) 1000000))
+                                  (clock/beat->epoch-ns (+ now-beat (double beats)) tl))
+                   t-on-ns   (+ on-ns t-off-ns)]
+               ;; Dispatch ctrl-path step-mods at note-on time (§24.6 Phase 3)
+               (doseq [[k mod] (or loop-ns/*step-mod-ctx* [])
+                       :when (vector? k)]
+                 (let [val (if (satisfies? clock/ITemporalValue mod)
+                             (clock/sample mod now-beat)
+                             mod)]
+                   (ctrl/send-at! t-on-ns k val)))
+               ;; Microtonal pitch bend — send before note-on, reset after note-off
+               (let [bend-cents (when (map? note) (:pitch/bend-cents note))
+                     bend-14bit (when (and bend-cents (not (zero? (double bend-cents))))
+                                  (cents->bend14 bend-cents))]
+                 (when bend-14bit
+                   (sidecar/send-pitch-bend! t-on-ns channel bend-14bit))
+                 (sidecar/send-note-on!  t-on-ns channel midi velocity)
+                 (sidecar/send-note-off! (+ off-ns t-off-ns) channel midi)
+                 (when bend-14bit
+                   (sidecar/send-pitch-bend! (+ off-ns t-off-ns) channel 8192))))))
+         (let [ms (long (clock/beats->ms beats (get-bpm)))]
+           (println (format "[play!] beat=%-8s midi=%-3d dur=%s beats (%dms)"
+                            (str now-beat) midi (str beats) ms))))))))
+
+;; ---------------------------------------------------------------------------
+;; apply-trajectory! — continuous SC node parameter control
+;; ---------------------------------------------------------------------------
+
+(defn apply-trajectory!
+  "Continuously apply an ITemporalValue trajectory by calling `setter-fn`
+  with each sampled value at ~50ms intervals until the trajectory completes.
+
+  `setter-fn` — a (fn [value]) called on each sample tick
+  `traj`      — any ITemporalValue: Trajectory, OneShot, constant, etc.
+
+  Returns a zero-argument cancel function. Call it to stop the trajectory
+  before it completes naturally.
+
+  Requires the system clock to be running (start!).
+
+  This is the general form. For the SC-specific 3-arity convenience
+  (apply-trajectory! node param traj), use cljseq.sc/apply-trajectory!
+
+  Example:
+    ;; General form — any setter
+    (apply-trajectory! #(println \"val:\" %)
+      (traj/trajectory :from 0.0 :to 1.0 :beats 8 :curve :s-curve :start (now)))
+
+    ;; SC form (via cljseq.sc or cljseq.user)
+    (let [node (sc/sc-synth! :saw-pad {:freq 220 :amp 0.5})]
+      (apply-trajectory! node :cutoff
+        (traj/trajectory :from 0.2 :to 0.9 :beats 16 :curve :s-curve
+                         :start (now))))"
+  [setter-fn traj]
+  (let [running (atom true)
+        thread  (Thread.
+                  (fn []
+                    (try
+                      (loop []
+                        (when @running
+                          (let [tl    (get-timeline)
+                                beat  (if tl
+                                        (clock/epoch-ms->beat
+                                          (System/currentTimeMillis) tl)
+                                        0.0)
+                                value (clock/sample traj beat)
+                                nxt   (clock/next-edge traj beat)]
+                            (setter-fn value)
+                            (when (and @running (< nxt ##Inf))
+                              (Thread/sleep 50)
+                              (recur)))))
+                      (catch InterruptedException _)
+                      (catch Exception e
+                        (when @running
+                          (println "[apply-trajectory!] error:" (.getMessage e)))))))]
+    (.setDaemon thread true)
+    (.start thread)
+    (fn cancel []
+      (reset! running false)
+      nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; Re-export live-loop API from cljseq.loop

@@ -1,0 +1,14 @@
+{:synth/id   :dull-bell
+ :synth/tags [:bell :percussive :inharmonic]
+ :synth/doc  "Sine fundamental with inharmonic overtone (ratio 2.278) — muted bell character. Long release decay."
+ :args  {:freq    440
+         :amp     0.5
+         :attack  0.01
+         :release 1.0
+         :pan     0.0}
+ :graph [:out 0
+          [:pan2
+           [:* [:env-gen [:adsr :attack 0.0 0.0 :release] :gate :amp]
+               [:mix [[:sin-osc :freq]
+                      [:* 0.25 [:sin-osc [:* :freq 2.278]]]]]]
+           :pan]]}

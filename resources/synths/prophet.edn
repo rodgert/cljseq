@@ -1,0 +1,21 @@
+{:synth/id   :prophet
+ :synth/tags [:saw :pulse :filtered :pitched :polyphonic]
+ :synth/doc  "Saw + pulse mix through resonant LPF — Sonic-Pi :prophet equivalent."
+ :args  {:freq    440
+         :amp     0.4
+         :attack  0.01
+         :decay   0.1
+         :sustain 0.6
+         :release 1.0
+         :cutoff  70
+         :res     0.3
+         :pan     0.0}
+ :graph [:out 0
+          [:pan2
+           [:rlpf
+            [:* [:env-gen [:adsr :attack :decay :sustain :release] :gate :amp]
+                [:mix [[:saw :freq]
+                       [:pulse [:* :freq 0.999] 0.3]]]]
+            [:* :cutoff 125.0]
+            :res]
+           :pan]]}
