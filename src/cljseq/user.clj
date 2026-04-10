@@ -57,6 +57,7 @@
             [cljseq.texture    :as tx]
             [cljseq.trajectory :as traj]
             [cljseq.patch         :as patch]
+            [cljseq.sample        :as smp]
             [cljseq.spatial-field :as sf]
             [cljseq.transform  :as xf]
             [cljseq.voice      :as voice]))
@@ -174,6 +175,17 @@
 (def patch-params        patch/patch-params)
 (def compile-patch       patch/compile-patch)
 (def canonical->backend  patch/canonical->backend)
+
+;; Sample player
+(def defbuffer!       smp/defbuffer!)
+(def buffer-id        smp/buffer-id)
+(def buffer-path      smp/buffer-path)
+(def sample-names     smp/sample-names)
+(def load-sample!     smp/load-sample!)
+(def unload-sample!   smp/unload-sample!)
+(def sample!          smp/sample!)
+(def loop-sample!     smp/loop-sample!)
+(def granular-cloud!  smp/granular-cloud!)
 
 ;; SC patch lifecycle (requires (connect-sc!) first)
 (def instantiate-patch!  sc/instantiate-patch!)

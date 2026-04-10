@@ -251,6 +251,10 @@
         (#{:lag :lag2 :slew} op)
         (str (emit-node (first args)) "." (name op) "(" (emit-node (second args)) ")")
 
+        ;; BufFrames — initialization rate (buffer size is static after alloc)
+        (= :buf-frames op)
+        (str "BufFrames.ir(" (emit-node (first args)) ")")
+
         ;; Default: UGenClass.ar(args...)
         :else
         (let [class-name (or (ugen-class op)
@@ -483,6 +487,46 @@
 ;; ---------------------------------------------------------------------------
 ;; Session helpers
 ;; ---------------------------------------------------------------------------
+
+;; ---------------------------------------------------------------------------
+;; Buffer allocation — client-side ID tracking
+;; ---------------------------------------------------------------------------
+
+(defonce ^:private next-buffer-id (atom 0))
+
+(defn- alloc-buf-id! []
+  (let [id @next-buffer-id]
+    (swap! next-buffer-id inc)
+    id))
+
+(defn sc-buffer-alloc!
+  "Allocate an SC buffer and load an audio file from `path`.
+
+  Sends `/b_allocRead` to scsynth. Returns the buffer ID (integer) which
+  can be passed to synths as the `:buf` arg.
+
+  Idempotency is the caller's responsibility — this function always allocates
+  a new buffer ID. Use cljseq.sample/load-sample! for path-deduplication.
+
+  Example:
+    (sc/connect-sc!)
+    (def buf-id (sc/sc-buffer-alloc! \"/samples/kick.wav\"))
+    (sc/sc-play! {:synth :buf-player :buf buf-id})"
+  [path]
+  (when-not (sc-connected?)
+    (throw (ex-info "sc-buffer-alloc!: SC not connected" {:path path})))
+  (let [buf-id (alloc-buf-id!)]
+    (osc/osc-send! (sc-host) (sc-port) "/b_allocRead"
+                   (int buf-id) path (int 0) (int 0))
+    (println (str "[sc] buffer " buf-id " ← " path))
+    buf-id))
+
+(defn sc-buffer-free!
+  "Free an SC buffer by ID. Sends `/b_free` to scsynth."
+  [buf-id]
+  (when (sc-connected?)
+    (osc/osc-send! (sc-host) (sc-port) "/b_free" (int buf-id)))
+  nil)
 
 ;; ---------------------------------------------------------------------------
 ;; Audio / control bus allocation

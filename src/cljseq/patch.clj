@@ -253,4 +253,22 @@
                 :room [:verb :room]
                 :mix  [:verb :mix]
                 :damp [:verb :damp]}})
+    (defpatch! :granular-cloud
+      {:buses  {:grain-bus {:channels 2 :rate :audio}}
+       :nodes  [{:id    :grains
+                 :synth :granular-voice
+                 :args  {:density 8 :dur 0.12 :pos 0.5 :rate 1.0 :amp 0.6}
+                 :out   {:out-bus :grain-bus}}
+                {:id    :verb
+                 :synth :reverb-bus
+                 :args  {:room 0.7 :mix 0.4 :damp 0.3 :amp 1.0}
+                 :in    {:in-bus :grain-bus}
+                 :out   {:out 0}}]
+       :params {:buf     [:grains :buf]
+                :density [:grains :density]
+                :pos     [:grains :pos]
+                :rate    [:grains :rate]
+                :dur     [:grains :dur]
+                :room    [:verb :room]
+                :mix     [:verb :mix]}})
     true))
