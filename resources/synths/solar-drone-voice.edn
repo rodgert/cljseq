@@ -1,9 +1,11 @@
 {:synth/id   :solar-drone-voice
- :synth/tags [:drone :saw :multi-oscillator :bus-aware :solar42]
- :synth/doc  "Six sawtooth drone oscillators with individual gate and tuning — Solar42 drone voice.
+ :synth/tags [:drone :saw :multi-oscillator :bus-aware :solar42-inspired]
+ :synth/doc  "Six sawtooth drone oscillators with individual gate and tuning.
+  Solar42-inspired architecture — structurally similar to the drone voices found in
+  multi-oscillator drone synthesizers, not a licensed reproduction.
 
   Each of the six oscillators has:
-    :on1–:on6  — 0 (off) or 1 (on); gating is a 0/1 multiply, same as the hardware switch
+    :on1–:on6  — 0 (off) or 1 (on); gating is a 0/1 multiply, same as a hardware gate switch
     :tune1–:tune6 — frequency ratio from :freq (1.0 = root, 1.5 = fifth, 2.0 = octave, etc.)
 
   :detune applies a slightly different spread to each oscillator (fixed per-osc fractions of

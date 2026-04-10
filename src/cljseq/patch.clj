@@ -273,32 +273,35 @@
                 :mix     [:verb :mix]}})
 
     ;; ---------------------------------------------------------------------------
-    ;; Solar42 — structural model of the Elta Music Solar42f analog synthesizer.
+    ;; :solar42 — Solar42-inspired multi-voice drone synthesizer patch.
     ;;
-    ;; Signal flow (mirrors hardware topology):
+    ;; Structurally inspired by the voice topology of multi-oscillator analog drone
+    ;; synthesizers (4 drone voices, 2 richer VCO voices, 2 experimental FM/AM/noise voices,
+    ;; dual resonant filter, effects). Not a licensed reproduction of any specific instrument.
+    ;;
+    ;; Signal flow:
     ;;   4 drone voices  ─┐
     ;;   2 VCO voices    ─┼─► voice-mix bus ─► solar-filter ─► effects ─► out
     ;;   2 papa voices   ─┘                    (dual RLPF)    (FreeVerb)
     ;;
     ;; Each voice writes stereo to :voice-mix via Out.ar — they sum on the bus.
-    ;; The filter reads the summed mix, applies dual RLPF (Polivoks approximation).
-    ;; The effects stage blends in a reverb tail before hardware output.
+    ;; The filter reads the summed mix, applies dual RLPF (Polivoks-inspired topology).
     ;;
     ;; Key params via set-patch-param! or apply-trajectory!:
-    ;;   :filter-cutoff / :filter-res — the Polivoks filter character
+    ;;   :filter-cutoff / :filter-res — filter character (the main sound-shaping control)
     ;;   :effects-mix   — dry/wet reverb blend
     ;;   :droneN-freq   — tune each drone voice independently
     ;;   :droneN-detune — spread the 6 saws within each drone voice
-    ;;   :vcoN-freq / :vcoN-pwm-rate — VCO pitch and PWM rate
+    ;;   :vcoN-freq / :vcoN-pwm-rate — VCO pitch and PWM modulation speed
     ;;   :papaN-freq / :papaN-fm-depth / :papaN-noise-mix — Papa voice timbre
     ;;
-    ;; Scale vocabulary for the Solar42 keyboard modes (from cljseq.scale):
-    ;;   Solar42 "Gypsy"    → :double-harmonic
-    ;;   Solar42 "Gamelan"  → :pelog / :slendro
-    ;;   Solar42 "Japanese" → :in-scale / :in-sen / :hirajoshi
-    ;;   Solar42 "Arabian"  → :hijaz (alias :phrygian-dominant)
-    ;;   Solar42 "Flamenco" → :phrygian-dominant
-    ;;   Solar42 "Whole Tone" → :whole-tone
+    ;; Scale vocabulary (see cljseq.scale) matching common drone synthesizer keyboard modes:
+    ;;   "Gypsy"    → :double-harmonic
+    ;;   "Gamelan"  → :pelog / :slendro
+    ;;   "Japanese" → :in-scale / :in-sen / :hirajoshi
+    ;;   "Arabian"  → :hijaz
+    ;;   "Flamenco" → :phrygian-dominant
+    ;;   "Whole Tone" → :whole-tone
     ;; ---------------------------------------------------------------------------
     (defpatch! :solar42
       {:buses  {:voice-mix    {:channels 2 :rate :audio}

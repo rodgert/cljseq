@@ -100,7 +100,15 @@
    ;; Named aliases matching Solar42 keyboard modes and common usage
    :hijaz              [1 3 1 2 1 2 2] ; Arabian hijaz maqam (same intervals as :phrygian-dominant)
    :folk               [2 1 3 1 2 1 2] ; Folk/klezmer flavour (same as :romanian-minor)
-   :in-sen             [1 4 2 1 4]})
+   :in-sen             [1 4 2 1 4]     ; Japanese in-sen (alias for :in-scale)
+   ;; Persian and Dune-palette scales
+   ;; Persian: 1, b2, 3, 4, b5, b6, 7 — tritone + raised 3rd/7th against flat 2nd.
+   ;; Distinctly tense, exotic character; prominent in Hans Zimmer's Dune score palette.
+   :persian            [1 3 1 1 2 3 1]
+   ;; :dune — the double harmonic / Byzantine scale, aliased for the "Arrakis sound".
+   ;; Zimmer uses this for Fremen and desert-civilization material in the 2021 Dune score.
+   ;; (same intervals as :double-harmonic)
+   :dune               [1 3 1 2 1 3 1]})
 
 ;; ---------------------------------------------------------------------------
 ;; Cumulative offset helper
