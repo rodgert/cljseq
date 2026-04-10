@@ -56,7 +56,8 @@
   This allows downstream consumers to remain synchronized even during freeze.
 
   Requires cljseq.core/start! to have been called before `start-spectral!`."
-  (:require [cljseq.loop            :as loop-ns]
+  (:require [cljseq.ctrl            :as ctrl]
+            [cljseq.loop            :as loop-ns]
             [cljseq.temporal-buffer :as tb]
             [cljseq.texture         :as tx]))
 
@@ -88,7 +89,11 @@
 
   When frozen: skips recomputation but still fires on-ctx with the held state.
   When live: snapshots the buffer, computes spectral fields, updates state-atom.
-  Sets :spectral/blur to 0.0 whenever an update is applied."
+  Sets :spectral/blur to 0.0 whenever an update is applied.
+
+  Publishes the spectral state to [:spectral :state] in the ctrl tree after
+  every tick so peers can poll it via the HTTP server. The ctrl/set! is wrapped
+  in a try so that tests (which do not start the system) are not broken."
   [buf-name on-ctx state-atom]
   (let [frozen? (:frozen? @state-atom)]
     (when-not frozen?
@@ -98,6 +103,8 @@
             (swap! state-atom merge spec {:spectral/blur 0.0})))))
     (let [pub (dissoc @state-atom :frozen?)]
       (when on-ctx (on-ctx pub))
+      ;; Publish for peer sharing — best-effort, does not require core/start!
+      (try (ctrl/set! [:spectral :state] pub) (catch Exception _ nil))
       pub)))
 
 (defmacro ^:private sam-loop

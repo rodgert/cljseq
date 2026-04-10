@@ -23,8 +23,12 @@ Version 0.3.0 · April 2026
 15. [Temporal Buffer](#15-temporal-buffer)
 16. [Threshold Extractor](#16-threshold-extractor)
 17. [Ensemble Harmony](#17-ensemble-harmony)
-18. [Bach Corpus (Music21)](#18-bach-corpus-music21)
-19. [Reference: REPL Commands and Step Keys](#19-reference)
+18. [ITexture and Spectral Analysis](#18-itexture-and-spectral-analysis)
+19. [Ensemble Improvisation Agent](#19-ensemble-improvisation-agent)
+20. [Peer Discovery](#20-peer-discovery)
+21. [Note Transformers](#21-note-transformers)
+22. [Bach Corpus (Music21)](#22-bach-corpus-music21)
+23. [Reference: REPL Commands and Step Keys](#23-reference)
 
 ---
 
@@ -1166,7 +1170,491 @@ first call before any events have arrived, `analyze-buffer` returns nil.
 
 ---
 
-## 18. Bach Corpus (Music21)
+## 18. ITexture and Spectral Analysis
+
+`cljseq.texture` provides `ITexture` — a unified protocol for any device or
+subsystem whose state can be set, faded, frozen, and thawed. `cljseq.spectral`
+implements `ITexture` as a Spectral Analysis Model (SAM) that continuously
+derives harmonic-texture characteristics from a live Temporal Buffer.
+
+### ITexture protocol
+
+```clojure
+(defprotocol ITexture
+  (freeze!       [t]             "Arrest analysis/output; hold current state.")
+  (thaw!         [t]             "Resume analysis/output.")
+  (frozen?       [t]             "True when frozen.")
+  (texture-state [t]             "Read the current params map.")
+  (texture-set!  [t params]      "Merge params immediately.")
+  (texture-fade! [t target beats] "Fade to target over beats."))
+```
+
+Any hardware effects unit can implement `ITexture` and register with the
+texture registry, which then becomes the target of `texture-transition!`.
+
+### Shadow state (hardware devices)
+
+Hardware devices have no readback — their parameters are write-only. The shadow
+state registry tracks the last-sent values so you can query them without
+re-reading hardware:
+
+```clojure
+(require '[cljseq.texture :as tx])
+
+;; Declare a shadow node for a hardware device
+(tx/shadow-init! :nightsky {:reverb/size 0.5 :reverb/mix 0.7})
+
+;; Update it as you send CCs
+(tx/shadow-update! :nightsky {:reverb/size 0.8})
+
+;; Read back the shadow
+(tx/shadow-get :nightsky)   ; => {:reverb/size 0.8 :reverb/mix 0.7}
+```
+
+### Named texture registry
+
+```clojure
+;; Register any ITexture implementation
+(tx/deftexture! :reverb my-reverb-device)
+(tx/deftexture! :delay  my-delay-device)
+
+;; Inspect
+(tx/texture-names)           ; => #{:reverb :delay}
+(tx/get-texture :reverb)     ; => the registered device
+```
+
+### texture-transition!
+
+Drive multiple devices at once from a single ops map. The same ops map shape
+is used by `apply-texture-routing!` in the ensemble improv agent:
+
+```clojure
+;; Immediate set (no :beats) or fade (with :beats)
+(tx/texture-transition!
+  {:reverb {:target {:reverb/size 0.9 :reverb/mix 0.8} :beats 8}
+   :delay  {:target {:delay/feedback 0.4}}})
+```
+
+### Spectral Analysis Model
+
+`SpectralState` adds three texture fields derived from pitch content:
+
+| Field | Range | Meaning |
+|-------|-------|---------|
+| `:spectral/density` | 0–1 | Distinct pitch classes ÷ 12 |
+| `:spectral/centroid` | 0–1 | Mean MIDI pitch ÷ 127 |
+| `:spectral/blur` | 0–1 | 0 = live analysis, 1 = fully frozen |
+
+```clojure
+(require '[cljseq.spectral :as spectral])
+
+;; Start the SAM loop watching a Temporal Buffer
+(def sam (spectral/start-spectral! :main))
+
+;; Read the current spectral state
+(spectral/spectral-ctx sam)
+;; => {:spectral/density 0.58 :spectral/centroid 0.52 :spectral/blur 0.0}
+
+;; Freeze — holds current state; analysis stops; on-ctx callbacks still fire
+(tx/freeze! sam)
+;; => blur becomes 1.0
+
+;; Thaw — resumes analysis; blur → 0.0 on next tick
+(tx/thaw! sam)
+
+;; Register as a named texture and fade blur
+(tx/deftexture! :spectral sam)
+(tx/texture-transition! {:spectral {:target {:spectral/blur 0.5} :beats 8}})
+
+;; Stop the SAM loop
+(spectral/stop-spectral! sam)
+```
+
+### Using spectral context in loops
+
+`spectral-ctx` returns a map fragment compatible with the ImprovisationContext,
+so it can be merged directly:
+
+```clojure
+(deflive-loop :texture-aware {}
+  (let [spec (spectral/spectral-ctx sam)
+        harm loop-ns/*harmony-ctx*
+        ctx  (merge harm spec)]
+    ;; Drive note density from spectral density
+    (when (< (Math/random) (:spectral/density ctx 0.3))
+      (play! (root) 1/4))
+    ;; Fade the reverb freeze based on blur
+    (tx/texture-transition!
+      {:reverb {:target {:hold? (> (:spectral/blur ctx 0) 0.5)}}}))
+  (sleep! 1/4))
+```
+
+---
+
+## 19. Ensemble Improvisation Agent
+
+`cljseq.ensemble-improv` combines the harmony ear, the spectral SAM, and the
+texture routing system into a single generative loop — the *improv agent* —
+that responds to the live musical context and drives both MIDI output and
+effects-device state from the same snapshot.
+
+### Quick start
+
+```clojure
+(require '[cljseq.ensemble-improv :as improv]
+         '[cljseq.spectral        :as spectral])
+
+;; Start the harmony ear first
+(ensemble/start-harmony-ear! :main)
+
+;; Optionally start the SAM for spectral context
+(def sam (spectral/start-spectral! :main))
+
+;; Start the improv agent
+(improv/start-improv! :main :sam sam)
+
+;; Stop
+(improv/stop-improv!)
+```
+
+### Note generation strategy
+
+Pitches are chosen from the scale in `:harmony/key`, shaped by context:
+
+| `:harmony/tension` | Degree pool |
+|--------------------|-------------|
+| < 0.35 | Root triad only — `[0 2 4]` |
+| < 0.65 | Diatonic pentatonic — `[0 1 2 3 4]` |
+| ≥ 0.65 | Full scale — all degrees |
+
+`:ensemble/register` (:low/:mid/:high) shifts the pool by ±1 octave.
+`:ensemble/density` × profile `:gate` scales play probability; capped at 0.95
+so silence always remains possible.
+
+When `:harmony/key` is absent (insufficient pitch diversity in the buffer) the
+agent rests silently.
+
+### Profile options
+
+```clojure
+(improv/start-improv! :main
+  :profile {:step-beats   1/4   ; cadence between note attempts
+            :gate         0.65  ; base play probability [0,1]
+            :dur-beats    1/4   ; note duration
+            :velocity     80    ; base MIDI velocity
+            :vel-variance 16    ; ± random velocity spread
+            :channel      1})   ; MIDI output channel
+```
+
+### Texture routing
+
+Map ImprovisationContext fields to ITexture devices. Each `:params-fn` is
+called with the current context and returns a params map for the target device:
+
+```clojure
+(improv/start-improv! :main
+  :sam sam
+  :routing
+  {:reverb {:params-fn (fn [ctx]
+                         {:hold? (> (:harmony/tension ctx 0) 0.8)})
+             :beats 4}
+   :delay  {:params-fn (fn [ctx]
+                         {:active-zone (if (< (:ensemble/density ctx 0) 0.5)
+                                         :z3 :z4)})}})
+```
+
+### Hot update
+
+Profile and routing changes take effect on the next tick without restarting
+the loop:
+
+```clojure
+(improv/update-improv! {:profile {:gate 0.9 :vel-variance 30}})
+(improv/update-improv! {:routing {:reverb {:params-fn f :beats 4}}})
+```
+
+### Conductor integration
+
+`improv-gesture-fn` returns an `:on-start`-compatible no-arg function for use
+in conductor sections. At the section boundary it merges a profile override,
+optionally replaces routing, and fires an immediate texture transition:
+
+```clojure
+(defconductor! :my-arc
+  [{:name :buildup :bars 32 :gesture :buildup
+    :on-start (improv/improv-gesture-fn
+                {:profile {:gate 0.95 :vel-variance 30}
+                 :texture {:reverb {:target {:hold? false} :beats 8}}})}
+   {:name :wind-down :bars 8 :gesture :wind-down
+    :on-start (improv/improv-gesture-fn
+                {:profile {:gate 0.4 :vel-variance 10}
+                 :texture {:reverb {:target {:hold? true}}}})}])
+
+(fire! :my-arc)
+```
+
+---
+
+## 20. Peer Discovery
+
+`cljseq.peer` enables a multi-host cljseq studio: each node broadcasts a UDP
+beacon so peers can discover it, and `mount-peer!` starts a background poll
+that mounts the peer's harmony and spectral context into the local ctrl tree.
+
+### Node identity
+
+```clojure
+(require '[cljseq.peer :as peer])
+
+;; Call before start-discovery!
+(peer/set-node-profile!
+  {:node-id    :mac-mini   ; keyword — unique per node
+   :role       :main
+   :http-port  7177        ; must match (server/start-server! :port 7177)
+   :nrepl-port 7888})
+```
+
+### Discovery
+
+```clojure
+;; Start broadcasting + listening (multicast 239.255.43.99:7743, 5 s interval)
+(peer/start-discovery!)
+
+;; After a few seconds
+(peer/peers)
+;; => {:ubuntu {:node-id :ubuntu :host "192.168.1.10" :http-port 7177 ...}
+;;     :rpi    {:node-id :rpi    :host "10.0.0.5"     :http-port 7177 ...}}
+
+;; Stop
+(peer/stop-discovery!)
+```
+
+Peers expire automatically after 15 s without a beacon.
+
+### Mounting peer context
+
+Once a peer is discovered and its HTTP server is reachable, `mount-peer!`
+polls two ctrl-tree paths and stores the results locally:
+
+```clojure
+;; Prerequisites: server must be running on the peer
+;; (server/start-server!) on the remote host
+
+(peer/mount-peer! :ubuntu)
+
+;; Polled every 2 s from the peer:
+;;   GET /ctrl/ensemble/harmony-ctx → [:peers :ubuntu :ensemble :ctx]
+;;   GET /ctrl/spectral/state       → [:peers :ubuntu :spectral :ctx]
+
+;; Read the mounted harmony context
+(peer/peer-harmony-ctx :ubuntu)
+;; => {:harmony/root "D" :harmony/octave 3
+;;     :harmony/intervals [2 1 2 2 2 1 2]
+;;     :harmony/tension 0.65 :ensemble/density 0.4 ...}
+
+;; Reconstruct a live Scale record from the serialized form
+(peer/serial->scale (peer/peer-harmony-ctx :ubuntu))
+;; => #Scale{:root D3 :intervals [2 1 2 2 2 1 2]}
+
+;; Spectral state
+(peer/peer-spectral-ctx :ubuntu)
+;; => {:spectral/density 0.58 :spectral/centroid 0.52 :spectral/blur 0.0}
+
+;; Stop polling
+(peer/unmount-peer! :ubuntu)
+```
+
+### Using peer context in loops
+
+```clojure
+;; Follow the remote node's key in a local loop
+(deflive-loop :follower {}
+  (when-let [remote-ctx (peer/peer-harmony-ctx :ubuntu)]
+    (let [scale (peer/serial->scale remote-ctx)]
+      (binding [loop-ns/*harmony-ctx* {:harmony/key scale}]
+        (play! (scale-degree (rand-int 7)) 1/4))))
+  (sleep! 1/4))
+```
+
+### Serialization format
+
+Scale and Pitch records cannot round-trip through JSON. The harmony ear
+publishes a simplified primitive map at `[:ensemble :harmony-ctx]`:
+
+```clojure
+{:harmony/root      "D"           ; string step name
+ :harmony/octave    3             ; integer
+ :harmony/intervals [2 1 2 2 2 1 2]
+ :harmony/tension   0.65
+ :harmony/mode-conf 0.82
+ :ensemble/density  0.4
+ :ensemble/register "mid"}
+```
+
+`peer/serial->scale` reconstructs the Scale record from these fields.
+`peer/ctx->serial` performs the reverse conversion (useful for testing).
+
+---
+
+## 21. Note Transformers
+
+`cljseq.transform` provides composable per-event processing that sits between
+note generation and `play!`. Each transformer receives a note event map and
+returns zero, one, or many `{:event map :delay-beats number}` results. An
+empty result silently drops the event; multiple results produce multiple sounds.
+
+### Quick start
+
+```clojure
+(require '[cljseq.transform :as xf])
+
+;; Single transformer
+(def my-echo (xf/echo {:repeats 3 :decay 0.7 :delay-beats 1/4}))
+
+(deflive-loop :melody {}
+  (when-let [note (pick-note)]
+    (xf/play-transformed! my-echo note))
+  (sleep! 1))
+```
+
+### Composing transformers
+
+`compose-xf` chains transformers left to right. The output events from each
+feed into the next; delay-beats accumulate so an echo of a strum replays the
+full strummed pattern N times:
+
+```clojure
+(def my-chain
+  (xf/compose-xf
+    (xf/velocity-curve {:breakpoints [[0 0] [64 90] [127 127]]})
+    (xf/harmonize {:intervals [7 12]})
+    (xf/echo {:repeats 2 :decay 0.6 :delay-beats 1/4})))
+
+(deflive-loop :melody {}
+  (xf/play-transformed! my-chain (pick-note))
+  (sleep! 1))
+```
+
+### Built-in transformers
+
+#### `velocity-curve` — piecewise linear velocity mapping
+
+```clojure
+;; Raise mid-range velocities, leave extremes
+(xf/velocity-curve {:breakpoints [[0 0] [64 90] [127 127]]})
+```
+
+#### `quantize` — snap pitch to scale
+
+```clojure
+;; Snap to C major; drop notes more than 1 semitone away
+(xf/quantize {:scale  (make-scale :C 4 :major)
+              :forgiveness 1})
+```
+
+When `:forgiveness` is set and the pitch is farther than that many semitones
+from any scale degree, the event is dropped (not clamped).
+
+#### `harmonize` — add interval voices
+
+```clojure
+;; Perfect fifth + octave above; snaps to *harmony-ctx* scale by default
+(xf/harmonize {:intervals [7 12]})
+
+;; Explicit scale, raw chromatic (no snapping)
+(xf/harmonize {:intervals [4 7]
+               :key       (make-scale :D 3 :dorian)
+               :snap?     false})
+
+;; Harmony only, omit the original
+(xf/harmonize {:intervals [7] :include-original? false})
+```
+
+When `:snap?` is true (default), harmony notes are snapped to the nearest
+scale degree. The scale is read from `*harmony-ctx*` unless `:key` is
+provided. `harmonize` is the primary *ensemble follower* mechanism.
+
+#### `echo` — decay repeat chain
+
+```clojure
+;; 3 echoes, each 70% of the previous velocity, 1/4 beat apart
+(xf/echo {:repeats 3 :decay 0.7 :delay-beats 1/4})
+
+;; Ascending echo (pitch rises each repeat)
+(xf/echo {:repeats 4 :decay 0.8 :delay-beats 1/8 :pitch-step 2})
+```
+
+#### `note-repeat` — rhythmic copies
+
+```clojure
+;; 4 evenly spaced copies within 1 beat
+(xf/note-repeat {:n-copies 4 :window-beats 1})
+
+;; Euclidean distribution — 3 pulses spread across a 2-beat window
+(xf/note-repeat {:n-copies 3 :window-beats 2 :euclidean? true})
+```
+
+Euclidean mode uses the Bjorklund algorithm to distribute copies as evenly as
+possible, producing the characteristic feel of Euclidean rhythms.
+
+#### `strum` — spread chord tones
+
+Input event should carry `:chord/notes` — a vector of MIDI values.
+
+```clojure
+;; Strum a chord vector upward, one note every 1/32 beat
+(xf/play-transformed!
+  (xf/strum {:direction :up :rate-beats 1/32})
+  {:chord/notes [60 64 67 72] :dur/beats 1 :mod/velocity 90})
+
+;; Downward strum
+(xf/strum {:direction :down :rate-beats 1/32})
+
+;; Random order
+(xf/strum {:direction :random :rate-beats 1/16})
+```
+
+Strum integrates naturally with `compose-xf` — strum a chord, then echo the
+full strummed pattern: `(compose-xf (strum ...) (echo ...))`.
+
+#### `dribble` — bouncing-ball timing
+
+Repeats the event with exponentially shrinking inter-onset gaps, like a ball
+bouncing to rest:
+
+```clojure
+(xf/dribble {:bounces       5
+             :initial-delay 1/2   ; gap before first bounce
+             :restitution   0.65}) ; each gap is 65% of the previous
+```
+
+#### `latch` — toggle or velocity gate
+
+```clojure
+;; Every other note passes (toggle open/closed)
+(xf/latch {:mode :toggle})
+
+;; Only notes with velocity ≥ 80 pass
+(xf/latch {:mode :velocity :threshold 80})
+```
+
+Toggle starts open by default; pass `:initial false` to start closed.
+
+### ITransformer protocol
+
+You can define custom transformers:
+
+```clojure
+(defrecord MyTransformer [amount]
+  xf/ITransformer
+  (transform [_ event]
+    ;; Return a seq of {:event map :delay-beats num}
+    [{:event (update event :mod/velocity + amount) :delay-beats 0}]))
+```
+
+---
+
+## 22. Bach Corpus (Music21)
 
 
 cljseq integrates with [Music21](https://web.mit.edu/music21/) for the Bach
@@ -1204,7 +1692,7 @@ to disk in `~/.local/share/cljseq/corpora/m21/`.
 
 ---
 
-## 19. Reference
+## 23. Reference
 
 ### REPL commands
 

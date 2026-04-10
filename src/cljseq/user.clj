@@ -47,10 +47,12 @@
             [cljseq.scale      :as scale]
             [cljseq.sidecar    :as sidecar]
             [cljseq.ensemble-improv :as ei]
+            [cljseq.peer            :as peer]
             [cljseq.spectral        :as spectral]
             [cljseq.stochastic      :as stoch]
             [cljseq.texture    :as tx]
             [cljseq.trajectory :as traj]
+            [cljseq.transform  :as xf]
             [cljseq.voice      :as voice]))
 
 ;; ---------------------------------------------------------------------------
@@ -165,6 +167,41 @@
 (def improv-state         ei/improv-state)
 (def improv-gesture-fn    ei/improv-gesture-fn)
 (def default-improv-profile ei/default-profile)
+
+;; ---------------------------------------------------------------------------
+;; Peer discovery and ctrl-tree mounting (Topology Layer 2)
+;; ---------------------------------------------------------------------------
+
+(def set-node-profile!   peer/set-node-profile!)
+(def node-profile        peer/node-profile)
+(def node-id             peer/node-id)
+(def start-discovery!    peer/start-discovery!)
+(def stop-discovery!     peer/stop-discovery!)
+(def discovery-running?  peer/discovery-running?)
+(def peers               peer/peers)
+(def peer-info           peer/peer-info)
+(def mount-peer!         peer/mount-peer!)
+(def unmount-peer!       peer/unmount-peer!)
+(def mounted-peers       peer/mounted-peers)
+(def peer-harmony-ctx    peer/peer-harmony-ctx)
+(def peer-spectral-ctx   peer/peer-spectral-ctx)
+(def ctx->serial         peer/ctx->serial)
+(def serial->scale       peer/serial->scale)
+
+;; ---------------------------------------------------------------------------
+;; Note transformers
+;; ---------------------------------------------------------------------------
+
+(def play-transformed!   xf/play-transformed!)
+(def compose-xf          xf/compose-xf)
+(def velocity-curve      xf/velocity-curve)
+(def quantize            xf/quantize)
+(def harmonize           xf/harmonize)
+(def echo                xf/echo)
+(def note-repeat         xf/note-repeat)
+(def strum               xf/strum)
+(def dribble             xf/dribble)
+(def latch               xf/latch)
 
 ;; ---------------------------------------------------------------------------
 ;; Analysis
