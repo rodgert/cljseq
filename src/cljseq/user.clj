@@ -56,6 +56,7 @@
             [cljseq.stochastic      :as stoch]
             [cljseq.texture    :as tx]
             [cljseq.trajectory :as traj]
+            [cljseq.spatial-field :as sf]
             [cljseq.transform  :as xf]
             [cljseq.voice      :as voice]))
 
@@ -163,6 +164,22 @@
 (def shadow-get           tx/shadow-get)
 
 ;; ---------------------------------------------------------------------------
+;; Spatial field
+;; ---------------------------------------------------------------------------
+
+(def defspatial-field!    sf/defspatial-field!)
+(def start-field!         sf/start-field!)
+(def stop-field!          sf/stop-field!)
+(def stop-all-fields!     sf/stop-all-fields!)
+(def field-state          sf/field-state)
+(def field-transformer    sf/field-transformer)
+(def play-through-field!  sf/play-through-field!)
+(def get-field            sf/get-field)
+(def field-names          sf/field-names)
+(def quad-gains           sf/quad-gains)
+(def ngon-walls           sf/ngon-walls)
+
+;; ---------------------------------------------------------------------------
 ;; Spectral analysis
 ;; ---------------------------------------------------------------------------
 
@@ -254,7 +271,7 @@
 ;; Re-export DSL
 ;; ---------------------------------------------------------------------------
 
-(def with-dur       dsl/with-dur)
+(defmacro with-dur [dur & body] `(dsl/with-dur ~dur ~@body))
 (def use-harmony!   dsl/use-harmony!)
 
 (defmacro with-harmony [scale & body]
@@ -266,7 +283,7 @@
 (def play-chord!    dsl/play-chord!)
 (def play-voicing!  dsl/play-voicing!)
 (def arp!           dsl/arp!)
-(def phrase!        dsl/phrase!)
+(defmacro phrase! [& args] `(dsl/phrase! ~@args))
 (def ring           dsl/ring)
 (def tick!          dsl/tick!)
 
