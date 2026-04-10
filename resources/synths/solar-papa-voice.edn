@@ -1,6 +1,8 @@
 {:synth/id   :solar-papa-voice
- :synth/tags [:fm :am :noise :sh :bus-aware :solar42]
- :synth/doc  "FM + AM synthesis with noise and Sample&Hold — Solar42 'Papa Srapa' voice.
+ :synth/tags [:fm :am :noise :sh :bus-aware :solar42-inspired]
+ :synth/doc  "FM + AM synthesis with noise and Sample&Hold — Papa Srapa-inspired voice.
+  Solar42-inspired architecture; structurally similar to the AM/FM/noise voices found in
+  experimental analog synthesizers, not a licensed reproduction.
 
   Combines four synthesis modes, blended by mix controls:
 

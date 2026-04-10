@@ -1,9 +1,10 @@
 {:synth/id   :solar-filter
- :synth/tags [:filter :polivoks :12db :stereo :bus-aware :solar42]
- :synth/doc  "Dual cascaded 12dB/oct resonant LPF — Polivoks-style approximation.
+ :synth/tags [:filter :polivoks-inspired :12db :stereo :bus-aware :solar42-inspired]
+ :synth/doc  "Dual cascaded 12dB/oct resonant LPF — Polivoks-inspired approximation.
+  Structurally similar to the dual 12dB filter topology found in certain Soviet-era-derived
+  analog synthesizers, not a licensed reproduction of any specific circuit.
 
-  The Solar42 uses a pair of Polivoks-derived 12dB/oct lowpass filters. This synth
-  approximates that topology by cascading two RLPF stages in series:
+  Two RLPF stages in series:
 
     In → RLPF(cutoff, res) → RLPF(cutoff, res) → Out
 

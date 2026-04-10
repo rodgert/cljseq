@@ -184,3 +184,13 @@
   (testing ":folk and :romanian-minor share intervals"
     (is (= (:intervals (scale/named-scale :folk))
            (:intervals (scale/named-scale :romanian-minor))))))
+
+(deftest persian-scale-test
+  (testing ":persian has correct interval pattern (1 b2 3 4 b5 b6 7)"
+    (let [s (scale/named-scale :persian)]
+      (is (= [1 3 1 1 2 3 1] (:intervals s))))))
+
+(deftest dune-scale-test
+  (testing ":dune matches :double-harmonic intervals"
+    (is (= (:intervals (scale/named-scale :dune))
+           (:intervals (scale/named-scale :double-harmonic))))))
