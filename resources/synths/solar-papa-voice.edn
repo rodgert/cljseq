@@ -1,0 +1,40 @@
+{:synth/id   :solar-papa-voice
+ :synth/tags [:fm :am :noise :sh :bus-aware :solar42]
+ :synth/doc  "FM + AM synthesis with noise and Sample&Hold — Solar42 'Papa Srapa' voice.
+
+  Combines four synthesis modes, blended by mix controls:
+
+    FM  — carrier SinOsc with frequency modulated by a second SinOsc at :fm-ratio × :freq.
+          :fm-depth controls the modulation index (0=no FM, higher=richer sidebands).
+
+    AM  — the FM output is amplitude-modulated by a third SinOsc at :am-ratio × :freq.
+          :am-depth 0 = pure FM, 1.0 = deep AM (ring-mod character).
+
+    Noise/S&H — PinkNoise sampled by a Latch at :sh-rate Hz produces random stepped values.
+          :noise-mix (0–1) crossfades between the FM+AM voice and the S&H noise output.
+
+  AR envelope (ASR while gate held). Outputs to :out-bus for use in the :solar42 patch.
+
+  Tip: low :fm-ratio (e.g. 1.0–2.0) gives harmonic, organ-like tones.
+       Inharmonic :fm-ratio (e.g. 1.414, 2.278) gives metallic/bell character.
+       High :sh-rate (8–16 Hz) gives a Buchla-style random bubbling effect."
+ :args  {:freq      220
+         :amp       0.3
+         :fm-depth  0.5
+         :fm-ratio  2.0
+         :am-depth  0.3
+         :am-ratio  1.5
+         :noise-mix 0.1
+         :sh-rate   4.0
+         :attack    0.01
+         :release   1.0
+         :pan       0.0
+         :out-bus   8}
+ :graph [:out :out-bus
+          [:pan2
+           [:* [:env-gen [:asr :attack 1.0 :release] :gate :amp]
+               [:mix [[:* [:- 1.0 :noise-mix]
+                          [:* [:sin-osc [:+ :freq [:* :fm-depth [:sin-osc [:* :freq :fm-ratio]]]]]
+                              [:+ 1.0 [:* :am-depth [:sin-osc [:* :freq :am-ratio]]]]]]
+                      [:* :noise-mix [:latch [:pink-noise] [:impulse :sh-rate]]]]]]
+           :pan]]}

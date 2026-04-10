@@ -150,3 +150,37 @@
   (testing "Scale record responds to :intervals like a map"
     (let [s (scale/named-scale :major)]
       (is (= [2 2 1 2 2 2 1] (:intervals s))))))
+
+;; ---------------------------------------------------------------------------
+;; Solar42 keyboard mode scales
+;; ---------------------------------------------------------------------------
+
+(deftest solar42-scales-registered-test
+  (testing "Solar42 keyboard scales are registered"
+    (let [names (set (scale/scale-names))]
+      (is (contains? names :pelog)    "Gamelan pelog")
+      (is (contains? names :slendro)  "Gamelan slendro")
+      (is (contains? names :hijaz)    "Arabian hijaz maqam")
+      (is (contains? names :folk)     "Folk/klezmer scale")
+      (is (contains? names :in-sen)   "Japanese in-sen"))))
+
+(deftest pelog-scale-test
+  (testing ":pelog has 6 steps (7-note scale)"
+    (let [s (scale/named-scale :pelog)]
+      (is (= 6 (count (:intervals s))))
+      (is (= [1 2 3 1 4 1] (:intervals s))))))
+
+(deftest slendro-scale-test
+  (testing ":slendro has 5 steps"
+    (let [s (scale/named-scale :slendro)]
+      (is (= 5 (count (:intervals s)))))))
+
+(deftest hijaz-same-as-phrygian-dominant-test
+  (testing ":hijaz and :phrygian-dominant share intervals"
+    (is (= (:intervals (scale/named-scale :hijaz))
+           (:intervals (scale/named-scale :phrygian-dominant))))))
+
+(deftest folk-same-as-romanian-minor-test
+  (testing ":folk and :romanian-minor share intervals"
+    (is (= (:intervals (scale/named-scale :folk))
+           (:intervals (scale/named-scale :romanian-minor))))))

@@ -1,0 +1,27 @@
+{:synth/id   :solar-vco-voice
+ :synth/tags [:vco :pwm :sub :bus-aware :solar42]
+ :synth/doc  "VarSaw VCO with LFO-modulated pulse width and sub-oscillator — Solar42 VCO voice.
+
+  A SinOsc running at :pwm-rate Hz sweeps the VarSaw's width from 0 to 1, creating the
+  pulse-width modulation (PWM) effect of the Solar42's richer VCO voices.
+
+  :sub-amp (0–1) controls the level of a sub-octave pulse at freq/2 — the 'suboscillator'
+  switch on the hardware.
+
+  Full ADSR envelope. Outputs to :out-bus for use in the :solar42 patch."
+ :args  {:freq     220
+         :amp      0.35
+         :attack   0.05
+         :decay    0.2
+         :sustain  0.7
+         :release  1.5
+         :pwm-rate 0.8
+         :sub-amp  0.4
+         :pan      0.0
+         :out-bus  8}
+ :graph [:out :out-bus
+          [:pan2
+           [:* [:env-gen [:adsr :attack :decay :sustain :release] :gate :amp]
+               [:mix [[:var-saw :freq 0 [:+ 0.5 [:* 0.5 [:sin-osc :pwm-rate]]]]
+                      [:* :sub-amp [:pulse [:/ :freq 2] 0.5]]]]]
+           :pan]]}

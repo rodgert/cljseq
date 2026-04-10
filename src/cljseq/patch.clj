@@ -271,4 +271,93 @@
                 :dur     [:grains :dur]
                 :room    [:verb :room]
                 :mix     [:verb :mix]}})
+
+    ;; ---------------------------------------------------------------------------
+    ;; Solar42 — structural model of the Elta Music Solar42f analog synthesizer.
+    ;;
+    ;; Signal flow (mirrors hardware topology):
+    ;;   4 drone voices  ─┐
+    ;;   2 VCO voices    ─┼─► voice-mix bus ─► solar-filter ─► effects ─► out
+    ;;   2 papa voices   ─┘                    (dual RLPF)    (FreeVerb)
+    ;;
+    ;; Each voice writes stereo to :voice-mix via Out.ar — they sum on the bus.
+    ;; The filter reads the summed mix, applies dual RLPF (Polivoks approximation).
+    ;; The effects stage blends in a reverb tail before hardware output.
+    ;;
+    ;; Key params via set-patch-param! or apply-trajectory!:
+    ;;   :filter-cutoff / :filter-res — the Polivoks filter character
+    ;;   :effects-mix   — dry/wet reverb blend
+    ;;   :droneN-freq   — tune each drone voice independently
+    ;;   :droneN-detune — spread the 6 saws within each drone voice
+    ;;   :vcoN-freq / :vcoN-pwm-rate — VCO pitch and PWM rate
+    ;;   :papaN-freq / :papaN-fm-depth / :papaN-noise-mix — Papa voice timbre
+    ;;
+    ;; Scale vocabulary for the Solar42 keyboard modes (from cljseq.scale):
+    ;;   Solar42 "Gypsy"    → :double-harmonic
+    ;;   Solar42 "Gamelan"  → :pelog / :slendro
+    ;;   Solar42 "Japanese" → :in-scale / :in-sen / :hirajoshi
+    ;;   Solar42 "Arabian"  → :hijaz (alias :phrygian-dominant)
+    ;;   Solar42 "Flamenco" → :phrygian-dominant
+    ;;   Solar42 "Whole Tone" → :whole-tone
+    ;; ---------------------------------------------------------------------------
+    (defpatch! :solar42
+      {:buses  {:voice-mix    {:channels 2 :rate :audio}
+                :filtered-mix {:channels 2 :rate :audio}}
+       :nodes  [;; ── Drone voices (6 detuned saws each, gate+tune per oscillator) ──
+                {:id :drone1 :synth :solar-drone-voice
+                 :args {:freq 110 :amp 0.22 :detune 0.02} :out {:out-bus :voice-mix}}
+                {:id :drone2 :synth :solar-drone-voice
+                 :args {:freq 146 :amp 0.22 :detune 0.02} :out {:out-bus :voice-mix}}
+                {:id :drone3 :synth :solar-drone-voice
+                 :args {:freq 165 :amp 0.22 :detune 0.02} :out {:out-bus :voice-mix}}
+                {:id :drone4 :synth :solar-drone-voice
+                 :args {:freq 220 :amp 0.22 :detune 0.02} :out {:out-bus :voice-mix}}
+                ;; ── VCO voices (VarSaw + PWM + sub) ──
+                {:id :vco1 :synth :solar-vco-voice
+                 :args {:freq 220 :amp 0.3 :pwm-rate 0.7 :sub-amp 0.4} :out {:out-bus :voice-mix}}
+                {:id :vco2 :synth :solar-vco-voice
+                 :args {:freq 330 :amp 0.3 :pwm-rate 1.1 :sub-amp 0.3} :out {:out-bus :voice-mix}}
+                ;; ── Papa Srapa voices (FM+AM+noise+S&H) ──
+                {:id :papa1 :synth :solar-papa-voice
+                 :args {:freq 110 :amp 0.25 :fm-depth 0.6 :fm-ratio 2.0 :noise-mix 0.1}
+                 :out {:out-bus :voice-mix}}
+                {:id :papa2 :synth :solar-papa-voice
+                 :args {:freq 55 :amp 0.25 :fm-depth 0.4 :fm-ratio 1.5 :noise-mix 0.2 :sh-rate 3.0}
+                 :out {:out-bus :voice-mix}}
+                ;; ── Filter stage: dual RLPF → Polivoks approximation ──
+                {:id :filter :synth :solar-filter
+                 :args {:cutoff 55 :res 0.3 :amp 0.8}
+                 :in {:in-bus :voice-mix} :out {:out-bus :filtered-mix}}
+                ;; ── Effects block ──
+                {:id :verb :synth :reverb-bus
+                 :args {:room 0.5 :mix 0.2 :damp 0.5 :amp 1.0}
+                 :in {:in-bus :filtered-mix} :out {:out 0}}]
+       :params {;; Filter (the Polivoks pair — biggest sound shaper)
+                :filter-cutoff [:filter :cutoff]
+                :filter-res    [:filter :res]
+                ;; Effects
+                :effects-mix   [:verb :mix]
+                :effects-room  [:verb :room]
+                ;; Drone voice pitches + spread
+                :drone1-freq   [:drone1 :freq]
+                :drone2-freq   [:drone2 :freq]
+                :drone3-freq   [:drone3 :freq]
+                :drone4-freq   [:drone4 :freq]
+                :drone1-detune [:drone1 :detune]
+                :drone2-detune [:drone2 :detune]
+                :drone3-detune [:drone3 :detune]
+                :drone4-detune [:drone4 :detune]
+                ;; VCO pitches and PWM modulation rate
+                :vco1-freq     [:vco1 :freq]
+                :vco2-freq     [:vco2 :freq]
+                :vco1-pwm      [:vco1 :pwm-rate]
+                :vco2-pwm      [:vco2 :pwm-rate]
+                ;; Papa Srapa voice timbre controls
+                :papa1-freq    [:papa1 :freq]
+                :papa2-freq    [:papa2 :freq]
+                :papa1-fm      [:papa1 :fm-depth]
+                :papa2-fm      [:papa2 :fm-depth]
+                :papa1-noise   [:papa1 :noise-mix]
+                :papa2-noise   [:papa2 :noise-mix]
+                :papa2-sh-rate [:papa2 :sh-rate]}})
     true))
