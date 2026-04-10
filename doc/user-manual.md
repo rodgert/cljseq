@@ -1,6 +1,6 @@
 # cljseq User Manual
 
-Version 0.3.0 · April 2026
+Version 0.5.0 · April 2026
 
 ---
 
@@ -29,7 +29,8 @@ Version 0.3.0 · April 2026
 21. [Note Transformers](#21-note-transformers)
 22. [Bach Corpus (Music21)](#22-bach-corpus-music21)
 23. [SuperCollider Integration](#23-supercollider-integration)
-24. [Reference: REPL Commands and Step Keys](#24-reference)
+24. [Spatial Field](#24-spatial-field)
+25. [Reference: REPL Commands and Step Keys](#25-reference)
 
 ---
 
@@ -1829,7 +1830,130 @@ pan/mix (`:pan2`, `:mix`), and math operators (`:*`, `:+`, `:-`, `:/`).
 
 ---
 
-## 24. Reference
+## 24. Spatial Field
+
+`cljseq.spatial-field` models bouncing particles inside an N-sided polygon. Wall
+collisions generate MIDI events (`:generation` mode) or sweep modulation parameters
+(`:modulation` mode). The geometry is continuous — non-integer N values like `4.7`
+produce asymmetric rooms with irrational reflection angles, creating natural polyrhythm.
+
+### Room geometry
+
+```clojure
+;; Integer N — regular polygon
+(ngon-walls 6)          ; hexagon, 6 equal walls
+
+;; Decimal N — asymmetric: ceil(N) walls, irregular angles
+(ngon-walls 4.7)        ; 5 walls, polyrhythmic character
+
+;; Custom wall behaviour per wall
+(ngon-walls 4 :type :generate)                           ; all walls fire events
+(ngon-walls 4 :wall-types [:reflect :generate :absorb :portal])
+```
+
+Each wall has `:a`, `:b` (endpoints), `:normal` (inward unit vector), and `:type`.
+
+Wall types:
+| Type | Behaviour |
+|------|-----------|
+| `:reflect` | Elastic bounce — `v' = v − 2(v·n)n` |
+| `:generate` | Reflect and emit a MIDI event |
+| `:absorb` | Kill particle velocity |
+| `:portal` | Teleport particle to the opposite wall |
+
+### Defining and running a field
+
+```clojure
+(defspatial-field! ::my-room
+  {:mode      :generation   ; or :modulation
+   :sides     5.0
+   :ball-speed 1.5
+   :particles  1
+   :forces    {:gravity {:direction :down :strength 0.3}
+               :damping 0.1}})
+
+(start-field! ::my-room)
+(field-state  ::my-room)   ; => :running
+(stop-field!  ::my-room)
+```
+
+Configuration keys:
+| Key | Default | Description |
+|-----|---------|-------------|
+| `:mode` | `:generation` | `:generation` or `:modulation` |
+| `:sides` | `4.0` | N-gon sides (decimal allowed) |
+| `:ball-speed` | `1.0` | Initial particle speed (room units/s) |
+| `:particles` | `1` | Number of simultaneous particles |
+| `:min-velocity` | `0.001` | Stop threshold for absorbed particles |
+| `:forces` | `{}` | Map of `{:gravity {:direction kw :strength f} :damping f}` |
+
+### Named presets
+
+8 presets are registered at load time:
+
+| Preset | Mode | Character |
+|--------|------|-----------|
+| `:ricochet` | `:generation` | Fast 6-sided room, frequent events |
+| `:dribble` | `:generation` | Low gravity, floor-bounce feel |
+| `:drift` | `:modulation` | Slow multi-particle sweep |
+| `:orbit` | `:modulation` | Circular motion, low damping |
+| `:pinball` | `:generation` | Chaotic 7-sided room with portals |
+| `:gravity-well` | `:generation` | Strong downward pull, 4-sided room |
+| `:portal-room` | `:generation` | Mixed reflect/portal boundary types |
+| `:instrument-quad` | `:modulation` | Quad-gains spatial panning |
+
+```clojure
+(start-field! :ricochet)
+(play-through-field! {:pitch/midi 60 :dur/beats 1/4} :ricochet)
+```
+
+### ITransformer integration
+
+Spatial fields implement `ITransformer`. The triggering event passes through with
+`delay-beats 0`; collision-derived events follow with computed delays.
+
+```clojure
+(start-field! ::my-room)
+
+;; Direct transformer use
+(def xf (field-transformer ::my-room))
+(play-transformed! {:pitch/midi 60 :dur/beats 1/4} xf)
+
+;; Convenience wrapper
+(play-through-field! {:pitch/midi 60 :dur/beats 1/4} ::my-room)
+```
+
+### Quad-gains (VBAP spatial panning)
+
+`quad-gains` maps a 2D position `[x y]` ∈ [0,1]² to four-channel gains
+`[FL FR RL RR]` using constant-power decomposition.
+
+```clojure
+(quad-gains [0.5 0.5])   ; centre → equal gains
+(quad-gains [0.0 0.5])   ; hard left
+(quad-gains [0.5 1.0])   ; hard front
+```
+
+Sum of squares ≈ 1.0 across the entire field (constant-power law).
+
+### Axis mappings
+
+Map particle physics axes to synthesis parameters:
+
+```clojure
+;; In :modulation mode, map :x → :pan and :speed → :velocity
+(defspatial-field! ::spatial-pan
+  {:mode :modulation
+   :sides 4.0
+   :mappings {:x :pan :speed :velocity}})
+```
+
+Available axes: `:x`, `:y`, `:r` (radius from centre), `:θ` (angle),
+`:vx`, `:vy`, `:speed`, `:age`.
+
+---
+
+## 25. Reference
 
 ### REPL commands
 
