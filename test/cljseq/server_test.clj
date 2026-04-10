@@ -5,6 +5,7 @@
             [clojure.data.json :as json]
             [cljseq.core       :as core]
             [cljseq.ctrl       :as ctrl]
+            [cljseq.peer       :as peer]
             [cljseq.server     :as server])
   (:import  [java.net.http HttpClient HttpRequest
              HttpRequest$BodyPublishers HttpResponse$BodyHandlers]
@@ -183,3 +184,58 @@
     (Thread/sleep 20)
     (let [{:keys [status]} (http-get "/ping")]
       (is (= 200 status)))))
+
+;; ---------------------------------------------------------------------------
+;; Peer-facing ctrl paths — integration tests
+;; ---------------------------------------------------------------------------
+
+(deftest harmony-ctx-peer-path-test
+  (testing "GET /ctrl/ensemble/harmony-ctx returns serialized harmony context"
+    ;; Write a serialized ctx directly to the ctrl tree (as ensemble-improv would)
+    (let [ctx {:harmony/root      "D"
+               :harmony/octave    3
+               :harmony/intervals [2 1 2 2 2 1 2]
+               :harmony/tension   0.65
+               :ensemble/density  0.4}]
+      (ctrl/set! [:ensemble :harmony-ctx] ctx))
+    (let [{:keys [status body]} (http-get "/ctrl/ensemble/harmony-ctx")]
+      (is (= 200 status))
+      (let [v (get body "value")]
+        ;; ->json-safe converts keywords via (name k), so :harmony/root → "root"
+        (is (map? v))
+        (is (= "D"             (get v "root")))
+        (is (= 3               (get v "octave")))
+        (is (= [2 1 2 2 2 1 2] (get v "intervals")))
+        (is (= 0.65            (get v "tension")))))))
+
+(deftest harmony-ctx-roundtrip-test
+  (testing "Harmony ctx served by HTTP can be reconstructed via serial->scale"
+    (let [ctx {:harmony/root      "C"
+               :harmony/octave    4
+               :harmony/intervals [2 2 1 2 2 2 1]}]
+      (ctrl/set! [:ensemble :harmony-ctx] ctx))
+    (let [{:keys [status body]} (http-get "/ctrl/ensemble/harmony-ctx")
+          v (get body "value")]
+      (is (= 200 status))
+      ;; ->json-safe converts :harmony/root → "root" etc. via (name k)
+      ;; peer/serial->scale expects :harmony/root etc., so re-qualify
+      (let [scale (peer/serial->scale
+                    {:harmony/root      (get v "root")
+                     :harmony/octave    (get v "octave")
+                     :harmony/intervals (get v "intervals")})]
+        (is (some? scale) "serial->scale reconstructs a Scale record")))))
+
+(deftest spectral-state-peer-path-test
+  (testing "GET /ctrl/spectral/state returns serialized spectral state"
+    (let [state {:spectral/centroid 880.0
+                 :spectral/flux     0.3
+                 :spectral/density  0.7}]
+      (ctrl/set! [:spectral :state] state))
+    (let [{:keys [status body]} (http-get "/ctrl/spectral/state")]
+      (is (= 200 status))
+      (let [v (get body "value")]
+        ;; ->json-safe converts :spectral/centroid → "centroid" etc.
+        (is (map? v))
+        (is (= 880.0 (get v "centroid")))
+        (is (= 0.3   (get v "flux")))
+        (is (= 0.7   (get v "density")))))))

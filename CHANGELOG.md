@@ -10,6 +10,88 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.5.0] — 2026-04-09
+
+### Added
+
+#### SuperCollider integration (`cljseq.sc`)
+- SC dispatch bridge — `register-sc-dispatch!` in `cljseq.core` allows `sc` to hook
+  `play!` at load time without a compile-time circular dependency
+- `play!` routes events with `:synth` key to `sc-play-dispatch!` automatically;
+  non-SC events are unaffected
+- `ensure-synthdef!` — sends a SynthDef to SC on first use and caches to avoid
+  redundant network calls; `sent-synthdefs` atom reset on connect/disconnect
+- `connect-sc!` / `disconnect-sc!` / `sc-connected?` — OSC session lifecycle
+- `sc-play!` — fire a SC synth event (`:synth`, `:freq`, `:dur-ms`, optional params)
+- `set-param!` / `free-synth!` / `kill-synth!` — live node control
+- `sc-synth!` — allocate a persistent SC synth node; returns node-id for continuous control
+- `synthdef-str` / `send-synthdef!` / `send-all-synthdefs!` — SynthDef compilation and upload
+- `apply-trajectory!` (3-arity, `sc/apply-trajectory!`) — drives a live SC node parameter
+  via a trajectory; delegates to `core/apply-trajectory!` with a `set-param!` setter
+- `sc-status` — query SC server status map
+- `midi->freq` private helper (440 × 2^((midi−69)/12))
+
+#### Synthesis graph vocabulary (`cljseq.synth`)
+- `defsynth!` / `get-synth` / `synth-names` — named synthesis graph registry
+- `compile-synth` — compile a graph map to a SynthDef string (`:sc` target)
+- `load-synth-map` — load a synth library from an EDN resource file
+- `map-graph` — transform all nodes of a synthesis graph
+- `synth-ugens` — extract the set of UGen types used in a graph
+- `transpose-synth` / `scale-amp` / `replace-arg` — composable graph transformers
+
+#### FM synthesis (`cljseq.fm`)
+- `def-fm!` / `get-fm` / `fm-names` — named FM algorithm registry
+- `fm-algorithm` — declare operator topology (modulation matrix + ratios + indices)
+- `compile-fm` — emit SynthDef SClang string from FM algorithm
+
+#### Physics particle field (`cljseq.spatial-field`)
+- N-gon geometry — `ngon-walls` builds walls for any N; decimal N (e.g. `4.7`) uses
+  angular spacing 2π/N with `ceil(N)` vertices producing asymmetric reflection angles
+  and polyrhythmic character
+- Per-wall type options: `:reflect` (elastic), `:generate` (fire MIDI event on collision),
+  `:absorb` (kill velocity), `:portal` (teleport to opposite wall)
+- `find-next-collision` — parametric ray-wall intersection; returns `{:t ##Inf}` when
+  no collision is reachable
+- `step-particle` — advance one particle through up to one wall collision per dt;
+  returns `{:particle p :events [...]}` where events carry wall-index and position
+- `apply-forces` — gravity (`:down`/`:up` with configurable strength) and
+  damping coefficient applied each tick
+- `quad-gains` — constant-power VBAP decomposition from [x y]∈[0,1]² to [FL FR RL RR]
+- `map-particle` — axis-mapping layer: `:x`, `:y`, `:r`, `:θ`, `:vx`, `:vy`,
+  `:speed`, `:age` mapped to arbitrary parameter keys
+- `defspatial-field!` / `get-field` / `field-names` — named field registry
+- `start-field!` / `stop-field!` / `stop-all-fields!` / `field-state` — field lifecycle
+- Two modes: `:generation` (collision events drive MIDI) and `:modulation`
+  (continuous parameter sweep on a BPM-derived tick)
+- `SpatialFieldTransformer` — `ITransformer` implementation; passes through the
+  triggering event with `delay-beats 0` and queues deferred collision events
+- `field-transformer` — returns a `SpatialFieldTransformer` for a running field
+- `play-through-field!` — convenience wrapper for `play-transformed!` + `field-transformer`
+- **8 named presets** registered at load time:
+  - `:ricochet` — fast-ball generation, 6-sided room
+  - `:dribble` — low gravity, floor-bounce generation
+  - `:drift` — slow multi-particle modulation
+  - `:orbit` — circular orbit modulation (low damping)
+  - `:pinball` — chaotic 7-sided room with portals
+  - `:gravity-well` — strong downward pull, 4-sided room
+  - `:portal-room` — mixed reflect/portal boundary types
+  - `:instrument-quad` — quad-gains–mapped spatial panning
+
+#### Rosetta Stone (`examples/rosetta_stone.clj`)
+- Side-by-side translation guide: Sonic Pi and Overtone vocabulary → cljseq
+- 13 sections covering: single notes, tempo/timing, live loops, scales, chords,
+  randomization, synth selection, harmony context, FX/device control, analysis,
+  pattern sequencing, note transformers, multi-loop ensemble
+
+### Fixed
+
+- `core/apply-trajectory!` (2-arity) — new overload drives any setter-fn with a
+  trajectory at ~50 ms ticks on a daemon thread; returns a cancel function
+- `cljseq.user/with-dur` and `phrase!` — were incorrectly re-exported as `def`
+  (macros cannot be `def`'d); changed to `defmacro` wrappers
+
+---
+
 ## [0.4.0] — 2026-04-09
 
 ### Added
@@ -304,5 +386,9 @@ Linux (Ubuntu Studio, Fedora) and device CC map verification are targeted for 0.
 
 ---
 
-[Unreleased]: https://github.com/rodgert/cljseq/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rodgert/cljseq/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/rodgert/cljseq/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/rodgert/cljseq/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/rodgert/cljseq/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/rodgert/cljseq/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rodgert/cljseq/releases/tag/v0.1.0

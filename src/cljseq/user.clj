@@ -48,10 +48,15 @@
             [cljseq.sidecar    :as sidecar]
             [cljseq.ensemble-improv :as ei]
             [cljseq.peer            :as peer]
+            [cljseq.server          :as server]
+            [cljseq.synth           :as synth]
+            [cljseq.sc              :as sc]
+            [cljseq.fm              :as fm]
             [cljseq.spectral        :as spectral]
             [cljseq.stochastic      :as stoch]
             [cljseq.texture    :as tx]
             [cljseq.trajectory :as traj]
+            [cljseq.spatial-field :as sf]
             [cljseq.transform  :as xf]
             [cljseq.voice      :as voice]))
 
@@ -87,15 +92,24 @@
 ;; Re-export the most-used core API
 ;; ---------------------------------------------------------------------------
 
-(def start!        core/start!)
-(def stop!         core/stop!)
-(def set-bpm!      core/set-bpm!)
-(def get-bpm       core/get-bpm)
-(def play!         core/play!)
-(def sleep!        core/sleep!)
-(def sync!         core/sync!)
-(def stop-loop!    core/stop-loop!)
-(def now           core/now)
+(def start!               core/start!)
+(def stop!                core/stop!)
+(def set-bpm!             core/set-bpm!)
+(def get-bpm              core/get-bpm)
+(def play!                core/play!)
+(def sleep!               core/sleep!)
+(def sync!                core/sync!)
+(def stop-loop!           core/stop-loop!)
+(def now                  core/now)
+(defn apply-trajectory!
+  "Apply an ITemporalValue trajectory.
+
+  2-arity: (apply-trajectory! setter-fn traj) — calls setter-fn with each value.
+  3-arity: (apply-trajectory! node-id param traj) — drives a live SC node parameter.
+
+  Returns a cancel function."
+  ([setter-fn traj]  (core/apply-trajectory! setter-fn traj))
+  ([node-id param traj] (sc/apply-trajectory! node-id param traj)))
 
 (defmacro deflive-loop [loop-name opts & body]
   `(core/deflive-loop ~loop-name ~opts ~@body))
@@ -148,6 +162,22 @@
 (def shadow-init!         tx/shadow-init!)
 (def shadow-update!       tx/shadow-update!)
 (def shadow-get           tx/shadow-get)
+
+;; ---------------------------------------------------------------------------
+;; Spatial field
+;; ---------------------------------------------------------------------------
+
+(def defspatial-field!    sf/defspatial-field!)
+(def start-field!         sf/start-field!)
+(def stop-field!          sf/stop-field!)
+(def stop-all-fields!     sf/stop-all-fields!)
+(def field-state          sf/field-state)
+(def field-transformer    sf/field-transformer)
+(def play-through-field!  sf/play-through-field!)
+(def get-field            sf/get-field)
+(def field-names          sf/field-names)
+(def quad-gains           sf/quad-gains)
+(def ngon-walls           sf/ngon-walls)
 
 ;; ---------------------------------------------------------------------------
 ;; Spectral analysis
@@ -241,7 +271,7 @@
 ;; Re-export DSL
 ;; ---------------------------------------------------------------------------
 
-(def with-dur       dsl/with-dur)
+(defmacro with-dur [dur & body] `(dsl/with-dur ~dur ~@body))
 (def use-harmony!   dsl/use-harmony!)
 
 (defmacro with-harmony [scale & body]
@@ -253,7 +283,7 @@
 (def play-chord!    dsl/play-chord!)
 (def play-voicing!  dsl/play-voicing!)
 (def arp!           dsl/arp!)
-(def phrase!        dsl/phrase!)
+(defmacro phrase! [& args] `(dsl/phrase! ~@args))
 (def ring           dsl/ring)
 (def tick!          dsl/tick!)
 
@@ -294,6 +324,52 @@
 (def capture-discard!      ardour/capture-discard!)
 (def capture-status        ardour/capture-status)
 (def recording?            ardour/recording?)
+
+;; ---------------------------------------------------------------------------
+;; Synthesis vocabulary
+;; ---------------------------------------------------------------------------
+
+(def defsynth!      synth/defsynth!)
+(def get-synth      synth/get-synth)
+(def synth-names    synth/synth-names)
+(def load-synth-map synth/load-synth-map)
+(def compile-synth  synth/compile-synth)
+(def map-graph      synth/map-graph)
+(def synth-ugens    synth/synth-ugens)
+(def transpose-synth synth/transpose-synth)
+(def scale-amp      synth/scale-amp)
+(def replace-arg    synth/replace-arg)
+
+;; FM synthesis vocabulary
+(def def-fm!       fm/def-fm!)
+(def get-fm        fm/get-fm)
+(def fm-names      fm/fm-names)
+(def fm-algorithm  fm/fm-algorithm)
+(def compile-fm    fm/compile-fm)
+
+;; SuperCollider backend
+(def connect-sc!         sc/connect-sc!)
+(def disconnect-sc!      sc/disconnect-sc!)
+(def sc-connected?       sc/sc-connected?)
+(def synthdef-str        sc/synthdef-str)
+(def send-synthdef!      sc/send-synthdef!)
+(def send-all-synthdefs! sc/send-all-synthdefs!)
+(def ensure-synthdef!    sc/ensure-synthdef!)
+(def sc-synth!         sc/sc-synth!)
+(def set-param!        sc/set-param!)
+(def free-synth!       sc/free-synth!)
+(def kill-synth!       sc/kill-synth!)
+(def sc-play!          sc/sc-play!)
+(def sc-status         sc/sc-status)
+
+;; ---------------------------------------------------------------------------
+;; HTTP control server
+;; ---------------------------------------------------------------------------
+
+(def start-server!    server/start-server!)
+(def stop-server!     server/stop-server!)
+(def server-port      server/server-port)
+(def server-running?  server/server-running?)
 
 ;; ---------------------------------------------------------------------------
 ;; Sidecar shorthand
