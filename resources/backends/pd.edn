@@ -1,0 +1,22 @@
+;; Canonical cljseq UGen name → PureData object
+;; :obj uses strings (not keywords) because ~ is not valid in EDN keywords.
+;; :inlets/:outlets are provided for connection-list generation.
+{:osc         {:obj "osc~"       :inlets 2 :outlets 1}
+ :saw-osc      {:obj "saw~"       :inlets 1 :outlets 1}
+ :pulse-osc    {:obj "phasor~"    :inlets 3 :outlets 1}
+ :tri-osc      {:obj "osc~"       :inlets 2 :outlets 1}
+ :noise-white  {:obj "noise~"     :inlets 0 :outlets 1}
+ :noise-pink   {:obj "pink~"      :inlets 0 :outlets 1}
+ :lpf          {:obj "lop~"       :inlets 2 :outlets 1}
+ :hpf          {:obj "hip~"       :inlets 2 :outlets 1}
+ :bpf          {:obj "bp~"        :inlets 3 :outlets 1}
+ :rlpf         {:obj "vcf~"       :inlets 3 :outlets 2}
+ :reverb       {:obj "freeverb~"  :inlets 3 :outlets 2}
+ :delay        {:obj "delwrite~"  :inlets 2 :outlets 0}
+ :comb         {:obj "comb~"      :inlets 3 :outlets 1}
+ :bus-read     {:obj "receive~"   :inlets 0 :outlets 1}
+ :buf-read     {:obj "tabread4~"  :inlets 2 :outlets 1}
+ :buf-play     {:obj "tabplay~"   :inlets 2 :outlets 1}
+ :granular     {:obj "granular~"  :inlets 4 :outlets 2}
+ :out          {:obj "dac~"       :inlets 2 :outlets 0}
+ :pan          {:obj "pan~"       :inlets 3 :outlets 2}}

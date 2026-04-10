@@ -48,6 +48,7 @@
             [cljseq.clock    :as clock]
             [cljseq.core     :as core]
             [cljseq.osc      :as osc]
+            [cljseq.patch    :as patch]
             [cljseq.synth    :as synth]))
 
 ;; ---------------------------------------------------------------------------
@@ -64,6 +65,14 @@
 ;; Track which SynthDefs have been sent to sclang in this session.
 ;; Reset on connect/disconnect so a fresh SC server gets all defs re-sent.
 (defonce ^:private sent-synthdefs (atom #{}))
+
+;; Client-side bus allocation tracking.
+;; SC audio buses 0–7 are hardware I/O by default; internal buses start at 8.
+;; Control buses start at 0. Indices are allocated monotonically per session.
+(defonce ^:private bus-alloc
+  (atom {:audio-next   8
+         :control-next 0
+         :named        {}}))
 
 (declare sc-connected? send-synthdef!)
 
@@ -85,6 +94,7 @@
          :lang-port lang-port
          :connected true)
   (reset! sent-synthdefs #{})
+  (reset! bus-alloc {:audio-next 8 :control-next 0 :named {}})
   (println (str "[sc] connected to " host " (scsynth:" sc-port " sclang:" lang-port ")"))
   nil)
 
@@ -93,6 +103,7 @@
   []
   (swap! sc-state assoc :connected false)
   (reset! sent-synthdefs #{})
+  (reset! bus-alloc {:audio-next 8 :control-next 0 :named {}})
   (println "[sc] disconnected")
   nil)
 
@@ -161,7 +172,20 @@
    :clip       "Clip"
    :lag        "Lag"
    :lag2       "Lag2"
-   :slew       "Slew"})
+   :slew       "Slew"
+   :in         "In"          ; In.ar(bus, numChannels) — read from audio bus
+   :in-feedback "InFeedback" ; InFeedback.ar — feedback loop read
+   :buf-rd     "BufRd"       ; BufRd.ar — buffer reader
+   :play-buf   "PlayBuf"     ; PlayBuf.ar — one-shot / looping buffer player
+   :t-grains   "TGrains"     ; TGrains.ar — triggered granular synthesis
+   :grain-sin  "GrainSin"    ; GrainSin.ar — sinusoidal granular
+   :grain-fm   "GrainFM"     ; GrainFM.ar — FM granular
+   :b-alloc    "Buffer"      ; Buffer.alloc (used in sclang code gen)
+   :shaper     "Shaper"      ; Shaper.ar — waveshaping
+   :dyn-klank  "DynKlank"    ; DynKlank.ar — resonant filter bank
+   :comb-c     "CombC"       ; CombC.ar — cubic interpolating comb
+   :lorenz     "Lorenz"      ; Lorenz.ar — Lorenz chaos UGen
+   :henon      "Henon"})
 
 (defn- sc-arg-name
   "Convert a Clojure keyword to a valid sclang argument name.
@@ -459,6 +483,134 @@
 ;; ---------------------------------------------------------------------------
 ;; Session helpers
 ;; ---------------------------------------------------------------------------
+
+;; ---------------------------------------------------------------------------
+;; Audio / control bus allocation
+;; ---------------------------------------------------------------------------
+
+(defn sc-bus!
+  "Allocate a named audio or control bus and record it in the session.
+
+  `bus-key`  — keyword identifier for this bus within the session
+  `channels` — number of channels (default 1)
+  `rate`     — :audio (default) or :control
+
+  Returns {:idx n :channels n :rate kw}.
+
+  SC buses are index ranges — no OSC message is needed to allocate them.
+  Indices are monotonically assigned starting from 8 (audio) or 0 (control).
+  Call reset! on bus-alloc or reconnect-sc! to reclaim indices.
+
+  Example:
+    (sc/sc-bus! :reverb-send)           ; 1-channel audio bus
+    (sc/sc-bus! :mod-lfo 1 :control)    ; 1-channel control bus"
+  ([bus-key] (sc-bus! bus-key 1 :audio))
+  ([bus-key channels rate]
+   (let [next-k (if (= rate :audio) :audio-next :control-next)
+         result (atom nil)]
+     (swap! bus-alloc
+            (fn [s]
+              (let [idx (get s next-k)]
+                (reset! result {:idx idx :channels channels :rate rate})
+                (-> s
+                    (update next-k + channels)
+                    (assoc-in [:named bus-key] {:idx idx :channels channels :rate rate})))))
+     @result)))
+
+(defn free-bus!
+  "Remove a named bus from the session tracking.
+  Does not reclaim the index — reconnect to reset allocation."
+  [bus-key]
+  (swap! bus-alloc update :named dissoc bus-key)
+  nil)
+
+(defn bus-idx
+  "Return the SC bus index allocated for `bus-key`, or nil."
+  [bus-key]
+  (get-in @bus-alloc [:named bus-key :idx]))
+
+;; ---------------------------------------------------------------------------
+;; Patch instantiation — multi-node signal chains
+;; ---------------------------------------------------------------------------
+
+(defn- resolve-bus-args
+  "Replace bus-key keywords in an args map with their SC integer indices.
+  Integer values pass through unchanged."
+  [args bus-indices]
+  (into {} (map (fn [[k v]]
+                  [k (if (and (keyword? v) (contains? bus-indices v))
+                       (double (get bus-indices v))
+                       v)])
+                args)))
+
+(defn instantiate-patch!
+  "Instantiate a registered patch on the SC server.
+
+  Allocates audio/control buses, sends SynthDefs as needed, and starts each
+  node in declaration order. Returns a patch instance map for use with
+  `set-patch-param!` and `free-patch!`.
+
+  Example:
+    (sc/connect-sc!)
+    (def inst (sc/instantiate-patch! :reverb-chain))
+    (sc/set-patch-param! inst :freq 550)
+    (sc/free-patch! inst)"
+  [patch-name]
+  (when-not (sc-connected?)
+    (throw (ex-info "instantiate-patch!: SC not connected" {:patch patch-name})))
+  (let [compiled    (patch/compile-patch :sc patch-name)
+        ;; Allocate all named buses
+        bus-indices (into {}
+                          (map (fn [[bus-key {:keys [channels rate]
+                                              :or   {channels 1 rate :audio}}]]
+                                 [bus-key (:idx (sc-bus! bus-key channels rate))])
+                               (:buses compiled)))
+        ;; Instantiate nodes in order; collect node-id → sc-node-id
+        node-ids    (into {}
+                          (map (fn [{:keys [id synth args]}]
+                                 (ensure-synthdef! synth)
+                                 (let [resolved (resolve-bus-args args bus-indices)
+                                       node-id  (sc-synth! synth resolved)]
+                                   [id node-id]))
+                               (:nodes compiled)))]
+    {:patch-name (:patch-name compiled)
+     :buses      bus-indices
+     :nodes      node-ids
+     :params     (:params compiled)}))
+
+(defn set-patch-param!
+  "Update a named parameter on a running patch instance.
+
+  `instance` — map returned by `instantiate-patch!`
+  `param-key` — keyword from the patch's :params map
+  `value`     — new value (number)
+
+  Example:
+    (sc/set-patch-param! inst :room 0.8)
+    (sc/set-patch-param! inst :freq 660)"
+  [instance param-key value]
+  (let [[node-id arg-key] (get (:params instance) param-key)]
+    (when-not node-id
+      (throw (ex-info "set-patch-param!: unknown param" {:param param-key})))
+    (let [sc-node-id (get (:nodes instance) node-id)]
+      (when-not sc-node-id
+        (throw (ex-info "set-patch-param!: node not in instance" {:node node-id})))
+      (set-param! sc-node-id arg-key value))))
+
+(defn free-patch!
+  "Release all nodes in a running patch instance and free their buses.
+
+  Calls `free-synth!` (gate=0) on each node in reverse instantiation order,
+  then removes the buses from the session's allocation tracking.
+
+  Example:
+    (sc/free-patch! inst)"
+  [instance]
+  (doseq [[_ sc-node-id] (reverse (:nodes instance))]
+    (free-synth! sc-node-id))
+  (doseq [bus-key (keys (:buses instance))]
+    (free-bus! bus-key))
+  nil)
 
 (defn sc-status
   "Return a map of current SC connection state."

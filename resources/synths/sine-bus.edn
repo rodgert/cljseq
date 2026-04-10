@@ -1,0 +1,17 @@
+{:synth/id   :sine-bus
+ :synth/tags [:sine :basic :pitched :bus-aware]
+ :synth/doc  "Sine oscillator that writes to a named audio bus rather than hardware out.
+Use in patches as a signal source node: set :out-bus to a named bus index."
+ :args  {:freq    440
+         :amp     0.5
+         :attack  0.01
+         :decay   0.1
+         :sustain 0.8
+         :release 1.0
+         :pan     0.0
+         :out-bus 8}
+ :graph [:out :out-bus
+          [:pan2
+           [:* [:env-gen [:adsr :attack :decay :sustain :release] :gate :amp]
+               [:sin-osc :freq]]
+           :pan]]}

@@ -200,4 +200,6 @@
     (load-builtin! "fm.edn")
     (load-builtin! "tb303.edn")
     (load-builtin! "perc.edn")
+    (load-builtin! "sine-bus.edn")
+    (load-builtin! "reverb-bus.edn")
     true))

@@ -1,0 +1,24 @@
+;; Canonical cljseq UGen name → SC UGen class name
+;; Used when patch nodes contain inline :graph vectors targeting :sc backend.
+;; Named synth registry entries (:synth :blade etc.) use SC names directly.
+{:osc          :sin-osc
+ :saw-osc       :saw
+ :pulse-osc     :pulse
+ :tri-osc       :lf-tri
+ :noise-white   :white-noise
+ :noise-pink    :pink-noise
+ :noise-brown   :brown-noise
+ :lpf           :lpf
+ :hpf           :hpf
+ :bpf           :bpf
+ :rlpf          :rlpf
+ :reverb        :free-verb
+ :delay         :delay-l
+ :comb          :comb-l
+ :allpass       :allpass-n
+ :bus-read      :in
+ :buf-read      :buf-rd
+ :buf-play      :play-buf
+ :granular      :t-grains
+ :out           :out
+ :pan           :pan2}
