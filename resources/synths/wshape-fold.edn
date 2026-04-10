@@ -1,0 +1,57 @@
+{:synth/id   :wshape-fold
+ :synth/tags [:waveshaping :wavefold :fold2 :arc-ready]
+ :synth/doc  "Wavefolder — fold2 transfer function with SinOsc excitation.
+
+  A SinOsc driven through a wavefolder. Where a saturator clips the signal
+  back toward the boundary, a wavefolder reflects it: when the signal exceeds
+  the fold boundary (+1/-1), it folds back inward, creating V-shaped inflections.
+  Each fold adds a set of overtones that depend on the fold depth, making the
+  harmonic content highly sensitive to drive level.
+
+  The :drive parameter [0..1] scales the signal before fold2(1.0):
+    drive=0.0  -> 1x scaling, clean sine wave (no folds reached)
+    drive=0.2  -> 1.8x scaling, first fold begins, 3rd/5th harmonics appear
+    drive=0.5  -> 3.0x scaling, multiple folds, complex inharmonic texture
+    drive=0.8  -> 4.6x scaling, dense fold pattern, rich metallic spectrum
+    drive=1.0  -> 5.5x scaling, heavily folded, almost noise-like at peaks
+
+  Internal signal flow:
+    SinOsc(freq) -> * (1 + drive*4.5) -> .fold2(1.0) -> * amp -> Pan2 -> Out
+
+  Wavefolding is qualitatively different from saturation:
+  - Saturation adds only odd harmonics (3rd, 5th...) monotonically
+  - Wavefolding adds both even and odd harmonics in a pattern that shifts
+    non-monotonically with drive -- the harmonic content changes character
+    rather than just increasing density
+
+  This makes :drive an especially rich arc target: the sound does not simply
+  get 'more' as drive increases, it transforms through several distinct timbral
+  states, each with its own spectral personality.
+
+  :freq-mod [0..1] applies a small FM to the carrier via its own SinOsc at
+  :mod-ratio x :freq. At low values this adds warmth; at high values it adds
+  sidebands that interact with the folding non-linearly.
+
+  Primary arc targets: :drive (fold depth / harmonic character), :freq-mod
+
+  Example:
+    (sc/sc-play! {:synth :wshape-fold :freq 110 :drive 0.15 :amp 0.45})
+    ;; Fold sweep:
+    (apply-trajectory! node :drive
+      (trajectory :from 0.1 :to 0.8 :beats 24 :curve :lin :start (now)))"
+ :args  {:freq      440.0
+         :amp       0.45
+         :drive     0.2
+         :freq-mod  0.0
+         :mod-ratio 2.0
+         :attack    0.01
+         :release   2.0
+         :pan       0.0}
+ :graph [:out 0
+          [:pan2
+           [:* [:env-gen [:asr :attack 1.0 :release] :gate :amp]
+               [:fold2
+                [:* [:+ 1.0 [:* 4.5 :drive]]
+                    [:sin-osc [:+ :freq [:* :freq [:* :freq-mod [:sin-osc [:* :freq :mod-ratio]]]]]]]
+                1.0]]
+           :pan]]}

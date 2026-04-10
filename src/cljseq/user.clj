@@ -404,6 +404,8 @@
 (def kill-synth!       sc/kill-synth!)
 (def sc-play!          sc/sc-play!)
 (def sc-status         sc/sc-status)
+(def bind-spectral!    sc/bind-spectral!)
+(def unbind-spectral!  sc/unbind-spectral!)
 
 ;; ---------------------------------------------------------------------------
 ;; HTTP control server

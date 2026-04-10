@@ -10,6 +10,59 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.7.0] — 2026-04-10
+
+### Added
+
+#### Waveshaping synthesis
+
+- **`:wshape-saturate` synth** — tanh soft saturation on VarSaw; `:drive` 0–1 adds odd
+  harmonics monotonically (sine → warm tube → square-ish); natural `apply-trajectory!` target
+- **`:wshape-fold` synth** — wavefold (`fold2`) on SinOsc with optional FM; `:drive` 0–1
+  adds both even and odd harmonics non-monotonically; each fold depth is a qualitatively
+  distinct timbral state, not just "more"
+- **Compiler support for `:tanh`, `:softclip`, `:distort`** — emit SC method-call syntax
+  (`signal.tanh`, `signal.softclip`, `signal.distort`)
+- **Compiler support for `:fold2`** — emits `signal.fold2(limit)` method call
+
+#### Spectral bridge
+
+- **`bind-spectral!`** — connects `cljseq.spectral` SAM output to any live SC node parameter
+  via `ctrl/watch!`; fires on every SAM tick; returns a cancel fn; available in `cljseq.user`
+- **`unbind-spectral!`** — detaches binding by node id and param key; available in `cljseq.user`
+- Spectral keys available: `:spectral/centroid` (Hz brightness), `:spectral/density` (0–1
+  busyness), `:spectral/blur` (0–1 spread)
+
+#### DynKlank physical modeling
+
+- **`:klank-bell` synth** — four-mode DynKlank bell using Chowning/Fletcher-Rossing inharmonic
+  partial ratios (1.0, 2.756, 5.404, 8.933); `:fN`, `:aN`, `:dN` expose each mode's
+  frequency ratio, amplitude, and decay time as live `set-param!` / trajectory targets
+- **`:klank-bars` synth** — three-mode DynKlank bar instrument (marimba, vibraphone,
+  glockenspiel voicings); BPF noise excitation; `:exc-bw` controls mallet hardness
+- **`:klank-ensemble` patch** — bell1 + bell2 + bars voices in shared FreeVerb space;
+  12 independently addressable frequency/amplitude/decay params plus `:effects-room`/`:effects-mix`
+- **Compiler support for `:dyn-klank`** — emits SC backtick-Ref array syntax
+  `` DynKlank.ar(`[[freqs],[amps],[decays]], excitation, freq_scale) ``
+
+#### Example files
+
+- **`examples/waveshaper_demo.clj`** — 8-section showcase: saturation and fold exploration,
+  drive-arc comparison on both voices, `bind-spectral!` audio-reactive drive, chaos-to-waveshaper
+  compound arc, per-note drive arc in live loop
+- **`examples/klank_demo.clj`** — 8-section showcase: bell and bar variants, klank-ensemble,
+  partial-ratio detuning guide, decay arc from xylophone to bell, live melody loop,
+  `bind-spectral!` decay sculpting
+
+#### Documentation
+
+- **`doc/user-manual.md` §27** — Waveshaping and Spectral Bridge: saturation vs fold comparison,
+  `:wshape-saturate` / `:wshape-fold` arg tables, `bind-spectral!` reference with spectral key table
+- **`doc/user-manual.md` §28** — DynKlank Physical Modeling: DynKlank vs KS comparison,
+  bell and bar voicing guide, decay as compositional arc, updated patch table
+
+---
+
 ## [0.6.0] — 2026-04-10
 
 ### Added

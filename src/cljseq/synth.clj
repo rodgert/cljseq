@@ -232,4 +232,10 @@
     (load-builtin! "chaos-lorenz.edn")
     (load-builtin! "chaos-henon.edn")
     (load-builtin! "lorenz-fm.edn")
+    ;; Waveshaping — tanh saturation and wavefold
+    (load-builtin! "wshape-saturate.edn")
+    (load-builtin! "wshape-fold.edn")
+    ;; Physical modeling — DynKlank resonant filter banks
+    (load-builtin! "klank-bell.edn")
+    (load-builtin! "klank-bars.edn")
     true))

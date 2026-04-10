@@ -1,0 +1,50 @@
+{:synth/id   :klank-bars
+ :synth/tags [:physical-model :resonator :dyn-klank :marimba :vibraphone :pitched]
+ :synth/doc  "Tuned resonator bar voice via DynKlank -- marimba/vibraphone character.
+
+  Models the acoustic behaviour of a uniform stiff bar (marimba, vibraphone,
+  xylophone, glockenspiel family). The partial structure of a stiff bar differs
+  from a string or bell: the overtones follow the equation fn = f1 * (2n-1)^2 / 3,
+  producing a near-harmonic but slightly stretched series.
+
+  Default partial ratios (from Fletcher & Rossing, tuned bar analysis):
+    f1: 1.000 x freq  -- fundamental (dominant, the perceived pitch)
+    f2: 2.756 x freq  -- first overtone (slightly inharmonic, adds warmth)
+    f3: 5.404 x freq  -- second overtone (bright, short decay)
+
+  Note: the marimba/vibraphone maker uses bar undercuts to tune the first
+  overtone to exactly 4x the fundamental (two octaves up), suppressing the
+  intermediate partials. The default here is the uncut bar -- for marimba
+  character, set :f2 to 4.0 and :a3/:d3 to very low values.
+
+  For vibraphone character (longer, more singing decay):
+    (sc/sc-play! {:synth :klank-bars :freq-scale 440 :d1 2.5 :d2 1.5 :d3 0.5})
+
+  For xylophone character (harder, drier, short decay):
+    (sc/sc-play! {:synth :klank-bars :freq-scale 880 :d1 0.2 :d2 0.1 :d3 0.05})
+
+  For glockenspiel (bright, long-sustaining):
+    (sc/sc-play! {:synth :klank-bars :freq-scale 2000 :d1 3.0 :d2 2.5 :d3 2.0})
+
+  Excitation: a bandpass-filtered noise burst through a fast perc envelope.
+  Wider :exc-bw (excitation bandwidth) gives a harder, brighter mallet attack.
+
+  Primary arc targets: :freq-scale (retune), :d1/:d2/:d3 (decay sculpting)"
+ :args  {:freq-scale 440.0
+         :amp        0.65
+         :f1 1.0     :a1 1.0    :d1 0.8
+         :f2 2.756   :a2 0.45   :d2 0.4
+         :f3 5.404   :a3 0.2    :d3 0.15
+         :exc-bw     400.0
+         :pan        0.0}
+ :graph [:out 0
+          [:pan2
+           [:* :amp
+               [:dyn-klank
+                [:* 0.4 [:* [:env-gen [:perc 0.001 0.015] :gate 1.0]
+                             [:bpf [:white-noise] :freq-scale :exc-bw]]]
+                :freq-scale
+                :f1 :a1 :d1
+                :f2 :a2 :d2
+                :f3 :a3 :d3]]
+           :pan]]}
