@@ -1,0 +1,14 @@
+{:synth/id   :buf-player
+ :synth/tags [:sample :one-shot :bus-aware]
+ :synth/doc  "One-shot buffer playback. Frees itself when the buffer completes (doneAction: 2).
+Set :buf to the SC buffer ID returned by sc/sc-buffer-alloc!.
+:rate controls pitch — 2.0 = one octave up, 0.5 = one octave down."
+ :args  {:buf  0
+         :rate 1.0
+         :amp  0.8
+         :pan  0.0
+         :out  0}
+ :graph [:out :out
+          [:pan2
+           [:* :amp [:play-buf 1 :buf :rate 1 0 0 2]]
+           :pan]]}

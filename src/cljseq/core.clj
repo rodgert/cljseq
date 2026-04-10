@@ -208,6 +208,14 @@
   [f]
   (reset! sc-dispatch f))
 
+(defonce ^:private sample-dispatch (atom nil))
+
+(defn ^:no-doc register-sample-dispatch!
+  "Register a function to handle :sample play! events.
+  Called automatically when cljseq.sample is loaded. Not part of the public API."
+  [f]
+  (reset! sample-dispatch f))
+
 ;; play! — Phase 0 stdout stub
 ;; ---------------------------------------------------------------------------
 
@@ -233,8 +241,15 @@
    (play! note nil))
   ([note dur]
    ;; SC dispatch — routes :synth events to SuperCollider, bypassing MIDI
-   (if (and (map? note) (contains? note :synth) @sc-dispatch)
+   ;; Sample dispatch — routes :sample events to SC buffer playback
+   (cond
+     (and (map? note) (contains? note :synth) @sc-dispatch)
      (@sc-dispatch note dur (get-bpm))
+
+     (and (map? note) (contains? note :sample) @sample-dispatch)
+     (@sample-dispatch note dur (get-bpm))
+
+     :else
      (let [midi     (cond
                       (map? note)     (:pitch/midi note)
                       (keyword? note) (keyword->midi note)

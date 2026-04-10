@@ -1,0 +1,30 @@
+{:synth/id   :granular-voice
+ :synth/tags [:sample :granular :bus-aware]
+ :synth/doc  "TGrains-based granular synthesis voice. Reads from a loaded SC buffer.
+Set :buf to the SC buffer ID. :pos is normalised position 0–1 through the buffer.
+:density controls grain trigger rate (grains/sec). :dur is grain duration in seconds.
+:rate is grain playback rate (pitch). Writes to :out-bus for use in patches.
+
+Use with the :granular-cloud patch:
+  (def inst (sc/instantiate-patch! :granular-cloud))
+  (sc/set-patch-param! inst :buf my-buffer-id)
+  (sc/set-patch-param! inst :density 12)"
+ :args  {:buf         0
+         :density     8
+         :pos         0.5
+         :pos-spread  0.05
+         :rate        1.0
+         :dur         0.12
+         :pan         0.0
+         :amp         0.6
+         :out-bus     8}
+ :graph [:out :out-bus
+          [:t-grains 2
+           [:dust :density]
+           :buf
+           :rate
+           [:* :pos [:buf-frames :buf]]
+           :dur
+           :pan
+           :amp
+           3]]}

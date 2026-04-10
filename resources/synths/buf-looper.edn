@@ -1,0 +1,14 @@
+{:synth/id   :buf-looper
+ :synth/tags [:sample :looping :bus-aware]
+ :synth/doc  "Looping buffer playback. Loops continuously — call free-synth! or kill-synth! to stop.
+Set :buf to the SC buffer ID returned by sc/sc-buffer-alloc!.
+:rate controls pitch and playback speed. Combine with apply-trajectory! for tape-style effects."
+ :args  {:buf  0
+         :rate 1.0
+         :amp  0.8
+         :pan  0.0
+         :out  0}
+ :graph [:out :out
+          [:pan2
+           [:* :amp [:play-buf 1 :buf :rate 1 0 1 0]]
+           :pan]]}

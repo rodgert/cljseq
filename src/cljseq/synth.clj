@@ -202,4 +202,7 @@
     (load-builtin! "perc.edn")
     (load-builtin! "sine-bus.edn")
     (load-builtin! "reverb-bus.edn")
+    (load-builtin! "buf-player.edn")
+    (load-builtin! "buf-looper.edn")
+    (load-builtin! "granular-voice.edn")
     true))
