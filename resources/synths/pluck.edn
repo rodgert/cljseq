@@ -1,0 +1,17 @@
+{:synth/id   :pluck
+ :synth/tags [:string :percussive :karplus-strong :pitched]
+ :synth/doc  "Karplus-Strong plucked string — Sonic-Pi :pluck equivalent.
+  White noise excitation through a recirculating comb filter (SC Pluck UGen).
+  :decay controls string decay time in seconds. :coef controls brightness:
+    -1.0 = very bright, 0.0 = neutral, 0.5 = warm (default), 1.0 = dark.
+  The amplitude ASR release matches :decay so string and envelope fade together."
+ :args  {:freq  440
+         :amp   0.7
+         :decay 30.0
+         :coef  0.5
+         :pan   0.0}
+ :graph [:out 0
+          [:pan2
+           [:* [:env-gen [:asr 0.001 1.0 :decay] :gate :amp]
+               [:pluck [:* 0.1 [:white-noise]] :gate [:/ 1.0 :freq] [:/ 1.0 :freq] :decay :coef]]
+           :pan]]}

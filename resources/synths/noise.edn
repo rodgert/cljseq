@@ -1,0 +1,21 @@
+{:synth/id   :noise
+ :synth/tags [:noise :atonal :textural]
+ :synth/doc  "White noise through resonant low-pass filter — Sonic-Pi :noise equivalent.
+  :cutoff controls the filter cutoff (scaled × 125 Hz internally).
+  High :res values produce a whistling resonant peak at the cutoff frequency."
+ :args  {:amp     0.5
+         :cutoff  60
+         :res     0.5
+         :attack  0.01
+         :decay   0.1
+         :sustain 0.8
+         :release 1.0
+         :pan     0.0}
+ :graph [:out 0
+          [:pan2
+           [:rlpf
+            [:* [:env-gen [:adsr :attack :decay :sustain :release] :gate :amp]
+                [:white-noise]]
+            [:* :cutoff 125.0]
+            :res]
+           :pan]]}

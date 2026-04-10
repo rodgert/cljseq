@@ -2,7 +2,8 @@
 (ns cljseq.synth-test
   "Tests for cljseq.synth — synthesis graph vocabulary."
   (:require [clojure.test  :refer [deftest is testing]]
-            [cljseq.synth  :as synth]))
+            [cljseq.synth  :as synth]
+            [cljseq.sc     :as sc]))
 
 ;; ---------------------------------------------------------------------------
 ;; Registry
@@ -127,3 +128,108 @@
 (deftest compile-synth-unknown-backend-test
   (testing "compile-synth throws on unknown backend"
     (is (thrown? Exception (synth/compile-synth :no-such-backend :sine)))))
+
+;; ---------------------------------------------------------------------------
+;; Sonic-Pi / Overtone parity synths — registration and compile smoke tests
+;; ---------------------------------------------------------------------------
+
+(deftest parity-synths-registered-test
+  (testing "all Sonic-Pi parity synths are registered"
+    (let [names (set (synth/synth-names))]
+      (doseq [id [:saw :tri :pulse :subpulse :dsaw :dpulse :dtri
+                  :pretty-bell :pluck :hollow :zawa :dark-ambience
+                  :growl :noise :bass]]
+        (is (contains? names id) (str id " not registered"))))))
+
+(deftest saw-compiles-test
+  (testing ":saw compiles to Saw.ar"
+    (let [sd (synth/compile-synth :sc :saw)]
+      (is (string? sd))
+      (is (.contains sd "Saw.ar")))))
+
+(deftest tri-compiles-test
+  (testing ":tri compiles to LFTri.ar"
+    (let [sd (synth/compile-synth :sc :tri)]
+      (is (.contains sd "LFTri.ar")))))
+
+(deftest pulse-compiles-test
+  (testing ":pulse compiles with width arg"
+    (let [sd (synth/compile-synth :sc :pulse)]
+      (is (.contains sd "Pulse.ar"))
+      (is (.contains sd "width")))))
+
+(deftest subpulse-compiles-test
+  (testing ":subpulse contains sub-octave division"
+    (let [sd (synth/compile-synth :sc :subpulse)]
+      (is (.contains sd "Pulse.ar"))
+      (is (.contains sd "sub_amp")))))
+
+(deftest dsaw-compiles-test
+  (testing ":dsaw has two Saw oscillators"
+    (let [sd (synth/compile-synth :sc :dsaw)]
+      (is (.contains sd "Mix.ar"))
+      (is (.contains sd "Saw.ar"))
+      (is (.contains sd "detune")))))
+
+(deftest dpulse-compiles-test
+  (testing ":dpulse has two Pulse oscillators"
+    (let [sd (synth/compile-synth :sc :dpulse)]
+      (is (.contains sd "Mix.ar"))
+      (is (.contains sd "Pulse.ar")))))
+
+(deftest dtri-compiles-test
+  (testing ":dtri has two LFTri oscillators"
+    (let [sd (synth/compile-synth :sc :dtri)]
+      (is (.contains sd "Mix.ar"))
+      (is (.contains sd "LFTri.ar")))))
+
+(deftest pretty-bell-compiles-test
+  (testing ":pretty-bell has four sine partials"
+    (let [sd (synth/compile-synth :sc :pretty-bell)]
+      (is (.contains sd "Mix.ar"))
+      (is (.contains sd "SinOsc.ar"))
+      ;; 4.16x partial gives the inharmonic top
+      (is (.contains sd "4.16")))))
+
+(deftest pluck-compiles-test
+  (testing ":pluck uses Pluck UGen with period-derived delay"
+    (let [sd (synth/compile-synth :sc :pluck)]
+      (is (.contains sd "Pluck.ar"))
+      (is (.contains sd "WhiteNoise.ar"))
+      (is (.contains sd "coef")))))
+
+(deftest hollow-compiles-test
+  (testing ":hollow uses BPF"
+    (let [sd (synth/compile-synth :sc :hollow)]
+      (is (.contains sd "BPF.ar")))))
+
+(deftest zawa-compiles-test
+  (testing ":zawa uses VarSaw with SinOsc modulation"
+    (let [sd (synth/compile-synth :sc :zawa)]
+      (is (.contains sd "VarSaw.ar"))
+      (is (.contains sd "SinOsc.ar"))
+      (is (.contains sd "lfo_rate")))))
+
+(deftest dark-ambience-compiles-test
+  (testing ":dark-ambience uses BrownNoise and RLPF"
+    (let [sd (synth/compile-synth :sc :dark-ambience)]
+      (is (.contains sd "BrownNoise.ar"))
+      (is (.contains sd "RLPF.ar")))))
+
+(deftest growl-compiles-test
+  (testing ":growl has sub-octave saw through RLPF"
+    (let [sd (synth/compile-synth :sc :growl)]
+      (is (.contains sd "RLPF.ar"))
+      (is (.contains sd "Saw.ar")))))
+
+(deftest noise-compiles-test
+  (testing ":noise uses WhiteNoise through RLPF"
+    (let [sd (synth/compile-synth :sc :noise)]
+      (is (.contains sd "WhiteNoise.ar"))
+      (is (.contains sd "RLPF.ar")))))
+
+(deftest bass-compiles-test
+  (testing ":bass has LPF and sub-octave voice"
+    (let [sd (synth/compile-synth :sc :bass)]
+      (is (.contains sd "LPF.ar"))
+      (is (.contains sd "Mix.ar")))))

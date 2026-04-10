@@ -1,0 +1,22 @@
+{:synth/id   :dark-ambience
+ :synth/tags [:pad :ambient :dark :textural :noise]
+ :synth/doc  "Dark resonant ambient pad — Sonic-Pi :dark_ambience equivalent.
+  Brownian noise mixed with a sine fundamental, filtered through RLPF with high resonance.
+  Long default attack/release — designed to evolve slowly underneath a melody.
+  High :res values (0.9+) add a singing resonance at the filter cutoff frequency."
+ :args  {:freq    440
+         :amp     0.4
+         :cutoff  50
+         :res     0.85
+         :attack  4.0
+         :release 8.0
+         :pan     0.0}
+ :graph [:out 0
+          [:pan2
+           [:rlpf
+            [:* [:env-gen [:adsr :attack 0.0 1.0 :release] :gate :amp]
+                [:mix [[:brown-noise]
+                       [:* 0.3 [:sin-osc :freq]]]]]
+            [:* :cutoff 100.0]
+            :res]
+           :pan]]}
