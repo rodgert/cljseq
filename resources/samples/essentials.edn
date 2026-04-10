@@ -1,0 +1,120 @@
+;; cljseq sample essentials catalog
+;;
+;; Maps sample keywords to Freesound metadata.
+;; Mirrors the category vocabulary of Sonic-Pi's bundled sample set.
+;;
+;; Format per entry:
+;;   keyword → {:freesound/id   integer (Freesound sound ID)
+;;               :title          "human-readable name"
+;;               :license        "CC0" | "CC-BY" | "CC-BY-NC"
+;;               :format         :wav | :aif | :mp3 (original file format)
+;;               :desc           "one-line description"}
+;;
+;; Curation notes:
+;;   - Prefer CC0 (public domain) over CC-BY to simplify attribution.
+;;   - Prefer WAV/AIF over MP3 for sample fidelity in SC.
+;;   - IDs marked nil are placeholders — run (freesound/search-freesound <query>)
+;;     to find suitable replacements, then update this file.
+;;   - When a nil-ID entry is encountered by load-essentials!, it is skipped
+;;     with a warning rather than erroring.
+;;
+;; To add your own entries:
+;;   1. Find a sample on freesound.org (check the license)
+;;   2. Add an entry with its numeric ID
+;;   3. Call (freesound/load-essentials!) — it will be fetched and cached
+
+{;; ── ambi — ambient textures and atmospheric beds ─────────────────────────
+
+ :ambi/choir           {:freesound/id nil :title "Choir pad"              :license "CC0" :format :wav :desc "Soft choir texture"}
+ :ambi/dark-woosh      {:freesound/id nil :title "Dark whoosh"            :license "CC0" :format :wav :desc "Dark sweeping whoosh"}
+ :ambi/drone           {:freesound/id nil :title "Ambient drone"          :license "CC0" :format :wav :desc "Sustained ambient drone"}
+ :ambi/glass-hum       {:freesound/id nil :title "Glass harmonic hum"     :license "CC0" :format :wav :desc "Bowed glass harmonic"}
+ :ambi/haunted-hum     {:freesound/id nil :title "Haunted hum"            :license "CC0" :format :wav :desc "Unsettling resonant hum"}
+ :ambi/lunar           {:freesound/id nil :title "Lunar ambient"          :license "CC0" :format :wav :desc "Sparse space-like texture"}
+ :ambi/swoosh          {:freesound/id nil :title "Air swoosh"             :license "CC0" :format :wav :desc "Gentle air movement"}
+ :ambi/soft-buzz       {:freesound/id nil :title "Soft electrical buzz"   :license "CC0" :format :wav :desc "Low electrical hum texture"}
+
+ ;; ── bass — bass hits and low transients ──────────────────────────────────
+
+ :bass/dnb-f           {:freesound/id nil :title "DnB bass hit F"         :license "CC0" :format :wav :desc "Drum-and-bass sub bass hit in F"}
+ :bass/drop-c          {:freesound/id nil :title "Bass drop C"            :license "CC0" :format :wav :desc "Heavy bass drop in C"}
+ :bass/hard-c          {:freesound/id nil :title "Hard bass C"            :license "CC0" :format :wav :desc "Hard-edged bass in C"}
+ :bass/hit-c           {:freesound/id nil :title "Bass hit C"             :license "CC0" :format :wav :desc "Generic bass hit in C"}
+ :bass/woodsy-c        {:freesound/id nil :title "Woodsy bass C"          :license "CC0" :format :wav :desc "Woody, organic bass hit in C"}
+
+ ;; ── bd — bass drum / kick drum ────────────────────────────────────────────
+
+ :bd/ada               {:freesound/id nil :title "Ada kick"               :license "CC0" :format :wav :desc "Roland-style kick drum"}
+ :bd/boom              {:freesound/id nil :title "Boom kick"              :license "CC0" :format :wav :desc "Big boomy kick"}
+ :bd/fat               {:freesound/id nil :title "Fat kick"               :license "CC0" :format :wav :desc "Fat, punchy kick drum"}
+ :bd/haus              {:freesound/id nil :title "Haus kick"              :license "CC0" :format :wav :desc "House music kick"}
+ :bd/klub              {:freesound/id nil :title "Klub kick"              :license "CC0" :format :wav :desc "Club-style kick drum"}
+ :bd/pure              {:freesound/id nil :title "Pure sine kick"         :license "CC0" :format :wav :desc "Clean sine-wave kick"}
+ :bd/tek               {:fresound/id  nil :title "Tek kick"               :license "CC0" :format :wav :desc "Techno kick drum"}
+ :bd/zum               {:freesound/id nil :title "Zum kick"               :license "CC0" :format :wav :desc "Short punchy kick"}
+
+ ;; ── elec — electronic hits and tones ─────────────────────────────────────
+
+ :elec/bell            {:freesound/id nil :title "Electronic bell"        :license "CC0" :format :wav :desc "Clean electronic bell tone"}
+ :elec/blip            {:freesound/id nil :title "Electronic blip"        :license "CC0" :format :wav :desc "Short electronic blip"}
+ :elec/bong            {:freesound/id nil :title "Electronic bong"        :license "CC0" :format :wav :desc "Bong resonance tone"}
+ :elec/cymbal          {:freesound/id nil :title "Electronic cymbal"      :license "CC0" :format :wav :desc "Synthesized cymbal"}
+ :elec/fuzz-tom        {:freesound/id nil :title "Fuzz tom"               :license "CC0" :format :wav :desc "Fuzz-distorted tom hit"}
+ :elec/hi-snare        {:freesound/id nil :title "Hi-frequency snare"     :license "CC0" :format :wav :desc "High-pitched electronic snare"}
+ :elec/lo-snare        {:freesound/id nil :title "Lo-frequency snare"     :license "CC0" :format :wav :desc "Low electronic snare"}
+ :elec/mid-snare       {:freesound/id nil :title "Mid snare"              :license "CC0" :format :wav :desc "Mid-range electronic snare"}
+ :elec/ping            {:freesound/id nil :title "Ping"                   :license "CC0" :format :wav :desc "Short ping tone"}
+ :elec/plip            {:freesound/id nil :title "Plip"                   :license "CC0" :format :wav :desc "Soft plip click"}
+ :elec/pop             {:freesound/id nil :title "Pop"                    :license "CC0" :format :wav :desc "Electronic pop"}
+ :elec/snare           {:freesound/id nil :title "Electronic snare"       :license "CC0" :format :wav :desc "Standard electronic snare"}
+ :elec/tick            {:freesound/id nil :title "Tick"                   :license "CC0" :format :wav :desc "Short clock tick"}
+ :elec/triangle        {:freesound/id nil :title "Triangle"               :license "CC0" :format :wav :desc "Electronic triangle hit"}
+ :elec/wood            {:freesound/id nil :title "Electronic woodblock"   :license "CC0" :format :wav :desc "Electronic woodblock tone"}
+
+ ;; ── guit — guitar ────────────────────────────────────────────────────────
+
+ :guit/dm              {:freesound/id nil :title "Guitar Dm chord"        :license "CC0" :format :wav :desc "Clean Dm guitar chord"}
+ :guit/em9             {:freesound/id nil :title "Guitar Em9 chord"       :license "CC0" :format :wav :desc "Clean Em9 chord, warm"}
+ :guit/e-fifths        {:freesound/id nil :title "Guitar E fifths"        :license "CC0" :format :wav :desc "E power chord fifths"}
+ :guit/e-slide         {:freesound/id nil :title "Guitar E slide"         :license "CC0" :format :wav :desc "Slide guitar E"}
+
+ ;; ── loop — drum and groove loops ─────────────────────────────────────────
+
+ :loop/amen            {:freesound/id nil :title "Amen break (short)"     :license "CC0" :format :wav :desc "Classic Amen break, 4-bar short"}
+ :loop/amen-full       {:freesound/id nil :title "Amen break (full)"      :license "CC0" :format :wav :desc "Classic Amen break, full loop"}
+ :loop/breakbeat       {:freesound/id nil :title "Breakbeat loop"         :license "CC0" :format :wav :desc "Breakbeat drum loop"}
+ :loop/garzul          {:freesound/id nil :title "Garzul loop"            :license "CC0" :format :wav :desc "Hip-hop flavored loop"}
+ :loop/industrial      {:freesound/id nil :title "Industrial loop"        :license "CC0" :format :wav :desc "Industrial percussion loop"}
+ :loop/mika            {:freesound/id nil :title "Mika loop"              :license "CC0" :format :wav :desc "Latin-flavored percussion loop"}
+ :loop/safari          {:freesound/id nil :title "Safari loop"            :license "CC0" :format :wav :desc "World music percussion loop"}
+ :loop/tabla           {:freesound/id nil :title "Tabla loop"             :license "CC0" :format :wav :desc "Indian tabla percussion loop"}
+
+ ;; ── misc — miscellaneous one-shots ───────────────────────────────────────
+
+ :misc/burp            {:freesound/id nil :title "Glitch burp"            :license "CC0" :format :wav :desc "Digital glitch burp"}
+ :misc/cineboom        {:freesound/id nil :title "Cinematic boom"         :license "CC0" :format :wav :desc "Cinematic impact boom"}
+
+ ;; ── perc — acoustic percussion ───────────────────────────────────────────
+
+ :perc/bell            {:freesound/id nil :title "Percussion bell"        :license "CC0" :format :wav :desc "Metal bell hit"}
+ :perc/snap            {:freesound/id nil :title "Finger snap"            :license "CC0" :format :wav :desc "Clean finger snap"}
+ :perc/swash           {:freesound/id nil :title "Swash"                  :license "CC0" :format :wav :desc "Brush swash on drum head"}
+ :perc/till            {:freesound/id nil :title "Till"                   :license "CC0" :format :wav :desc "Short till percussion hit"}
+
+ ;; ── sn — snare drums ─────────────────────────────────────────────────────
+
+ :sn/dub               {:freesound/id nil :title "Dub snare"              :license "CC0" :format :wav :desc "Dub-style rimshot snare"}
+ :sn/dolf              {:freesound/id nil :title "Dolf snare"             :license "CC0" :format :wav :desc "Crisp acoustic snare"}
+ :sn/zome              {:freesound/id nil :title "Zome snare"             :license "CC0" :format :wav :desc "Tight punchy snare"}
+
+ ;; ── tabla — Indian tabla drums ────────────────────────────────────────────
+
+ :tabla/tas1           {:freesound/id nil :title "Tabla tas 1"            :license "CC0" :format :wav :desc "Tabla na tone"}
+ :tabla/tas2           {:freesound/id nil :title "Tabla tas 2"            :license "CC0" :format :wav :desc "Tabla tin tone"}
+ :tabla/tas3           {:freesound/id nil :title "Tabla tas 3"            :license "CC0" :format :wav :desc "Tabla tun tone"}
+
+ ;; ── vinyl — record and vinyl artifacts ───────────────────────────────────
+
+ :vinyl/hiss           {:freesound/id nil :title "Vinyl hiss"             :license "CC0" :format :wav :desc "Record surface noise / hiss"}
+ :vinyl/scratch        {:freesound/id nil :title "Vinyl scratch"          :license "CC0" :format :wav :desc "DJ scratch on vinyl"}
+ :vinyl/thump          {:freesound/id nil :title "Vinyl thump"            :license "CC0" :format :wav :desc "Stylus drop on vinyl"}}

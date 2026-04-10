@@ -1,0 +1,60 @@
+{:synth/id   :lorenz-fm
+ :synth/tags [:chaos :lorenz :fm :hybrid :arc-ready]
+ :synth/doc  "FM synthesis with Lorenz chaos modulation — hybrid physical/spectral voice.
+
+  A SinOsc carrier frequency-modulated by the output of a Lorenz oscillator.
+  When the Lorenz system is stable (low :chaos), the modulation is nearly zero
+  and the carrier is a clean sine. As :chaos increases, the Lorenz trajectory
+  widens and the FM modulation index grows — the carrier becomes increasingly
+  unstable, producing sidebands at chaotic (inharmonic) intervals.
+
+  At high :chaos the modulation depth is large enough that the carrier frequency
+  deviates by hundreds of Hz per sample — the result is a dense FM spectrum with
+  no fixed relationship between partials. The combination of FM (harmonic by
+  nature) with chaotic modulation (inharmonic) produces a sound impossible with
+  standard FM synthesis.
+
+  Signal flow:
+    Lorenz(s, r(chaos), b, h) → x+y+z mix / 30 → scale by fm-depth
+    SinOsc(freq + chaos_mod * freq) → RLPF → Pan2 → Out
+
+  :chaos [0..1] controls Lorenz r: 10 + 40 × chaos (see :chaos-lorenz for
+  the r-to-behavior mapping).
+
+  :fm-depth controls how much the normalized Lorenz output modulates frequency.
+  At fm-depth=0.5 the modulation can shift the carrier by ±0.5× :freq, which
+  at 440 Hz means ±220 Hz deviation per Lorenz value. At deep chaos (r=50) the
+  Lorenz output swings widely, producing dramatic pitch smearing.
+
+  Recommended starting point:
+    (sc/sc-play! {:synth :lorenz-fm :freq 220 :amp 0.5 :chaos 0.2 :fm-depth 0.3})
+  Then sweep :chaos via apply-trajectory! for a controlled destabilization.
+
+  A second slower Lorenz (at :s 12, different initial conditions) modulates the
+  filter cutoff — this adds a second layer of correlated chaos that makes the
+  timbre change track the pitch change loosely."
+ :args  {:freq      440.0
+         :freq-cut  2400.0
+         :freq-res  0.5
+         :chaos     0.3
+         :fm-depth  0.4
+         :s         10.0
+         :b         2.667
+         :h         0.05
+         :amp       0.45
+         :attack    0.05
+         :release   3.0
+         :pan       0.0}
+ :graph [:out 0
+          [:pan2
+           [:* [:env-gen [:asr :attack 1.0 :release] :gate :amp]
+               [:rlpf
+                [:sin-osc
+                 [:+ :freq
+                  [:* :freq
+                   [:* :fm-depth
+                    [:* [:/ 1.0 30.0]
+                     [:mix [[:lorenz :s [:+ 10.0 [:* 40.0 :chaos]] :b :h]]]]]]]]
+                :freq-cut
+                :freq-res]]
+           :pan]]}

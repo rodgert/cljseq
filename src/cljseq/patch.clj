@@ -363,4 +363,113 @@
                 :papa1-noise   [:papa1 :noise-mix]
                 :papa2-noise   [:papa2 :noise-mix]
                 :papa2-sh-rate [:papa2 :sh-rate]}})
+
+    ;; ---------------------------------------------------------------------------
+    ;; :superkar — SuperKarplus-inspired warpable multi-voice KS ensemble.
+    ;;
+    ;; Four independent KS voices with per-voice warp, body, and coef controls.
+    ;; Each voice routes to a shared bus; a reverb bus adds spatial depth.
+    ;;
+    ;; The key insight: warp ≠ 1.0 produces inharmonic partials — the comb filter
+    ;; reinforces frequencies at warp/period rather than 1/period. Per-voice warp
+    ;; trajectories with staggered start times create an evolving inharmonic ensemble
+    ;; texture impossible on hardware with a single global warp control.
+    ;;
+    ;; Voice layout (default tuning — A2, E3, A3, E4):
+    ;;   voice1 — root (A2 = 110 Hz)
+    ;;   voice2 — fifth above (E3 = 164.8 Hz)
+    ;;   voice3 — octave above (A3 = 220 Hz)
+    ;;   voice4 — fifth + octave (E4 = 329.6 Hz)
+    ;;
+    ;; Key params via set-patch-param! or apply-trajectory!:
+    ;;   :voiceN-freq      — retune each voice independently
+    ;;   :voiceN-warp      — per-voice warp factor (1.0 = harmonic)
+    ;;   :voiceN-coef      — per-voice string brightness
+    ;;   :voiceN-body-freq — per-voice body resonance frequency
+    ;;   :voiceN-body-res  — per-voice body resonance width
+    ;;   :effects-mix      — dry/wet reverb blend
+    ;; ---------------------------------------------------------------------------
+    (defpatch! :superkar
+      {:buses  {:string-bus {:channels 2 :rate :audio}}
+       :nodes  [{:id :voice1 :synth :superkar-voice
+                 :args {:freq 110.0 :amp 0.5 :decay 25.0 :coef 0.5
+                        :warp 1.0 :body-freq 400.0 :body-res 0.4 :pan -0.3}
+                 :out {:out-bus :string-bus}}
+                {:id :voice2 :synth :superkar-voice
+                 :args {:freq 164.8 :amp 0.45 :decay 22.0 :coef 0.5
+                        :warp 1.0 :body-freq 600.0 :body-res 0.5 :pan 0.1}
+                 :out {:out-bus :string-bus}}
+                {:id :voice3 :synth :superkar-voice
+                 :args {:freq 220.0 :amp 0.4 :decay 18.0 :coef 0.5
+                        :warp 1.0 :body-freq 800.0 :body-res 0.5 :pan -0.1}
+                 :out {:out-bus :string-bus}}
+                {:id :voice4 :synth :superkar-voice
+                 :args {:freq 329.6 :amp 0.35 :decay 15.0 :coef 0.5
+                        :warp 1.0 :body-freq 1200.0 :body-res 0.6 :pan 0.3}
+                 :out {:out-bus :string-bus}}
+                {:id :verb :synth :reverb-bus
+                 :args {:room 0.7 :mix 0.3 :damp 0.4 :amp 1.0}
+                 :in {:in-bus :string-bus} :out {:out 0}}]
+       :params {:voice1-freq      [:voice1 :freq]
+                :voice2-freq      [:voice2 :freq]
+                :voice3-freq      [:voice3 :freq]
+                :voice4-freq      [:voice4 :freq]
+                :voice1-warp      [:voice1 :warp]
+                :voice2-warp      [:voice2 :warp]
+                :voice3-warp      [:voice3 :warp]
+                :voice4-warp      [:voice4 :warp]
+                :voice1-coef      [:voice1 :coef]
+                :voice2-coef      [:voice2 :coef]
+                :voice3-coef      [:voice3 :coef]
+                :voice4-coef      [:voice4 :coef]
+                :voice1-body-freq [:voice1 :body-freq]
+                :voice2-body-freq [:voice2 :body-freq]
+                :voice3-body-freq [:voice3 :body-freq]
+                :voice4-body-freq [:voice4 :body-freq]
+                :voice1-body-res  [:voice1 :body-res]
+                :voice2-body-res  [:voice2 :body-res]
+                :voice3-body-res  [:voice3 :body-res]
+                :voice4-body-res  [:voice4 :body-res]
+                :effects-mix      [:verb :mix]
+                :effects-room     [:verb :room]}})
+
+    ;; ---------------------------------------------------------------------------
+    ;; :chaos-ensemble — three independent chaos voices on a shared bus.
+    ;;
+    ;; Two Lorenz voices + one Hénon voice, each with independent :chaos control.
+    ;; The Lorenz pair are panned left/right with slightly different :s (Prandtl)
+    ;; values — small differences in s cause the attractors to diverge on different
+    ;; trajectories over time, creating an organic widening effect even at identical
+    ;; :chaos values.
+    ;;
+    ;; Key params via set-patch-param! or apply-trajectory!:
+    ;; :lorenz1-chaos / :lorenz2-chaos / :henon-chaos  — per-voice bifurcation
+    ;; :lorenz1-cut   / :lorenz2-cut   / :henon-cut    — per-voice filter color
+    ;; :effects-mix                                    — dry/wet reverb blend
+    ;; ---------------------------------------------------------------------------
+    (defpatch! :chaos-ensemble
+      {:buses  {:chaos-bus {:channels 2 :rate :audio}}
+       :nodes  [{:id :lorenz1 :synth :chaos-lorenz
+                 :args {:chaos 0.5 :s 10.0 :freq-cut 1800 :freq-res 0.6 :amp 0.35 :pan -0.5}
+                 :out {:out-bus 0}}
+                {:id :lorenz2 :synth :chaos-lorenz
+                 :args {:chaos 0.5 :s 12.0 :freq-cut 2400 :freq-res 0.55 :amp 0.3 :pan 0.5}
+                 :out {:out-bus 0}}
+                {:id :henon :synth :chaos-henon
+                 :args {:chaos 0.4 :freq-cut 3200 :freq-res 0.5 :amp 0.3 :pan 0.0}
+                 :out {:out-bus 0}}
+                {:id :verb :synth :reverb-bus
+                 :args {:room 0.6 :mix 0.25 :damp 0.5 :amp 1.0}
+                 :in {:in-bus 0} :out {:out 0}}]
+       :params {:lorenz1-chaos [:lorenz1 :chaos]
+                :lorenz2-chaos [:lorenz2 :chaos]
+                :henon-chaos   [:henon :chaos]
+                :lorenz1-cut   [:lorenz1 :freq-cut]
+                :lorenz2-cut   [:lorenz2 :freq-cut]
+                :henon-cut     [:henon :freq-cut]
+                :lorenz1-amp   [:lorenz1 :amp]
+                :lorenz2-amp   [:lorenz2 :amp]
+                :henon-amp     [:henon :amp]
+                :effects-mix   [:verb :mix]
+                :effects-room  [:verb :room]}})
     true))

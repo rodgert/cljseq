@@ -58,6 +58,7 @@
             [cljseq.trajectory :as traj]
             [cljseq.patch         :as patch]
             [cljseq.sample        :as smp]
+            [cljseq.freesound     :as freesound]
             [cljseq.spatial-field :as sf]
             [cljseq.transform  :as xf]
             [cljseq.voice      :as voice]))
@@ -186,6 +187,16 @@
 (def sample!          smp/sample!)
 (def loop-sample!     smp/loop-sample!)
 (def granular-cloud!  smp/granular-cloud!)
+
+;; Freesound integration — fetch-on-use sample catalog
+(def set-freesound-key!         freesound/set-api-key!)
+(def fetch-sample!              freesound/fetch-sample!)
+(def fetch-and-load!            freesound/fetch-and-load!)
+(def freesound-info             freesound/sound-info)
+(def search-freesound           freesound/search-freesound)
+(def load-essentials!           freesound/load-essentials!)
+(def load-and-prime-essentials! freesound/load-and-prime-essentials!)
+(def curate-essentials!         freesound/curate-essentials!)
 
 ;; SC patch lifecycle (requires (connect-sc!) first)
 (def instantiate-patch!  sc/instantiate-patch!)

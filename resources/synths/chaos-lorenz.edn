@@ -1,0 +1,54 @@
+{:synth/id   :chaos-lorenz
+ :synth/tags [:chaos :lorenz :physical-model :pitched :arc-ready]
+ :synth/doc  "Lorenz chaotic oscillator audio voice.
+
+  The Lorenz system is a set of three coupled differential equations that
+  describe convective airflow. It produces a fractal strange attractor — the
+  butterfly-shaped phase portrait — and its audio output evolves from tonal
+  to chaotic as the Rayleigh parameter r increases.
+
+  The :chaos parameter [0..1] controls the Rayleigh number r:
+    chaos=0.0  → r=10   — stable fixed-point approach, nearly silent periodic orbit
+    chaos=0.4  → r=26   — near-onset, irregular bursts
+    chaos=0.5  → r=28   — classic butterfly attractor, rich harmonic content
+    chaos=0.75 → r=40   — complex, broadband texture
+    chaos=1.0  → r=50   — deep chaos, dense noise-like
+
+  The three Lorenz channels (x, y, z) are mixed to mono and divided by 30
+  to normalize: Lorenz x/y values span roughly ±20–30 in the butterfly regime.
+
+  The :freq-cut parameter controls the RLPF center frequency — use it to shape
+  the chaos spectrum from low-rumble to high-shimmer. The RLPF is a mild
+  coloring filter (res=0.6 default), not a gate.
+
+  This is a natural apply-trajectory! target:
+    (apply-trajectory! node :chaos
+      (trajectory :from 0.0 :to 1.0 :beats 32 :curve :s-curve :start (now)))
+  drives the oscillator from stable → chaos over 32 beats.
+
+  Notes:
+  - At chaos < 0.4 the output may be near-silent (stable fixed point attractor).
+    Use an offset or start at chaos > 0.3 for audible output.
+  - :h (step size 0.05 default) controls the ODE integration precision; lower
+    values are more accurate but change the audio character.
+  - Multiple voices at slightly different :s values (Prandtl number, default 10)
+    will diverge on different trajectories — the classic chaotic sensitivity."
+ :args  {:freq-cut  1800.0
+         :freq-res  0.6
+         :chaos     0.5
+         :s         10.0
+         :b         2.667
+         :h         0.05
+         :amp       0.4
+         :attack    0.05
+         :release   2.0
+         :pan       0.0}
+ :graph [:out 0
+          [:pan2
+           [:* [:env-gen [:asr :attack 1.0 :release] :gate :amp]
+               [:rlpf
+                [:* [:/ 1.0 30.0]
+                    [:mix [[:lorenz :s [:+ 10.0 [:* 40.0 :chaos]] :b :h]]]]
+                :freq-cut
+                :freq-res]]
+           :pan]]}
