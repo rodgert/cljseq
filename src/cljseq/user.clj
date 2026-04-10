@@ -46,8 +46,9 @@
             [cljseq.scala      :as scala]
             [cljseq.scale      :as scale]
             [cljseq.sidecar    :as sidecar]
-            [cljseq.spectral   :as spectral]
-            [cljseq.stochastic :as stoch]
+            [cljseq.ensemble-improv :as ei]
+            [cljseq.spectral        :as spectral]
+            [cljseq.stochastic      :as stoch]
             [cljseq.texture    :as tx]
             [cljseq.trajectory :as traj]
             [cljseq.voice      :as voice]))
@@ -153,6 +154,17 @@
 (def start-spectral!  spectral/start-spectral!)
 (def stop-spectral!   spectral/stop-spectral!)
 (def spectral-ctx     spectral/spectral-ctx)
+
+;; ---------------------------------------------------------------------------
+;; Ensemble improv
+;; ---------------------------------------------------------------------------
+
+(def start-improv!        ei/start-improv!)
+(def stop-improv!         ei/stop-improv!)
+(def update-improv!       ei/update-improv!)
+(def improv-state         ei/improv-state)
+(def improv-gesture-fn    ei/improv-gesture-fn)
+(def default-improv-profile ei/default-profile)
 
 ;; ---------------------------------------------------------------------------
 ;; Analysis
