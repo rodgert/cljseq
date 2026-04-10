@@ -226,4 +226,10 @@
     (load-builtin! "solar-vco-voice.edn")
     (load-builtin! "solar-papa-voice.edn")
     (load-builtin! "solar-filter.edn")
+    ;; SuperKarplus-inspired warpable KS voice
+    (load-builtin! "superkar-voice.edn")
+    ;; Chaos synthesis — Lorenz, Hénon, and hybrid FM-chaos voices
+    (load-builtin! "chaos-lorenz.edn")
+    (load-builtin! "chaos-henon.edn")
+    (load-builtin! "lorenz-fm.edn")
     true))

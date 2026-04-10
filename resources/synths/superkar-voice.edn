@@ -1,0 +1,60 @@
+{:synth/id   :superkar-voice
+ :synth/tags [:string :karplus-strong :warpable :bus-aware :superkar-inspired]
+ :synth/doc  "Warpable Karplus-Strong string voice — SuperKarplus-inspired.
+  Structurally inspired by the multi-voice KS architecture of hardware KS synthesizers
+  that extend the classic Karplus-Strong algorithm with per-voice parameter control.
+  Not a licensed reproduction of any specific instrument.
+
+  Extends the standard KS algorithm with three key parameters:
+
+    :warp — delaytime = warp / freq  (standard KS uses 1.0 / freq)
+      warp = 1.0  → normal tuning (same as standard :pluck)
+      warp < 1.0  → higher effective pitch (stretched partials, bell character)
+      warp > 1.0  → lower effective pitch (inharmonic, gong-like)
+      warp ≠ 1.0  → inharmonic partials — the string no longer reinforces the
+                     fundamental cleanly; sidebands emerge at non-integer multiples.
+      maxdelaytime is 2.0/freq, covering warp ∈ [0, 2.0] safely.
+
+    :body-freq — RLPF center frequency (Hz) simulating resonant body character.
+      Low values (80–300 Hz) = hollow body, cello/bass character.
+      High values (800–2000 Hz) = bright body, mandolin/sitar character.
+      Applied as a series RLPF after the KS string output.
+
+    :body-res — RLPF reciprocal Q (0.0–1.0).
+      Low values (0.1–0.3) = narrow resonance, strong body coloration.
+      High values (0.6–0.9) = broad, subtle coloration.
+
+    :coef — string reflection coefficient (KS brightness).
+      -1.0 = very bright/metallic, 0.99 = dark/barely audible.
+
+    :decay — string decay in seconds. ASR release matches decay so the
+             amplitude envelope and string energy fade together.
+
+  Writes to :out-bus (integer) for use in the :superkar patch.
+
+  Per-voice warp trajectories, staggered with different start times, create an
+  evolving inharmonic ensemble texture that is impossible on hardware with a
+  single global control."
+ :args  {:freq      440
+         :amp       0.6
+         :decay     20.0
+         :coef      0.5
+         :warp      1.0
+         :body-freq 600.0
+         :body-res  0.5
+         :attack    0.001
+         :pan       0.0
+         :out-bus   0}
+ :graph [:out :out-bus
+          [:pan2
+           [:* [:env-gen [:asr :attack 1.0 :decay] :gate :amp]
+               [:rlpf
+                [:pluck [:* 0.1 [:white-noise]]
+                        :gate
+                        [:/ :warp :freq]
+                        [:/ 2.0 :freq]
+                        :decay
+                        :coef]
+                :body-freq
+                :body-res]]
+           :pan]]}

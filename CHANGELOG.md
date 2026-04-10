@@ -10,6 +10,91 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.6.0] — 2026-04-10
+
+### Added
+
+#### SC synthesis vocabulary
+
+- **`:pluck` synth** — Karplus-Strong plucked string via SC `Pluck` UGen; `:coef` controls
+  reflection coefficient (string material: -1.0 bright/metallic → 0.95 dark gut)
+- **15 Sonic-Pi/Overtone parity synths** — `:saw`, `:tri`, `:pulse`, `:subpulse`, `:dsaw`,
+  `:dpulse`, `:dtri`, `:pretty-bell`, `:hollow`, `:zawa`, `:dark-ambience`, `:growl`,
+  `:noise`, `:bass` registered from EDN at load time
+- **Solar42-inspired instrument model** — four synths: `:solar-drone-voice` (6 detuned saws,
+  per-oscillator gate + tuning ratio), `:solar-vco-voice` (VarSaw + PWM + sub), `:solar-papa-voice`
+  (FM + AM + Sample&Hold noise blend), `:solar-filter` (dual cascaded RLPF, 24 dB/oct)
+- **`:solar42` patch** — 4 drone + 2 VCO + 2 papa voices → dual RLPF filter → reverb;
+  25 externally addressable params via `set-patch-param!` / `apply-trajectory!`
+- **`:superkar-voice` synth** — warpable Karplus-Strong: `delaytime = warp / freq`;
+  `warp ≠ 1.0` produces inharmonic partials (bell/gong character); per-voice body RLPF
+  (`:body-freq`, `:body-res`)
+- **`:superkar` patch** — 4-voice warpable KS ensemble (A2/E3/A3/E4) on shared bus + reverb;
+  all warp/coef/body params externally addressable
+- **Chaos synthesis** — three new synths:
+  - `:chaos-lorenz` — Lorenz chaotic oscillator; `:chaos` [0..1] maps to Rayleigh number
+    `r = 10 + 40 × chaos` (stable fixed point → butterfly attractor → deep chaos)
+  - `:chaos-henon` — Hénon discrete map; period-doubling cascade audible as pitch subdivision
+  - `:lorenz-fm` — FM synthesis with Lorenz chaos modulation; carrier destabilizes as `:chaos` rises
+- **`:chaos-ensemble` patch** — two Lorenz voices (s=10 / s=12 for organic attractor divergence)
+  + Hénon voice + reverb; all chaos/filter params externally addressable
+
+#### Scale additions (`cljseq.scale`)
+
+- `:pelog` — Balinese pelog (7-note equal-temperament approximation)
+- `:slendro` — Javanese slendro (same intervals as `:yo`, named for gamelan context)
+- `:hijaz` — Arabian hijaz maqam (same intervals as `:phrygian-dominant`)
+- `:folk` — Folk/klezmer flavour (same as `:romanian-minor`)
+- `:in-sen` — Japanese in-sen (alias for `:in-scale`)
+- `:persian` — Persian maqam [1 3 1 1 2 3 1]; Dune palette scale, genuinely new interval pattern
+- `:dune` — Double harmonic / Byzantine alias [1 3 1 2 1 3 1]; the "Arrakis sound"
+
+#### Sample player (`cljseq.sample`)
+
+- `defbuffer!` / `load-sample!` / `unload-sample!` — SC buffer lifecycle; idempotent by path
+- `sample!` / `loop-sample!` — one-shot and looping playback
+- `granular-cloud!` — convenience wrapper instantiating `:granular-cloud` patch with a named buffer
+- `play!` `:sample` dispatch — routes `:sample` step-map key to SC buffer player
+- `:granular-cloud` patch registered at load time (granular voice → reverb bus)
+
+#### Freesound integration (`cljseq.freesound`)
+
+- `set-freesound-key!` / `FREESOUND_API_KEY` env var — API authentication
+- `fetch-sample! id kw` — downloads by Freesound ID to `~/.cache/cljseq/samples/`, registers buffer
+- `fetch-and-load! id kw` — fetch + SC buffer allocation in one call
+- `sound-info id` — fetch and cache Freesound metadata (JSON)
+- `search-freesound query opts` — text search; returns candidates with license/tag info
+- `load-essentials!` — bulk-fetches all catalog entries that have IDs; skips nil placeholders
+- `load-and-prime-essentials!` — fetch + load into SC buffers
+- `curate-essentials!` — searches Freesound for each nil-ID entry, prints candidate IDs
+- `resources/samples/essentials.edn` — 56 entries mirroring Sonic-Pi category vocabulary
+  (`:ambi/*`, `:bass/*`, `:bd/*`, `:elec/*`, `:guit/*`, `:loop/*`, `:perc/*`, `:sn/*`,
+  `:tabla/*`, `:vinyl/*`); IDs are `nil` placeholders pending curation
+
+#### Examples and documentation
+
+- `examples/ks_string_demo.clj` — 6-section KS showcase: coef vocabulary, per-note arc
+  sampling, dual-drone `apply-trajectory!` animation, chord section with simultaneous arcs,
+  Solar42 filter sweep integration
+- `examples/superkar_demo.clj` — 7-section SuperKarplus showcase: warp vocabulary,
+  patch instantiation, staggered per-voice warp/body trajectories, live melody loop
+- `examples/chaos_demo.clj` — 8-section chaos showcase: Lorenz/Hénon parameter exploration,
+  bifurcation arc via `apply-trajectory!`, period-doubling cascade, chaos ensemble,
+  live loop sampling chaos-arc for melodic filter color
+- **User manual §25** — Sample Player and Freesound (buffer lifecycle, granular, `play!`
+  dispatch, fetch-on-use API, essentials catalog)
+- **User manual §26** — SC Synthesis Showcase (KS/coef vocabulary, Solar42 patch,
+  SuperKarplus warp technique, chaos synthesis bifurcation table, all built-in patches)
+
+### Changed
+
+- `user.clj` — exports `cljseq.freesound` API (`set-freesound-key!`, `fetch-sample!`,
+  `fetch-and-load!`, `freesound-info`, `search-freesound`, `load-essentials!`,
+  `load-and-prime-essentials!`, `curate-essentials!`)
+- User manual §25 (Reference) renumbered to §27
+
+---
+
 ## [0.5.0] — 2026-04-09
 
 ### Added

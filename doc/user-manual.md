@@ -30,7 +30,9 @@ Version 0.5.0 · April 2026
 22. [Bach Corpus (Music21)](#22-bach-corpus-music21)
 23. [SuperCollider Integration](#23-supercollider-integration)
 24. [Spatial Field](#24-spatial-field)
-25. [Reference: REPL Commands and Step Keys](#25-reference)
+25. [Sample Player and Freesound](#25-sample-player-and-freesound)
+26. [SC Synthesis Showcase](#26-sc-synthesis-showcase)
+27. [Reference: REPL Commands and Step Keys](#27-reference)
 
 ---
 
@@ -1953,9 +1955,283 @@ Available axes: `:x`, `:y`, `:r` (radius from centre), `:θ` (angle),
 
 ---
 
-## 25. Reference
+## 25. Sample Player and Freesound
+
+`cljseq.sample` manages SC audio buffers and provides playback, looping, and granular synthesis. `cljseq.freesound` adds fetch-on-use sample acquisition from the Freesound archive, with a bundled essentials catalog that mirrors the Sonic-Pi sample vocabulary.
+
+### Loading samples
+
+```clojure
+;; Register a sample path (does not allocate SC buffer yet)
+(defbuffer! ::kick "/samples/kick.wav")
+
+;; Allocate an SC buffer and load from disk (idempotent by path)
+(load-sample! ::kick)
+
+;; Play once
+(sample! ::kick)
+(sample! ::kick :rate 0.5 :amp 0.6 :pan -0.3)
+
+;; Looping playback
+(def node (loop-sample! ::kick :rate 0.95))
+(sc/free-synth! node)
+```
+
+`defbuffer!` is idempotent — multiple names that share the same file path reuse one SC buffer ID. `load-sample!` checks the path index before sending a second `/b_allocRead`.
+
+### Granular synthesis
+
+```clojure
+(defbuffer! ::texture "/samples/texture.wav")
+(load-sample! ::texture)
+
+;; Instantiate the :granular-cloud patch with this buffer
+(def cloud (granular-cloud! ::texture :density 10 :pos 0.4))
+
+;; Live control
+(sc/set-patch-param! cloud :density 20)
+(sc/set-patch-param! cloud :pos 0.7)
+
+;; Automate grain density over 16 beats
+(apply-trajectory! (get-in cloud [:nodes :grains]) :density
+  (trajectory :from 4 :to 32 :beats 16 :curve :s-curve :start (now)))
+
+(sc/free-patch! cloud)
+```
+
+### play! integration
+
+The `:sample` key routes directly to the SC buffer player inside a live loop:
+
+```clojure
+(deflive-loop :drums {}
+  (play! {:sample ::kick :sample/rate 1.0 :mod/velocity 100})
+  (sleep! 1))
+```
+
+### Freesound fetch-on-use
+
+Set a Freesound API key (free account at freesound.org):
+
+```clojure
+(set-freesound-key! "your-api-key-here")
+;; or: export FREESOUND_API_KEY=...
+```
+
+Fetch and immediately load a sample by Freesound ID:
+
+```clojure
+;; Download to ~/.cache/cljseq/samples/12345.wav, register as :my/kick
+(fetch-and-load! 12345 :my/kick)
+(sample! :my/kick)
+```
+
+Subsequent calls use the local cache — no network request after the first download.
+
+### Essentials catalog
+
+The bundled catalog (`resources/samples/essentials.edn`) mirrors the Sonic-Pi category vocabulary:
+
+| Category | Contents |
+|----------|---------|
+| `:ambi/*` | Ambient textures, drones, atmospheric beds |
+| `:bass/*` | Bass hits (DnB, drop, woodsy) |
+| `:bd/*` | Bass drum / kick drum variants |
+| `:elec/*` | Electronic hits, bells, bleeps |
+| `:guit/*` | Guitar chords and slides |
+| `:loop/*` | Breakbeat and percussion loops |
+| `:perc/*` | Acoustic percussion one-shots |
+| `:sn/*` | Snare drums |
+| `:tabla/*` | Indian tabla voices |
+| `:vinyl/*` | Record surface noise and scratch |
+
+```clojure
+;; Fetch all catalog entries that have a Freesound ID populated
+(load-essentials!)
+
+;; Then play by keyword:
+(sample! :bd/fat)
+(sample! :ambi/drone :rate 0.95 :amp 0.6)
+
+;; Entries with nil IDs need curation first — this searches Freesound
+;; for each missing entry and prints candidate IDs:
+(curate-essentials!)
+```
+
+Fetched files are cached under `(dirs/user-cache-dir)/samples/`. API metadata is also cached so repeated calls to `freesound-info` don't hit the network.
+
+### Searching Freesound
+
+```clojure
+;; Returns seq of {:id int :name str :license str :tags [...] :username str}
+(search-freesound "acoustic kick drum"
+                  {:filter "license:\"Creative Commons 0\""
+                   :num-results 10
+                   :sort "downloads_desc"})
+
+;; Inspect a specific sound
+(freesound-info 12345)
+;=> {:id 12345 :name "kick_acoustic" :license "CC0" :download "https://..." ...}
+```
+
+---
+
+## 26. SC Synthesis Showcase
+
+This section documents the built-in SC synthesis voices and multi-voice patches added in v0.5.0–v0.6.0. All require `(connect-sc!)` and `(send-all-synthdefs!)`.
+
+### Karplus-Strong plucked string (`:pluck`)
+
+The `:pluck` synth implements Karplus-Strong synthesis via SC's `Pluck` UGen. White noise excitation recirculates through a delay line; the `:coef` parameter controls the reflection coefficient — the "material" of the string.
+
+| `:coef` | Character |
+|---------|-----------|
+| `-1.0` | Very bright, bell-like (little damping) |
+| `-0.5` | Metallic steel string |
+| `0.0` | Neutral |
+| `0.5` | Warm nylon (default) |
+| `0.95` | Dark gut string, almost a thump |
+
+```clojure
+;; Warm nylon pluck at A3
+(sc/sc-play! {:synth :pluck :freq 220 :amp 0.7 :decay 15 :coef 0.5})
+
+;; apply-trajectory! on a persistent long-sustaining node
+(def drone (sc/sc-synth! :pluck {:freq 82.4 :amp 0.5 :decay 120 :coef -0.95}))
+(apply-trajectory! drone :coef
+  (trajectory :from -0.95 :to 0.85 :beats 64 :curve :exp :start (now)))
+```
+
+See `examples/ks_string_demo.clj` for the full showcase including per-note arc sampling, dual-drone coef animation, and chord section with three simultaneous trajectories.
+
+### Solar42-inspired drone synthesizer (`:solar42` patch)
+
+The `:solar42` patch models a multi-oscillator drone synthesizer architecture with four drone voices, two VCO voices, two FM/AM/S&H voices, a dual-RLPF filter stage, and a reverb effects block.
+
+```clojure
+(def s42 (sc/instantiate-patch! :solar42))
+
+;; Tune drone voices to a chord
+(sc/set-patch-param! s42 :drone1-freq 110)   ; A2
+(sc/set-patch-param! s42 :drone2-freq 146.8) ; D3
+(sc/set-patch-param! s42 :drone3-freq 165.0) ; E3
+(sc/set-patch-param! s42 :drone4-freq 220.0) ; A3
+
+;; Sweep the Polivoks-style filter open over 64 beats
+(apply-trajectory! (get-in s42 [:nodes :filter]) :cutoff
+  (trajectory :from 20 :to 100 :beats 64 :curve :s-curve :start (now)))
+
+(sc/free-patch! s42)
+```
+
+Constituent synths (usable independently):
+
+| Synth | Description |
+|-------|-------------|
+| `:solar-drone-voice` | 6-saw voice; per-oscillator gate (`:on1`–`:on6`) and tuning ratio (`:tune1`–`:tune6`) |
+| `:solar-vco-voice` | VarSaw + PWM modulation + sub oscillator |
+| `:solar-papa-voice` | FM + AM + Sample&Hold noise blend (`:fm-depth`, `:fm-ratio`, `:noise-mix`) |
+| `:solar-filter` | Dual cascaded RLPF (24 dB/oct, Polivoks-inspired); reads from `:in-bus` |
+
+Scale vocabulary matching common drone synthesizer keyboard modes:
+
+```clojure
+(scale :A 2 :double-harmonic)   ; "Gypsy" — same as :dune
+(scale :A 2 :pelog)             ; Balinese gamelan approximation
+(scale :A 2 :in-scale)          ; Japanese in
+(scale :D 3 :phrygian-dominant) ; Flamenco / `:hijaz` (Arabian)
+(scale :C 4 :whole-tone)        ; Whole-tone / symmetric
+```
+
+### SuperKarplus-inspired warpable KS (`:superkar-voice`, `:superkar` patch)
+
+Extends Karplus-Strong with a `:warp` parameter: `delaytime = warp / freq` (standard KS uses `1 / freq`). When `warp ≠ 1.0` the comb filter reinforces inharmonic partials — creating bell-like sidebands and gong-like overtones impossible on a standard string model.
+
+```clojure
+;; warp = 1.0 → standard harmonic string
+(sc/sc-play! {:synth :superkar-voice :freq 220 :warp 1.0 :coef 0.5 :body-freq 600})
+
+;; warp = 1.2 → gong-like inharmonicity
+(sc/sc-play! {:synth :superkar-voice :freq 220 :warp 1.2 :coef -0.1 :body-freq 400})
+```
+
+The `:superkar` patch provides four independently controlled voices (A2/E3/A3/E4). The key technique: per-voice warp trajectories with staggered start times create an evolving inharmonic ensemble texture that hardware (which has a single global warp) cannot produce.
+
+```clojure
+(def skar (sc/instantiate-patch! :superkar))
+
+;; Four voices drift to different warp values at different speeds
+(apply-trajectory! (get-in skar [:nodes :voice1]) :warp
+  (trajectory :from 1.0 :to 1.12 :beats 48 :curve :s-curve :start (now)))
+(apply-trajectory! (get-in skar [:nodes :voice3]) :warp
+  (trajectory :from 1.0 :to 0.88 :beats 36 :curve :lin :start (+ (now) 16)))
+```
+
+See `examples/superkar_demo.clj` for the full showcase.
+
+### Chaos synthesis (`:chaos-lorenz`, `:chaos-henon`, `:lorenz-fm`)
+
+Three voices based on deterministic chaotic dynamical systems. All expose a `:chaos` parameter [0..1] that controls the bifurcation: the system transitions from stable/periodic at low values to inharmonic strange attractors at high values.
+
+#### `:chaos-lorenz` — Lorenz atmospheric convection model
+
+`:chaos` maps to Rayleigh number `r = 10 + 40 × chaos`:
+
+| `:chaos` | `r` | Behaviour |
+|----------|-----|-----------|
+| 0.0 | 10 | Stable fixed point, near-silent |
+| 0.4 | 26 | Near onset, irregular bursts |
+| 0.5 | 28 | **Classic butterfly attractor** — rich harmonics |
+| 0.75 | 40 | Complex broadband texture |
+| 1.0 | 50 | Deep chaos, dense noise-like |
+
+#### `:chaos-henon` — Hénon discrete map
+
+`:chaos` maps to `a = 1.0 + 0.6 × chaos`. The Hénon map period-doubles more sharply — the transition from period-2 → period-4 → chaos is audible as pitch subdivision. Produces a metallic, crisp texture distinct from the smooth Lorenz drift.
+
+#### `:lorenz-fm` — FM with Lorenz modulation
+
+A SinOsc carrier frequency-modulated by the Lorenz X output. As `:chaos` increases, the carrier frequency deviates by an increasingly chaotic amount per sample — a clean sine becomes a dense cloud of inharmonic partials. A second Lorenz instance modulates the filter cutoff, coupling the timbral and spectral evolution.
+
+```clojure
+;; Bifurcation arc — stable → butterfly over 48 beats
+(def lz (sc/sc-synth! :chaos-lorenz {:chaos 0.2 :freq-cut 2000 :amp 0.4}))
+(apply-trajectory! lz :chaos
+  (trajectory :from 0.2 :to 0.75 :beats 48 :curve :s-curve :start (now)))
+
+;; FM destabilization
+(def lfm (sc/sc-synth! :lorenz-fm {:freq 220 :chaos 0.1 :fm-depth 0.3}))
+(apply-trajectory! lfm :chaos
+  (trajectory :from 0.1 :to 0.8 :beats 32 :curve :exp :start (now)))
+```
+
+The `:chaos-ensemble` patch combines two Lorenz voices (different Prandtl numbers `s=10` and `s=12`) with one Hénon voice. The slight `s` difference causes the attractors to diverge over time, producing organic stereo widening even at identical `:chaos` values.
+
+```clojure
+(def ens (sc/instantiate-patch! :chaos-ensemble))
+(sc/set-patch-param! ens :lorenz1-chaos 0.5)
+(sc/set-patch-param! ens :henon-chaos 0.4)
+(sc/free-patch! ens)
+```
+
+See `examples/chaos_demo.clj` for bifurcation arcs, ensemble configuration, and a live loop that samples the current chaos level to drive melodic filter color.
+
+### Built-in SC patches
+
+| Patch | Voices | Key params |
+|-------|--------|------------|
+| `:reverb-chain` | sine oscillator → reverb | `:freq`, `:room`, `:mix` |
+| `:granular-cloud` | granular voice → reverb | `:buf`, `:density`, `:pos`, `:rate` |
+| `:solar42` | 4 drone + 2 VCO + 2 papa → filter → reverb | `:filter-cutoff`, `:droneN-freq`, `:vcoN-freq` |
+| `:superkar` | 4 warpable KS voices → reverb | `:voiceN-warp`, `:voiceN-coef`, `:voiceN-body-freq` |
+| `:chaos-ensemble` | 2 Lorenz + 1 Hénon → reverb | `:lorenzN-chaos`, `:henon-chaos`, `:effects-mix` |
+
+---
+
+## 27. Reference
 
 ### REPL commands
+
 
 | Command | Description |
 |---------|-------------|

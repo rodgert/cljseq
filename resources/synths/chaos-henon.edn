@@ -1,0 +1,50 @@
+{:synth/id   :chaos-henon
+ :synth/tags [:chaos :henon :discrete-map :arc-ready]
+ :synth/doc  "Hénon map chaotic oscillator audio voice.
+
+  The Hénon map is a 2D discrete dynamical system: xₙ₊₁ = 1 - a·xₙ² + yₙ.
+  At audio rate (freq=22050 Hz) it produces a distinctive thin, metallic chaos
+  with a crisper texture than Lorenz — the Hénon attractor is a fractal set of
+  parallel curves rather than a smooth butterfly.
+
+  The :chaos parameter [0..1] controls the a parameter:
+    chaos=0.0  → a=1.0   — period-2 cycle, clean tone (two pitches alternating)
+    chaos=0.3  → a=1.2   — period-4, rich harmonics beginning
+    chaos=0.45 → a=1.25  — chaos onset, sharp timbral transition
+    chaos=0.7  → a=1.4   — classic Hénon attractor, metallic fizz
+    chaos=1.0  → a=1.6   — deep chaos, dense metallic noise
+
+  The period-doubling route to chaos (1→2→4→8→chaos) is audible as pitch
+  subdivision: a clean tone splits into two frequencies, then four, then an
+  inharmonic swarm. This is distinctly different from Lorenz's smooth drift.
+
+  The Hénon output has a narrower dynamic range than Lorenz (approximately ±1.5)
+  so no normalization divisor is needed.
+
+  A gentle RLPF shapes the metallic spectrum. The default :freq-cut 3200 Hz keeps
+  the crispness while taming harshness.
+
+  Primary use: metallic percussion textures, chaotic hi-hat-like rhythms (low chaos),
+  electronic noise bursts (high chaos). The period-doubling transition at chaos 0.4–0.5
+  is compositionally the most interesting region.
+
+  Apply-trajectory! usage:
+    (apply-trajectory! node :chaos
+      (trajectory :from 0.0 :to 0.7 :beats 16 :curve :lin :start (now)))
+  sweeps from tonal through period-doubling into chaotic metallic texture."
+ :args  {:freq-cut  3200.0
+         :freq-res  0.5
+         :chaos     0.5
+         :b         0.3
+         :amp       0.5
+         :attack    0.02
+         :release   1.5
+         :pan       0.0}
+ :graph [:out 0
+          [:pan2
+           [:* [:env-gen [:asr :attack 1.0 :release] :gate :amp]
+               [:rlpf
+                [:mix [[:henon 22050 [:+ 1.0 [:* 0.6 :chaos]] :b 0.0 0.0]]]
+                :freq-cut
+                :freq-res]]
+           :pan]]}
