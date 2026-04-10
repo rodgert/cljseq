@@ -56,6 +56,7 @@
             [cljseq.stochastic      :as stoch]
             [cljseq.texture    :as tx]
             [cljseq.trajectory :as traj]
+            [cljseq.patch         :as patch]
             [cljseq.spatial-field :as sf]
             [cljseq.transform  :as xf]
             [cljseq.voice      :as voice]))
@@ -162,6 +163,25 @@
 (def shadow-init!         tx/shadow-init!)
 (def shadow-update!       tx/shadow-update!)
 (def shadow-get           tx/shadow-get)
+
+;; ---------------------------------------------------------------------------
+;; Signal graph patches
+;; ---------------------------------------------------------------------------
+
+(def defpatch!           patch/defpatch!)
+(def get-patch           patch/get-patch)
+(def patch-names         patch/patch-names)
+(def patch-params        patch/patch-params)
+(def compile-patch       patch/compile-patch)
+(def canonical->backend  patch/canonical->backend)
+
+;; SC patch lifecycle (requires (connect-sc!) first)
+(def instantiate-patch!  sc/instantiate-patch!)
+(def set-patch-param!    sc/set-patch-param!)
+(def free-patch!         sc/free-patch!)
+(def sc-bus!             sc/sc-bus!)
+(def free-bus!           sc/free-bus!)
+(def bus-idx             sc/bus-idx)
 
 ;; ---------------------------------------------------------------------------
 ;; Spatial field

@@ -1,0 +1,16 @@
+{:synth/id   :reverb-bus
+ :synth/tags [:reverb :fx :bus-aware]
+ :synth/doc  "FreeVerb reverb processor that reads from an audio bus and writes to hardware out.
+Use in patches as a tail-end FX node: set :in-bus to the upstream bus index.
+:room controls room size (0-1), :mix controls wet/dry balance (0=dry, 1=wet)."
+ :args  {:in-bus  8
+         :out     0
+         :room    0.5
+         :mix     0.33
+         :damp    0.5
+         :amp     1.0}
+ :graph [:out :out
+          [:* :amp
+           [:free-verb
+            [:in :in-bus 1]
+            :mix :room :damp]]]}
