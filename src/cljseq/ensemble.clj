@@ -58,6 +58,7 @@
   threshold :harmony/key and :harmony/chord are omitted from the returned
   context."
   (:require [cljseq.analyze         :as analyze]
+            [cljseq.ctrl            :as ctrl]
             [cljseq.dsl             :as dsl]
             [cljseq.loop            :as loop-ns]
             [cljseq.scale           :as scale-ns]
@@ -132,6 +133,24 @@
 
 (defonce ^:private last-ctx (atom nil))
 
+(defn- ctx->serial
+  "Convert an ImprovisationContext to a JSON-safe serializable map for peer sharing.
+
+  Replaces :harmony/key Scale record with primitive :harmony/root, :harmony/octave,
+  :harmony/intervals fields. Drops :harmony/chord (contains Pitch records) and
+  :harmony/pcs (pitch-class distribution — large, not needed by peers).
+
+  The result is safe for ctrl/set! and round-trips through the HTTP server's
+  ->json-safe encoder without falling back to pr-str."
+  [ctx]
+  (let [key  (:harmony/key ctx)
+        base (dissoc ctx :harmony/key :harmony/chord :harmony/pcs)]
+    (cond-> base
+      key
+      (assoc :harmony/root      (name (:step (:root key)))
+             :harmony/octave    (int (:octave (:root key)))
+             :harmony/intervals (vec (:intervals key))))))
+
 (defn- run-ear-tick!
   "Perform one analysis cycle: snapshot → transform → publish.
   Returns the published context, or nil if nothing was published."
@@ -143,6 +162,10 @@
     (when pub
       (reset! last-ctx pub)
       (dsl/use-harmony! pub)
+      ;; Publish serializable form for peer sharing via HTTP server.
+      ;; Wrapped in try so ctrl not being started does not break the ear.
+      (try (ctrl/set! [:ensemble :harmony-ctx] (ctx->serial pub))
+           (catch Exception _ nil))
       (when on-ctx (on-ctx pub)))
     pub))
 

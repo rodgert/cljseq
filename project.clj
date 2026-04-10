@@ -1,5 +1,5 @@
 ; SPDX-License-Identifier: EPL-2.0
-(defproject cljseq "0.2.0"
+(defproject cljseq "0.4.0"
   :description "cljseq — music-theory-aware Clojure sequencer targeting MIDI and OSC"
   :url "https://github.com/rodgert/cljseq"
   :license {:name "EPL-2.0"

@@ -46,8 +46,13 @@
             [cljseq.scala      :as scala]
             [cljseq.scale      :as scale]
             [cljseq.sidecar    :as sidecar]
-            [cljseq.stochastic :as stoch]
+            [cljseq.ensemble-improv :as ei]
+            [cljseq.peer            :as peer]
+            [cljseq.spectral        :as spectral]
+            [cljseq.stochastic      :as stoch]
+            [cljseq.texture    :as tx]
             [cljseq.trajectory :as traj]
+            [cljseq.transform  :as xf]
             [cljseq.voice      :as voice]))
 
 ;; ---------------------------------------------------------------------------
@@ -130,6 +135,73 @@
 (def cue!             conductor/cue!)
 (def conductor-state  conductor/conductor-state)
 (def conductor-names  conductor/conductor-names)
+
+;; ---------------------------------------------------------------------------
+;; Texture protocol
+;; ---------------------------------------------------------------------------
+
+(def deftexture!          tx/deftexture!)
+(def get-texture          tx/get-texture)
+(def texture-names        tx/texture-names)
+(def buffer-texture       tx/buffer-texture)
+(def texture-transition!  tx/texture-transition!)
+(def shadow-init!         tx/shadow-init!)
+(def shadow-update!       tx/shadow-update!)
+(def shadow-get           tx/shadow-get)
+
+;; ---------------------------------------------------------------------------
+;; Spectral analysis
+;; ---------------------------------------------------------------------------
+
+(def start-spectral!  spectral/start-spectral!)
+(def stop-spectral!   spectral/stop-spectral!)
+(def spectral-ctx     spectral/spectral-ctx)
+
+;; ---------------------------------------------------------------------------
+;; Ensemble improv
+;; ---------------------------------------------------------------------------
+
+(def start-improv!        ei/start-improv!)
+(def stop-improv!         ei/stop-improv!)
+(def update-improv!       ei/update-improv!)
+(def improv-state         ei/improv-state)
+(def improv-gesture-fn    ei/improv-gesture-fn)
+(def default-improv-profile ei/default-profile)
+
+;; ---------------------------------------------------------------------------
+;; Peer discovery and ctrl-tree mounting (Topology Layer 2)
+;; ---------------------------------------------------------------------------
+
+(def set-node-profile!   peer/set-node-profile!)
+(def node-profile        peer/node-profile)
+(def node-id             peer/node-id)
+(def start-discovery!    peer/start-discovery!)
+(def stop-discovery!     peer/stop-discovery!)
+(def discovery-running?  peer/discovery-running?)
+(def peers               peer/peers)
+(def peer-info           peer/peer-info)
+(def mount-peer!         peer/mount-peer!)
+(def unmount-peer!       peer/unmount-peer!)
+(def mounted-peers       peer/mounted-peers)
+(def peer-harmony-ctx    peer/peer-harmony-ctx)
+(def peer-spectral-ctx   peer/peer-spectral-ctx)
+(def ctx->serial         peer/ctx->serial)
+(def serial->scale       peer/serial->scale)
+
+;; ---------------------------------------------------------------------------
+;; Note transformers
+;; ---------------------------------------------------------------------------
+
+(def play-transformed!   xf/play-transformed!)
+(def compose-xf          xf/compose-xf)
+(def velocity-curve      xf/velocity-curve)
+(def quantize            xf/quantize)
+(def harmonize           xf/harmonize)
+(def echo                xf/echo)
+(def note-repeat         xf/note-repeat)
+(def strum               xf/strum)
+(def dribble             xf/dribble)
+(def latch               xf/latch)
 
 ;; ---------------------------------------------------------------------------
 ;; Analysis
