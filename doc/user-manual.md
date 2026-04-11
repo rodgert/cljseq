@@ -35,7 +35,7 @@ Version 0.9.0 · April 2026
 27. [Waveshaping and Spectral Bridge](#27-waveshaping-and-spectral-bridge)
 28. [DynKlank Physical Modeling](#28-dynklank-physical-modeling)
 29. [Composition from Hardware](#29-composition-from-hardware)
-30. [8-op FM Synthesis (Leviasynth)](#30-8-op-fm-synthesis-leviasynth)
+30. [8-op FM Synthesis](#30-8-op-fm-synthesis)
 31. [OSC Push-Subscribe](#31-osc-push-subscribe)
 32. [nREPL Remote Eval](#32-nrepl-remote-eval)
 33. [Configuration Registry](#33-configuration-registry)
@@ -2205,12 +2205,12 @@ The `:pluck` synth implements Karplus-Strong synthesis via SC's `Pluck` UGen. Wh
 
 See `examples/ks_string_demo.clj` for the full showcase including per-note arc sampling, dual-drone coef animation, and chord section with three simultaneous trajectories.
 
-### Solar42-inspired drone synthesizer (`:solar42` patch)
+### Solar42-inspired drone synthesizer (`:s42` patch)
 
-The `:solar42` patch models a multi-oscillator drone synthesizer architecture with four drone voices, two VCO voices, two FM/AM/S&H voices, a dual-RLPF filter stage, and a reverb effects block.
+The `:s42` patch models a multi-oscillator drone synthesizer architecture with four drone voices, two VCO voices, two FM/AM/S&H voices, a dual-RLPF filter stage, and a reverb effects block.
 
 ```clojure
-(def s42 (sc/instantiate-patch! :solar42))
+(def s42 (sc/instantiate-patch! :s42))
 
 ;; Tune drone voices to a chord
 (sc/set-patch-param! s42 :drone1-freq 110)   ; A2
@@ -2229,10 +2229,10 @@ Constituent synths (usable independently):
 
 | Synth | Description |
 |-------|-------------|
-| `:solar-drone-voice` | 6-saw voice; per-oscillator gate (`:on1`–`:on6`) and tuning ratio (`:tune1`–`:tune6`) |
-| `:solar-vco-voice` | VarSaw + PWM modulation + sub oscillator |
-| `:solar-papa-voice` | FM + AM + Sample&Hold noise blend (`:fm-depth`, `:fm-ratio`, `:noise-mix`) |
-| `:solar-filter` | Dual cascaded RLPF (24 dB/oct, Polivoks-inspired); reads from `:in-bus` |
+| `:s42-drone-voice` | 6-saw voice; per-oscillator gate (`:on1`–`:on6`) and tuning ratio (`:tune1`–`:tune6`) |
+| `:s42-vco-voice` | VarSaw + PWM modulation + sub oscillator |
+| `:s42-papa-voice` | FM + AM + Sample&Hold noise blend (`:fm-depth`, `:fm-ratio`, `:noise-mix`) |
+| `:s42-filter` | Dual cascaded RLPF (24 dB/oct, Polivoks-inspired); reads from `:in-bus` |
 
 Scale vocabulary matching common drone synthesizer keyboard modes:
 
@@ -2548,7 +2548,7 @@ dense playing compresses them to a tight, percussive response:
 |-------|--------|------------|
 | `:reverb-chain` | sine oscillator → reverb | `:freq`, `:room`, `:mix` |
 | `:granular-cloud` | granular voice → reverb | `:buf`, `:density`, `:pos`, `:rate` |
-| `:solar42` | 4 drone + 2 VCO + 2 papa → filter → reverb | `:filter-cutoff`, `:droneN-freq`, `:vcoN-freq` |
+| `:s42` | 4 drone + 2 VCO + 2 papa → filter → reverb | `:filter-cutoff`, `:droneN-freq`, `:vcoN-freq` |
 | `:superkar` | 4 warpable KS voices → reverb | `:voiceN-warp`, `:voiceN-coef`, `:voiceN-body-freq` |
 | `:chaos-ensemble` | 2 Lorenz + 1 Henon → reverb | `:lorenzN-chaos`, `:henon-chaos`, `:effects-mix` |
 | `:klank-ensemble` | bell1 + bell2 + bars → reverb | `:bell1-freq`, `:bars-freq`, `:effects-room` |
@@ -2619,12 +2619,14 @@ the standard library applies directly:
 
 ---
 
-## 30. 8-op FM Synthesis (Leviasynth)
+## 30. 8-op FM Synthesis
 
 `cljseq.fm` extends the existing 4-operator FM engine to 8 operators, adding
 per-operator waveforms, Through-Zero FM (TZFM) routing, and cross-operator
-feedback loops.  All operators are SuperCollider UGens — the Leviasynth
-abstraction compiles them to SC synth definitions via `cljseq.sc`.
+feedback loops.  All operators are SuperCollider UGens compiled to SC synth
+definitions via `cljseq.sc`.  The `:8op-cc` backend (Leviasynth-inspired) emits
+per-OSC CC maps for hardware 8-operator FM synths; see `doc/attribution.md` for
+the hardware sources that shaped this design.
 
 ### Quick start
 

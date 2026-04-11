@@ -10,6 +10,29 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.1] — 2026-04-10
+
+### Changed
+
+#### Attribution hygiene — generic API keywords (no trademarks)
+
+- **`compile-fm :digitone` → `:4op-cc`** — public keyword no longer embeds a
+  product trademark; internal functions renamed (`fm->op4-cc`,
+  `op4-cc-algorithms`, `match-op4-cc-algorithm`).  The `:4op-cc` backend is
+  documented as "Digitone-inspired" in the docstring.
+- **`compile-fm :leviasynth` → `:8op-cc`** — same treatment; internal functions
+  renamed (`fm->op8-cc`, `ratio->op8-pitch-cc`, `op8-pitch-cc`).
+- **`defpatch! :solar42` → `:s42`** — patch keyword and all four constituent
+  synth IDs renamed (`solar-drone-voice` → `s42-drone-voice`,
+  `solar-vco-voice` → `s42-vco-voice`, `solar-papa-voice` → `s42-papa-voice`,
+  `solar-filter` → `s42-filter`); EDN resource files renamed to match.
+- **`doc/attribution.md`** — added table rows and prose sections for
+  ASM Leviasynth, Elektron Digitone, and Soma Laboratory Solar 42.
+- **User manual §30** — section title updated; `:8op-cc` backend note added with
+  attribution pointer.
+
+---
+
 ## [0.9.0] — 2026-04-10
 
 ### Added

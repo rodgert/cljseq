@@ -239,12 +239,12 @@
                  (fm/compile-fm :sc :no-such-fm-xxx)))))
 
 ;; ---------------------------------------------------------------------------
-;; Digitone compiler
+;; 4-op CC compiler
 ;; ---------------------------------------------------------------------------
 
-(deftest compile-fm-digitone-structure-test
+(deftest compile-fm-4op-cc-structure-test
   (testing "returns map with :algorithm :ccs :note"
-    (let [r (fm/compile-fm :digitone (fm/fm-algorithm :2op))]
+    (let [r (fm/compile-fm :4op-cc (fm/fm-algorithm :2op))]
       (is (map? r))
       (is (integer? (:algorithm r)))
       (is (vector? (:ccs r)))
@@ -252,49 +252,49 @@
 
   (testing "algorithm index is in range 0–7"
     (doseq [tpl [:2op :4op-stack :2pairs :3-to-1 :additive-4]]
-      (let [r (fm/compile-fm :digitone (fm/fm-algorithm tpl))]
+      (let [r (fm/compile-fm :4op-cc (fm/fm-algorithm tpl))]
         (is (<= 0 (:algorithm r) 7) (str tpl " algorithm out of range")))))
 
   (testing "CC values are in 0–127"
     (doseq [tpl [:2op :4op-stack :2pairs :3-to-1 :additive-4]]
-      (let [r    (fm/compile-fm :digitone (fm/fm-algorithm tpl))
+      (let [r    (fm/compile-fm :4op-cc (fm/fm-algorithm tpl))
             vals (map :value (:ccs r))]
         (doseq [v vals]
           (is (<= 0 v 127) (str tpl " has out-of-range CC value " v))))))
 
   (testing "additive-4 maps to algorithm 7"
-    (let [r (fm/compile-fm :digitone (fm/fm-algorithm :additive-4))]
+    (let [r (fm/compile-fm :4op-cc (fm/fm-algorithm :additive-4))]
       (is (= 7 (:algorithm r)))))
 
   (testing "2pairs maps to algorithm 1 (two pairs)"
-    (let [r (fm/compile-fm :digitone (fm/fm-algorithm :2pairs))]
+    (let [r (fm/compile-fm :4op-cc (fm/fm-algorithm :2pairs))]
       (is (= 1 (:algorithm r)))))
 
   (testing "4op-stack maps to algorithm 0 (full series stack)"
-    (let [r (fm/compile-fm :digitone (fm/fm-algorithm :4op-stack))]
+    (let [r (fm/compile-fm :4op-cc (fm/fm-algorithm :4op-stack))]
       (is (= 0 (:algorithm r)))))
 
   (testing "CC 90 (algorithm) is always present"
-    (let [r    (fm/compile-fm :digitone (fm/fm-algorithm :2op))
+    (let [r    (fm/compile-fm :4op-cc (fm/fm-algorithm :2op))
           ccs  (map :cc (:ccs r))]
       (is (some #{90} ccs))))
 
   (testing "CC 91 (ratio-c carrier) is always present when carrier exists"
-    (let [r    (fm/compile-fm :digitone (fm/fm-algorithm :2op))
+    (let [r    (fm/compile-fm :4op-cc (fm/fm-algorithm :2op))
           ccs  (map :cc (:ccs r))]
       (is (some #{91} ccs))))
 
   (testing "all named synths compile without error"
     (doseq [nm [:dx-ep :dx-bass :dx-bell :dt-metal :dx-brass]]
-      (let [r (fm/compile-fm :digitone nm)]
+      (let [r (fm/compile-fm :4op-cc nm)]
         (is (map? r) (str nm " should return map"))
         (is (contains? r :algorithm))
         (is (contains? r :ccs))))))
 
-(deftest digitone-ratio-cc-test
+(deftest op4-cc-ratio-cc-test
   (testing "ratio 0.25 maps to CC 0 (minimum)"
     ;; Test via a single-op synth with ratio 0.25
-    (let [r (fm/compile-fm :digitone
+    (let [r (fm/compile-fm :4op-cc
                            {:fm/operators [{:id 1 :ratio 0.25 :level 1.0 :env :adsr}]
                             :fm/carriers  #{1}
                             :fm/routing   {}})
@@ -302,7 +302,7 @@
       (is (= 0 (:value cc91)))))
 
   (testing "ratio 1.0 maps to a mid-range CC value"
-    (let [r (fm/compile-fm :digitone
+    (let [r (fm/compile-fm :4op-cc
                            {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}]
                             :fm/carriers  #{1}
                             :fm/routing   {}})
@@ -311,7 +311,7 @@
       (is (< 0 (:value cc91) 127))))
 
   (testing "ratio 16.0 maps to CC 127 (maximum)"
-    (let [r (fm/compile-fm :digitone
+    (let [r (fm/compile-fm :4op-cc
                            {:fm/operators [{:id 1 :ratio 16.0 :level 1.0 :env :adsr}]
                             :fm/carriers  #{1}
                             :fm/routing   {}})
@@ -319,18 +319,18 @@
       (is (= 127 (:value cc91))))))
 
 ;; ---------------------------------------------------------------------------
-;; Leviasynth compiler
+;; 8-op CC compiler
 ;; ---------------------------------------------------------------------------
 
-(deftest compile-fm-leviasynth-structure-test
+(deftest compile-fm-8op-cc-structure-test
   (testing "returns map with :ccs and :note"
-    (let [r (fm/compile-fm :leviasynth (fm/fm-algorithm :2op))]
+    (let [r (fm/compile-fm :8op-cc (fm/fm-algorithm :2op))]
       (is (map? r))
       (is (vector? (:ccs r)))
       (is (string? (:note r)))))
 
   (testing "each CC entry has :osc :path :cc :value"
-    (let [r    (fm/compile-fm :leviasynth (fm/fm-algorithm :2op))
+    (let [r    (fm/compile-fm :8op-cc (fm/fm-algorithm :2op))
           ccs  (:ccs r)]
       (doseq [c ccs]
         (is (contains? c :osc))
@@ -339,26 +339,26 @@
         (is (contains? c :value)))))
 
   (testing "CC values are in 0–127"
-    (let [r    (fm/compile-fm :leviasynth (fm/fm-algorithm :2pairs))
+    (let [r    (fm/compile-fm :8op-cc (fm/fm-algorithm :2pairs))
           vals (map :value (:ccs r))]
       (doseq [v vals]
         (is (<= 0 v 127)))))
 
   (testing "level CCs are in range 24–31"
-    (let [r    (fm/compile-fm :leviasynth (fm/fm-algorithm :2op))
+    (let [r    (fm/compile-fm :8op-cc (fm/fm-algorithm :2op))
           lccs (filter #(= :level (last (:path %))) (:ccs r))]
       (doseq [c lccs]
         (is (<= 24 (:cc c) 31) (str "Level CC out of range: " (:cc c))))))
 
   (testing "all named synths compile without error"
     (doseq [nm [:dx-ep :dx-bass :dx-bell :dt-metal :dx-brass]]
-      (let [r (fm/compile-fm :leviasynth nm)]
+      (let [r (fm/compile-fm :8op-cc nm)]
         (is (map? r) (str nm " should return map"))
         (is (vector? (:ccs r)))))))
 
-(deftest leviasynth-cc-38-gap-test
+(deftest op8-cc-38-gap-test
   (testing "OSC 1-5 pitch CCs are 33–37"
-    (let [r    (fm/compile-fm :leviasynth
+    (let [r    (fm/compile-fm :8op-cc
                               {:fm/operators (mapv (fn [i]
                                                      {:id (inc i) :ratio 1.0 :level 1.0 :env :adsr})
                                                    (range 8))
@@ -374,7 +374,7 @@
         (is (= 37 (get by-osc 5))))))
 
   (testing "OSC 6 pitch CC is 39 (skips 38)"
-    (let [r    (fm/compile-fm :leviasynth
+    (let [r    (fm/compile-fm :8op-cc
                               {:fm/operators (mapv (fn [i]
                                                      {:id (inc i) :ratio 1.0 :level 1.0 :env :adsr})
                                                    (range 8))
@@ -387,7 +387,7 @@
       (is (= 41 (get by-osc 8)))))
 
   (testing "CC 38 never appears in pitch CCs"
-    (let [r    (fm/compile-fm :leviasynth
+    (let [r    (fm/compile-fm :8op-cc
                               {:fm/operators (mapv (fn [i]
                                                      {:id (inc i) :ratio 1.0 :level 1.0 :env :adsr})
                                                    (range 8))
@@ -397,10 +397,10 @@
           cc-nums   (set (map :cc pitch-ccs))]
       (is (not (contains? cc-nums 38))))))
 
-(deftest leviasynth-pitch-ratio-test
+(deftest op8-pitch-ratio-test
   (testing "ratio 1.0 maps to CC 64 (center)"
     ;; 2-op, carrier has ratio 1.0
-    (let [r    (fm/compile-fm :leviasynth
+    (let [r    (fm/compile-fm :8op-cc
                               {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
                                              {:id 2 :ratio 1.0 :level 0.5 :env :perc}]
                                :fm/carriers  #{1}
@@ -410,7 +410,7 @@
       (is (= 64 (:value osc1)))))
 
   (testing "ratio 2.0 (one octave up) maps above 64"
-    (let [r    (fm/compile-fm :leviasynth
+    (let [r    (fm/compile-fm :8op-cc
                               {:fm/operators [{:id 1 :ratio 2.0 :level 1.0 :env :adsr}]
                                :fm/carriers  #{1}
                                :fm/routing   {}})
@@ -419,7 +419,7 @@
       (is (> (:value osc1) 64))))
 
   (testing "ratio 0.5 (one octave down) maps below 64"
-    (let [r    (fm/compile-fm :leviasynth
+    (let [r    (fm/compile-fm :8op-cc
                               {:fm/operators [{:id 1 :ratio 0.5 :level 1.0 :env :adsr}]
                                :fm/carriers  #{1}
                                :fm/routing   {}})
@@ -693,7 +693,7 @@
 
   (testing "all 8-op presets compile for leviasynth backend"
     (doseq [nm [:8op-brass :8op-bells :8op-evolving-pad :8op-dx7-pno]]
-      (let [r (fm/compile-fm :leviasynth nm)]
+      (let [r (fm/compile-fm :8op-cc nm)]
         (is (map? r))
         (is (= 8 (count (filter #(= :level (last (:path %))) (:ccs r))))
             (str nm " should have 8 level CCs"))))))
@@ -720,19 +720,19 @@
       (is (string? code))
       (is (contains-str? code "1.5"))))
 
-  (testing "compile-fm :digitone accepts an inline def map"
+  (testing "compile-fm :4op-cc accepts an inline def map"
     (let [alg {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
                               {:id 2 :ratio 3.0 :level 0.5 :env :perc}]
                :fm/carriers  #{1}
                :fm/routing   {2 1}}
-          r   (fm/compile-fm :digitone alg)]
+          r   (fm/compile-fm :4op-cc alg)]
       (is (map? r))
       (is (contains? r :algorithm))))
 
-  (testing "compile-fm :leviasynth accepts an inline def map"
+  (testing "compile-fm :8op-cc accepts an inline def map"
     (let [alg {:fm/operators [{:id 1 :ratio 1.0 :level 0.8 :env :adsr}]
                :fm/carriers  #{1}
                :fm/routing   {}}
-          r   (fm/compile-fm :leviasynth alg)]
+          r   (fm/compile-fm :8op-cc alg)]
       (is (map? r))
       (is (vector? (:ccs r))))))

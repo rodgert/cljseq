@@ -1,8 +1,8 @@
-{:synth/id   :solar-drone-voice
- :synth/tags [:drone :saw :multi-oscillator :bus-aware :solar42-inspired]
+{:synth/id   :s42-drone-voice
+ :synth/tags [:drone :saw :multi-oscillator :bus-aware :s42-inspired]
  :synth/doc  "Six sawtooth drone oscillators with individual gate and tuning.
-  Solar42-inspired architecture — structurally similar to the drone voices found in
-  multi-oscillator drone synthesizers, not a licensed reproduction.
+  Inspired by the drone voice architecture found in multi-oscillator analog drone
+  synthesizers (see doc/attribution.md); not a licensed reproduction.
 
   Each of the six oscillators has:
     :on1–:on6  — 0 (off) or 1 (on); gating is a 0/1 multiply, same as a hardware gate switch
@@ -15,7 +15,7 @@
   fifth (1.5), octave (2.0), and upper fifth (3.0).
 
   Uses an ASR envelope: the sustain holds at level 1.0 while gate=1, then releases.
-  Outputs to :out-bus for use in the :solar42 patch."
+  Outputs to :out-bus for use in the :s42 patch."
  :args  {:freq    110
          :amp     0.3
          :attack  0.5

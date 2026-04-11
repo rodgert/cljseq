@@ -1,8 +1,8 @@
-{:synth/id   :solar-papa-voice
- :synth/tags [:fm :am :noise :sh :bus-aware :solar42-inspired]
- :synth/doc  "FM + AM synthesis with noise and Sample&Hold — Papa Srapa-inspired voice.
-  Solar42-inspired architecture; structurally similar to the AM/FM/noise voices found in
-  experimental analog synthesizers, not a licensed reproduction.
+{:synth/id   :s42-papa-voice
+ :synth/tags [:fm :am :noise :sh :bus-aware :s42-inspired]
+ :synth/doc  "FM + AM synthesis with noise and Sample&Hold voice.
+  Inspired by the AM/FM/noise voice architecture found in multi-voice analog synthesizers
+  (see doc/attribution.md); not a licensed reproduction.
 
   Combines four synthesis modes, blended by mix controls:
 
@@ -15,7 +15,7 @@
     Noise/S&H — PinkNoise sampled by a Latch at :sh-rate Hz produces random stepped values.
           :noise-mix (0–1) crossfades between the FM+AM voice and the S&H noise output.
 
-  AR envelope (ASR while gate held). Outputs to :out-bus for use in the :solar42 patch.
+  AR envelope (ASR while gate held). Outputs to :out-bus for use in the :s42 patch.
 
   Tip: low :fm-ratio (e.g. 1.0–2.0) gives harmonic, organ-like tones.
        Inharmonic :fm-ratio (e.g. 1.414, 2.278) gives metallic/bell character.

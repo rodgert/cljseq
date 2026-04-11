@@ -5,9 +5,9 @@
   An FM synth definition describes operators and their routing explicitly,
   then compiles to multiple backends:
 
-    (compile-fm :sc        my-alg)  — sclang SynthDef string
-    (compile-fm :digitone  my-alg)  — algorithm index + CC map
-    (compile-fm :leviasynth my-alg) — per-OSC CC values (8-op)
+    (compile-fm :sc      my-alg)   — sclang SynthDef string
+    (compile-fm :4op-cc  my-alg)   — algorithm index + CC map (4-op)
+    (compile-fm :8op-cc  my-alg)   — per-OSC CC values (8-op)
 
   ## Operators
 
@@ -438,14 +438,14 @@
          "}).add;")))
 
 ;; ---------------------------------------------------------------------------
-;; Digitone algorithm matching
+;; 4-op CC backend (Digitone-inspired algorithm matching)
 ;; ---------------------------------------------------------------------------
 
-;; Digitone's 8 algorithms described structurally:
+;; 4-op CC topology table — 8 algorithm slots described structurally.
 ;; Each entry: {:carriers N :topology kw :description str}
 ;; topology: :stack (series chain), :parallel-mods (multiple mods on one carrier),
 ;;           :paired (independent C+M pairs), :additive (all carriers)
-(def ^:private digitone-algorithms
+(def ^:private op4-cc-algorithms
   [{:index 0 :carriers 1 :topology :stack         :max-mods 3
     :description "A1←A2←B1←B2 — full series stack, one carrier"}
    {:index 1 :carriers 2 :topology :paired         :max-mods 1
@@ -487,8 +487,8 @@
         (if (seq shared) :shared-mod :paired))
       :else :mixed)))
 
-(defn- match-digitone-algorithm
-  "Return the Digitone algorithm index (0–7) closest to the given fm-def."
+(defn- match-op4-cc-algorithm
+  "Return the 4-op CC algorithm index (0–7) closest to the given fm-def."
   [fm-def]
   (let [carriers  (set (or (:fm/carriers fm-def) #{}))
         routing   (or (:fm/routing fm-def) {})
@@ -497,10 +497,10 @@
         match     (first (filter (fn [alg]
                                    (and (= n-cars (:carriers alg))
                                         (= topology (:topology alg))))
-                                 digitone-algorithms))]
+                                 op4-cc-algorithms))]
     (or (:index match)
         ;; Fallback: pick by carrier count
-        (:index (first (filter #(= n-cars (:carriers %)) digitone-algorithms)))
+        (:index (first (filter #(= n-cars (:carriers %)) op4-cc-algorithms)))
         0)))
 
 (defn- ratio->cc
@@ -511,19 +511,19 @@
 (defn- level->cc [level]  (int (Math/round (double (* 127 (max 0.0 (min 1.0 level)))))))
 (defn- env-time->cc [t]   (int (Math/round (double (* 127 (Math/sqrt (/ (max 0 (min 10.0 t)) 10.0)))))))
 
-(defn- fm->digitone
-  "Generate a Digitone CC map from an FM definition.
+(defn- fm->op4-cc
+  "Generate a 4-op CC map from an FM definition (Digitone-inspired).
 
   Returns {:algorithm N :ccs [{:path [...] :value N} ...]}
   plus a :note explaining any limitations."
   [fm-def]
   (let [{:fm/keys [operators carriers routing args]} fm-def
-        alg-idx   (match-digitone-algorithm fm-def)
+        alg-idx   (match-op4-cc-algorithm fm-def)
         carrier-set (set (or carriers #{}))
         ;; Sort operators into C (carriers) and mod groups A, B
         carrier-ops (filter #(contains? carrier-set (:id %)) operators)
         mod-ops     (filter #(not (contains? carrier-set (:id %))) operators)
-        ;; Map to Digitone's C / A / B roles
+        ;; Map to 4-op C / A / B roles
         op-c   (first carrier-ops)
         op-a   (first mod-ops)
         op-b   (second mod-ops)
@@ -545,22 +545,22 @@
           op-b (conj {:path [:op-b :env-attack]  :cc 79 :value (env-time->cc (get b-env :attack 0.01))})
           op-b (conj {:path [:op-b :env-decay]   :cc 80 :value (env-time->cc (get b-env :decay 0.3))}))]
     {:algorithm   alg-idx
-     :description (:description (get digitone-algorithms alg-idx))
+     :description (:description (get op4-cc-algorithms alg-idx))
      :ccs         ccs
-     :note        (str "Digitone topology is fixed per algorithm. "
+     :note        (str "4-op CC: topology is fixed per algorithm slot. "
                        "Ratios, levels, and envelopes are mapped to CCs; "
                        "algorithm selection (CC 90 = " alg-idx ") must match "
                        "the patch's loaded algorithm.")}))
 
 ;; ---------------------------------------------------------------------------
-;; Leviasynth compiler (8-op, CC-only for level/pitch/feedback)
+;; 8-op CC backend (Leviasynth-inspired; CC-only for level/pitch/feedback)
 ;; ---------------------------------------------------------------------------
 
-;; Leviasynth OSC pitch CCs are centered at 64 (= no detune).
+;; 8-op CC backend: OSC pitch CCs are centered at 64 (= no detune).
 ;; The pitch range is ±24 semitones over 0–127 (approx 2.67 cents/unit).
 ;; ratio → pitch detune in semitones → CC value
-(defn- ratio->leviasynth-pitch-cc
-  "Map a frequency ratio to a Leviasynth OSC pitch CC (centered 64).
+(defn- ratio->op8-pitch-cc
+  "Map a frequency ratio to an 8-op OSC pitch CC (centered 64).
   ratio 1.0 = CC 64, ratio 2.0 = +12 semitones = CC ~99."
   [ratio]
   (let [semitones (* 12.0 (/ (Math/log ratio) (Math/log 2.0)))
@@ -570,12 +570,12 @@
 
 ;; OSC level CCs: 24–31 (OSC 1–8)
 ;; OSC pitch CCs: 33–41 (OSC 1–5 = 33–37, then 39–41 for OSC 6–8; 38 absent)
-(defn- leviasynth-pitch-cc [osc-num]
+(defn- op8-pitch-cc [osc-num]
   (cond (<= osc-num 5) (+ 32 osc-num)
         :else          (+ 33 osc-num)))  ; 38 is absent; OSC 6→39, 7→40, 8→41
 
-(defn- fm->leviasynth
-  "Generate a Leviasynth CC map from an FM definition (up to 8 operators).
+(defn- fm->op8-cc
+  "Generate an 8-op CC map from an FM definition (up to 8 operators).
 
   Returns {:ccs [{:osc N :path [...] :cc N :value N} ...] :note str}.
   Only level, pitch-detune, and feedback are CC-addressable.
@@ -588,19 +588,19 @@
                 (fn [op n]
                   (let [osc  (inc n)
                         lcc  (+ 23 osc)        ; CC 24–31
-                        pcc  (leviasynth-pitch-cc osc)
+                        pcc  (op8-pitch-cc osc)
                         fcc  (+ 41 osc)]       ; CC 42–49
                     (cond-> []
                       true (conj {:osc osc :path [:osc osc :level]
                                   :cc lcc :value (level->cc (:level op 1.0))})
                       true (conj {:osc osc :path [:osc osc :pitch]
-                                  :cc pcc :value (ratio->leviasynth-pitch-cc (:ratio op 1.0))})
+                                  :cc pcc :value (ratio->op8-pitch-cc (:ratio op 1.0))})
                       (pos? (:feedback op 0))
                       (conj {:osc osc :path [:osc osc :feedback]
                              :cc fcc :value (level->cc (:feedback op 0))}))))
                 ops (range)))]
     {:ccs  ccs
-     :note (str "Leviasynth: synthesis mode (FM/PM/etc.), waveform, and algorithm topology "
+     :note (str "8-op CC: synthesis mode (FM/PM/etc.), waveform, and algorithm topology "
                 "must be set on the device panel — not accessible via MIDI CC. "
                 "These CCs set per-OSC level and pitch detune only.")}))
 
@@ -614,9 +614,9 @@
   `name-or-def` — a registered name keyword or an inline fm-def map.
 
   Backends:
-    :sc         — sclang SynthDef string
-    :digitone   — {:algorithm N :ccs [...] :note str}
-    :leviasynth — {:ccs [...] :note str}"
+    :sc     — sclang SynthDef string
+    :4op-cc — {:algorithm N :ccs [...] :note str}  (4-op CC map, Digitone-inspired)
+    :8op-cc — {:ccs [...] :note str}               (8-op CC map, Leviasynth-inspired)"
   (fn [backend _] backend))
 
 (defn- resolve-fm [name-or-def]
@@ -628,11 +628,11 @@
 (defmethod compile-fm :sc [_ name-or-def]
   (fm->sc-str (resolve-fm name-or-def)))
 
-(defmethod compile-fm :digitone [_ name-or-def]
-  (fm->digitone (resolve-fm name-or-def)))
+(defmethod compile-fm :4op-cc [_ name-or-def]
+  (fm->op4-cc (resolve-fm name-or-def)))
 
-(defmethod compile-fm :leviasynth [_ name-or-def]
-  (fm->leviasynth (resolve-fm name-or-def)))
+(defmethod compile-fm :8op-cc [_ name-or-def]
+  (fm->op8-cc (resolve-fm name-or-def)))
 
 (defmethod compile-fm :default [backend _]
   (throw (ex-info "compile-fm: unknown backend" {:backend backend})))
@@ -685,7 +685,7 @@
                   {:id 4 :ratio 1.0  :level 0.6  :env {:attack 0.001 :decay 0.001 :sustain 0.0 :release 0.4}}]
    :fm/carriers  #{1 4}
    :fm/routing   {2 1, 3 4}
-   :fm/doc "Metallic percussion — Digitone-style. Inharmonic ratios (1.41 ≈ √2, 2.4)
+   :fm/doc "Metallic percussion — 4-op inharmonic FM. Inharmonic ratios (1.41 ≈ √2, 2.4)
             produce the non-integer spectral components of metal. Two carrier pairs
             with different timbres blended for complex attack. Very short envelopes."})
 

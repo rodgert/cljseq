@@ -273,16 +273,17 @@
                 :mix     [:verb :mix]}})
 
     ;; ---------------------------------------------------------------------------
-    ;; :solar42 — Solar42-inspired multi-voice drone synthesizer patch.
+    ;; :s42 — Solar42-inspired multi-voice drone synthesizer patch.
     ;;
     ;; Structurally inspired by the voice topology of multi-oscillator analog drone
     ;; synthesizers (4 drone voices, 2 richer VCO voices, 2 experimental FM/AM/noise voices,
     ;; dual resonant filter, effects). Not a licensed reproduction of any specific instrument.
+    ;; See doc/attribution.md for the hardware source that shaped this design.
     ;;
     ;; Signal flow:
     ;;   4 drone voices  ─┐
-    ;;   2 VCO voices    ─┼─► voice-mix bus ─► solar-filter ─► effects ─► out
-    ;;   2 papa voices   ─┘                    (dual RLPF)    (FreeVerb)
+    ;;   2 VCO voices    ─┼─► voice-mix bus ─► s42-filter ─► effects ─► out
+    ;;   2 papa voices   ─┘                    (dual RLPF)   (FreeVerb)
     ;;
     ;; Each voice writes stereo to :voice-mix via Out.ar — they sum on the bus.
     ;; The filter reads the summed mix, applies dual RLPF (Polivoks-inspired topology).
@@ -303,32 +304,32 @@
     ;;   "Flamenco" → :phrygian-dominant
     ;;   "Whole Tone" → :whole-tone
     ;; ---------------------------------------------------------------------------
-    (defpatch! :solar42
+    (defpatch! :s42
       {:buses  {:voice-mix    {:channels 2 :rate :audio}
                 :filtered-mix {:channels 2 :rate :audio}}
        :nodes  [;; ── Drone voices (6 detuned saws each, gate+tune per oscillator) ──
-                {:id :drone1 :synth :solar-drone-voice
+                {:id :drone1 :synth :s42-drone-voice
                  :args {:freq 110 :amp 0.22 :detune 0.02} :out {:out-bus :voice-mix}}
-                {:id :drone2 :synth :solar-drone-voice
+                {:id :drone2 :synth :s42-drone-voice
                  :args {:freq 146 :amp 0.22 :detune 0.02} :out {:out-bus :voice-mix}}
-                {:id :drone3 :synth :solar-drone-voice
+                {:id :drone3 :synth :s42-drone-voice
                  :args {:freq 165 :amp 0.22 :detune 0.02} :out {:out-bus :voice-mix}}
-                {:id :drone4 :synth :solar-drone-voice
+                {:id :drone4 :synth :s42-drone-voice
                  :args {:freq 220 :amp 0.22 :detune 0.02} :out {:out-bus :voice-mix}}
                 ;; ── VCO voices (VarSaw + PWM + sub) ──
-                {:id :vco1 :synth :solar-vco-voice
+                {:id :vco1 :synth :s42-vco-voice
                  :args {:freq 220 :amp 0.3 :pwm-rate 0.7 :sub-amp 0.4} :out {:out-bus :voice-mix}}
-                {:id :vco2 :synth :solar-vco-voice
+                {:id :vco2 :synth :s42-vco-voice
                  :args {:freq 330 :amp 0.3 :pwm-rate 1.1 :sub-amp 0.3} :out {:out-bus :voice-mix}}
-                ;; ── Papa Srapa voices (FM+AM+noise+S&H) ──
-                {:id :papa1 :synth :solar-papa-voice
+                ;; ── FM/AM/noise voices ──
+                {:id :papa1 :synth :s42-papa-voice
                  :args {:freq 110 :amp 0.25 :fm-depth 0.6 :fm-ratio 2.0 :noise-mix 0.1}
                  :out {:out-bus :voice-mix}}
-                {:id :papa2 :synth :solar-papa-voice
+                {:id :papa2 :synth :s42-papa-voice
                  :args {:freq 55 :amp 0.25 :fm-depth 0.4 :fm-ratio 1.5 :noise-mix 0.2 :sh-rate 3.0}
                  :out {:out-bus :voice-mix}}
                 ;; ── Filter stage: dual RLPF → Polivoks approximation ──
-                {:id :filter :synth :solar-filter
+                {:id :filter :synth :s42-filter
                  :args {:cutoff 55 :res 0.3 :amp 0.8}
                  :in {:in-bus :voice-mix} :out {:out-bus :filtered-mix}}
                 ;; ── Effects block ──

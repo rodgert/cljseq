@@ -242,11 +242,11 @@
     (load-builtin! "growl.edn")
     (load-builtin! "noise.edn")
     (load-builtin! "bass.edn")
-    ;; Solar42 instrument model
-    (load-builtin! "solar-drone-voice.edn")
-    (load-builtin! "solar-vco-voice.edn")
-    (load-builtin! "solar-papa-voice.edn")
-    (load-builtin! "solar-filter.edn")
+    ;; s42 instrument model (Solar42-inspired)
+    (load-builtin! "s42-drone-voice.edn")
+    (load-builtin! "s42-vco-voice.edn")
+    (load-builtin! "s42-papa-voice.edn")
+    (load-builtin! "s42-filter.edn")
     ;; SuperKarplus-inspired warpable KS voice
     (load-builtin! "superkar-voice.edn")
     ;; Chaos synthesis — Lorenz, Hénon, and hybrid FM-chaos voices

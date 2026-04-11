@@ -235,45 +235,45 @@
       (is (.contains sd "Mix.ar")))))
 
 ;; ---------------------------------------------------------------------------
-;; Solar42 instrument model — synth registration and compile smoke tests
+;; s42 instrument model — synth registration and compile smoke tests
 ;; ---------------------------------------------------------------------------
 
-(deftest solar42-synths-registered-test
-  (testing "Solar42 voice synths are registered"
+(deftest s42-synths-registered-test
+  (testing "s42 voice synths are registered"
     (let [names (set (synth/synth-names))]
-      (is (contains? names :solar-drone-voice))
-      (is (contains? names :solar-vco-voice))
-      (is (contains? names :solar-papa-voice))
-      (is (contains? names :solar-filter)))))
+      (is (contains? names :s42-drone-voice))
+      (is (contains? names :s42-vco-voice))
+      (is (contains? names :s42-papa-voice))
+      (is (contains? names :s42-filter)))))
 
-(deftest solar-drone-voice-compiles-test
-  (testing ":solar-drone-voice compiles with 6 saws and on/tune params"
-    (let [sd (synth/compile-synth :sc :solar-drone-voice)]
+(deftest s42-drone-voice-compiles-test
+  (testing ":s42-drone-voice compiles with 6 saws and on/tune params"
+    (let [sd (synth/compile-synth :sc :s42-drone-voice)]
       (is (.contains sd "Saw.ar"))
       (is (.contains sd "Mix.ar"))
       (is (.contains sd "on1"))
       (is (.contains sd "tune1"))
       (is (.contains sd "detune")))))
 
-(deftest solar-vco-voice-compiles-test
-  (testing ":solar-vco-voice compiles with VarSaw and Pulse sub"
-    (let [sd (synth/compile-synth :sc :solar-vco-voice)]
+(deftest s42-vco-voice-compiles-test
+  (testing ":s42-vco-voice compiles with VarSaw and Pulse sub"
+    (let [sd (synth/compile-synth :sc :s42-vco-voice)]
       (is (.contains sd "VarSaw.ar"))
       (is (.contains sd "Pulse.ar"))
       (is (.contains sd "pwm_rate")))))
 
-(deftest solar-papa-voice-compiles-test
-  (testing ":solar-papa-voice compiles with FM, AM, Latch, Impulse"
-    (let [sd (synth/compile-synth :sc :solar-papa-voice)]
+(deftest s42-papa-voice-compiles-test
+  (testing ":s42-papa-voice compiles with FM, AM, Latch, Impulse"
+    (let [sd (synth/compile-synth :sc :s42-papa-voice)]
       (is (.contains sd "SinOsc.ar"))
       (is (.contains sd "Latch.ar"))
       (is (.contains sd "Impulse.ar"))
       (is (.contains sd "fm_depth"))
       (is (.contains sd "noise_mix")))))
 
-(deftest solar-filter-compiles-test
-  (testing ":solar-filter has two cascaded RLPF stages"
-    (let [sd (synth/compile-synth :sc :solar-filter)]
+(deftest s42-filter-compiles-test
+  (testing ":s42-filter has two cascaded RLPF stages"
+    (let [sd (synth/compile-synth :sc :s42-filter)]
       (is (.contains sd "RLPF.ar"))
       ;; Two RLPF calls for dual-stage filter
       (is (< 1 (count (re-seq #"RLPF\.ar" sd)))))))
