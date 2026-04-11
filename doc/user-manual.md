@@ -1,6 +1,6 @@
 # cljseq User Manual
 
-Version 0.8.0 · April 2026
+Version 0.9.0 · April 2026
 
 ---
 
@@ -39,7 +39,8 @@ Version 0.8.0 · April 2026
 31. [OSC Push-Subscribe](#31-osc-push-subscribe)
 32. [nREPL Remote Eval](#32-nrepl-remote-eval)
 33. [Configuration Registry](#33-configuration-registry)
-34. [Reference: REPL Commands and Step Keys](#34-reference)
+34. [MCP Bridge (AI Compositional Collaborator)](#34-mcp-bridge)
+35. [Reference: REPL Commands and Step Keys](#35-reference)
 
 ---
 
@@ -2930,7 +2931,118 @@ argument overrides the `:bpm` default:
 
 ---
 
-## 34. Reference
+## 34. MCP Bridge
+
+`cljseq.mcp` is a standalone MCP (Model Context Protocol) server that exposes
+the running cljseq session as AI-legible tools.  Launch it alongside your REPL
+and Claude Code can participate in the session as a live compositional collaborator
+— reading harmony context, writing loops, ingesting recordings, and reasoning
+across the full synthesis stack.
+
+### Why cljseq is uniquely suited for MCP
+
+Most live-coding environments expose code to an AI; cljseq exposes *data*.  The
+ctrl tree, harmony context, score map, and SynthDef graph are all plain Clojure
+values.  An AI can read them, reason about them musically, and write back without
+any special serialisation layer.
+
+### Setup
+
+```bash
+# Start cljseq (lein repl or your usual entry point)
+lein repl
+
+# In a second terminal — start the MCP server
+lein mcp                              # connects to localhost:7888
+lein mcp --nrepl-host 192.168.1.10    # connect to remote node
+```
+
+Register with Claude Code (`.mcp.json` at the repo root, or `claude mcp add`):
+
+```json
+{
+  "mcpServers": {
+    "cljseq": {
+      "command": "lein",
+      "args": ["-C", "mcp"]
+    }
+  }
+}
+```
+
+### Tool reference
+
+#### Session control
+
+| Tool | Description |
+|------|-------------|
+| `evaluate` | Eval any Clojure on the running session |
+| `get-ctrl` | Read a ctrl tree path (EDN vector, e.g. `[:config :bpm]`) |
+| `set-ctrl` | Write a value to a ctrl tree path |
+| `get-harmony-ctx` | Current `*harmony-ctx*`: root, scale, tensions |
+| `get-spectral` | Spectral analysis state: centroid, flux, density |
+| `get-loops` | Running loop inventory with tick counts |
+| `define-loop` | Create or hot-swap a named live loop |
+| `stop-loop` | Stop a named loop |
+| `play-note` | Trigger a single note event |
+| `set-bpm` | Change master tempo (propagates to Link peers) |
+| `get-config` / `set-config` | §25 configuration registry |
+| `get-score` | Full ctrl tree snapshot as EDN |
+
+#### Composition pipeline
+
+The pipeline tools share a `composition` binding in the nREPL session.
+`ingest-midi` populates it; subsequent tools read and update it.
+
+| Tool | Description |
+|------|-------------|
+| `ingest-midi` | Full pipeline: parse → key/mode detect → voice separation → tension arc → outlier flag → resolution |
+| `show-corrections` | Display outlier note proposals from the last ingest |
+| `accept-corrections` | Apply corrections; rebind `composition` |
+| `play-score` | Play the current `composition` via the event engine |
+| `save-score` | Write `composition` to an EDN file (music area handoff) |
+
+```
+# Typical Claude workflow:
+ingest-midi path=/path/to/recording.mid
+→ shows: G ionian, 110 BPM, 32 bars, 0 corrections, peak tension bar 28
+
+show-corrections
+→ "No corrections proposed — recording stayed diatonic throughout"
+
+play-score
+→ plays back drone + pad + motifs
+
+save-score path=~/org/areas/music/shipwreck-piano.edn
+→ {:saved ".../shipwreck-piano.edn"}
+```
+
+#### Topology
+
+| Tool | Description |
+|------|-------------|
+| `list-peers` | Topology registry: all discovered nodes with backends |
+| `evaluate-on-peer` | Eval on any named node (e.g. `:ubuntu`) in the topology |
+
+`evaluate-on-peer` proxies through `cljseq.remote/eval-on-peer!` on the primary
+node, so the peer registry lookup happens in the running session rather than the
+MCP process.  Use `list-peers` first to discover available node IDs.
+
+### The `evaluate` escape hatch
+
+Every named tool is a thin wrapper around `evaluate`.  Anything not covered by
+a named tool is one `evaluate` call away.  The composition namespace, FM
+compiler, Spatial Field, Euclidean rhythms — all accessible directly:
+
+```
+evaluate code=(comp/print-corrections composition)
+evaluate code=(apply-trajectory! bass-node :coeff (buildup 8.0 {:from 0.95 :to 0.9998}))
+evaluate code=(compile-fm :sc (fm-algorithm :8op-stack))
+```
+
+---
+
+## 35. Reference
 
 ### REPL commands
 

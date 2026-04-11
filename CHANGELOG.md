@@ -10,6 +10,55 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.9.0] — 2026-04-10
+
+### Added
+
+#### MCP bridge (`cljseq.mcp`)
+
+- **`cljseq.mcp` namespace** — MCP (Model Context Protocol) server that exposes
+  the cljseq API as AI-legible compositional tools; runs as a standalone process
+  communicating over stdio JSON-RPC with any MCP client (Claude Code, etc.)
+- **`lein mcp` alias** — start the MCP server: `lein mcp [--nrepl-host H] [--nrepl-port P]`
+- **`connect-nrepl!` / `disconnect-nrepl!`** — lifecycle for the nREPL connection to
+  a running cljseq session (default: `localhost:7888`)
+- **`process-message`** — public single-message entry point (used by tests and
+  the main loop)
+- **`run-server!`** — main loop; reads JSON-RPC messages from stdin until EOF
+- **`-main`** — entry point; parses `--nrepl-host` / `--nrepl-port` args
+- **20 MCP tools across three groups:**
+
+  *Session control (12 tools):*
+  - `evaluate` — eval any Clojure expression on the running session
+  - `get-ctrl` / `set-ctrl` — read/write ctrl tree paths
+  - `get-harmony-ctx` — current `*harmony-ctx*` (root, scale, tensions)
+  - `get-spectral` — spectral analysis state (centroid, flux, density)
+  - `get-loops` — running live loop inventory with tick counts
+  - `define-loop` / `stop-loop` — hot-swap or stop a named loop
+  - `play-note` — trigger a single note event
+  - `set-bpm` — change master tempo (propagates to Link peers)
+  - `get-config` / `set-config` — §25 configuration registry
+  - `get-score` — full ctrl tree snapshot as EDN
+
+  *Composition pipeline (5 tools):*
+  - `ingest-midi` — full pipeline: parse → key/mode detect → voice separation →
+    tension arc → outlier flag → resolution; binds result to `composition` in the
+    nREPL session; returns a summary map
+  - `show-corrections` — display outlier note proposals from the last ingest
+  - `accept-corrections` — apply corrections, rebind `composition`
+  - `play-score` — play the current `composition` score via the event engine
+  - `save-score` — write `composition` to an EDN file (music area handoff artifact)
+
+  *Topology (3 tools):*
+  - `list-peers` — peer topology registry: all discovered nodes with backends
+  - `evaluate-on-peer` — eval on any named node in the topology; proxied through
+    `cljseq.remote/eval-on-peer!` on the primary nREPL
+- **`*eval-fn*` / `*io-fns*` dynamic vars** — test injection for nREPL eval and
+  stdin/stdout; no live network required in tests
+- **26 tests, 144 assertions** in `cljseq.mcp-test`
+
+---
+
 ## [0.8.0] — 2026-04-10
 
 ### Added
