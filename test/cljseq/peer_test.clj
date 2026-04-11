@@ -27,6 +27,9 @@
 ;; Fixture — reset all state between tests
 ;; ---------------------------------------------------------------------------
 
+(defn- backend-atom [] @#'peer/backend-registry)
+(defn- set-backends! [v] (reset! (backend-atom) v))
+
 (use-fixtures :each
   (fn [t]
     ;; Save and restore profile so tests do not bleed into each other
@@ -38,9 +41,11 @@
                                :version    "0.4.0"})
       (set-registry! {})
       (set-mount!    {})
+      (set-backends! {})
       (t)
       (set-registry! {})
       (set-mount!    {})
+      (set-backends! {})
       (reset! (profile-atom) saved))))
 
 ;; ---------------------------------------------------------------------------
@@ -376,3 +381,72 @@
     ;; The defonce atoms start at nil; we may have stopped in the fixture
     (when (peer/discovery-running?) (peer/stop-discovery!))
     (is (false? (peer/discovery-running?)))))
+
+;; ---------------------------------------------------------------------------
+;; Backend registry — Layer 3
+;; ---------------------------------------------------------------------------
+
+(deftest register-backend-adds-entry
+  (testing "register-backend! stores backend info"
+    (peer/register-backend! :sc {:host "127.0.0.1" :sc-port 57110})
+    (is (= {:sc {:host "127.0.0.1" :sc-port 57110}}
+           (peer/active-backends)))))
+
+(deftest deregister-backend-removes-entry
+  (testing "deregister-backend! removes a previously registered backend"
+    (peer/register-backend! :sc {:host "127.0.0.1" :sc-port 57110})
+    (peer/deregister-backend! :sc)
+    (is (empty? (peer/active-backends)))))
+
+(deftest deregister-backend-noop-when-not-present
+  (testing "deregister-backend! is a no-op for unknown backends"
+    (is (nil? (peer/deregister-backend! :missing)))))
+
+(deftest active-backends-empty-initially
+  (testing "active-backends returns empty map when no backends registered"
+    (set-backends! {})
+    (is (= {} (peer/active-backends)))))
+
+(deftest active-backends-multiple
+  (testing "multiple backends can be registered simultaneously"
+    (peer/register-backend! :sc       {:host "127.0.0.1" :sc-port 57110})
+    (peer/register-backend! :surge-xt {:host "127.0.0.1" :osc-port 9001})
+    (is (= 2 (count (peer/active-backends))))
+    (is (contains? (peer/active-backends) :sc))
+    (is (contains? (peer/active-backends) :surge-xt))))
+
+(deftest beacon-includes-backends
+  (testing "beacon-payload includes :backends map from backend registry"
+    (set-backends! {:sc {:host "127.0.0.1" :sc-port 57110}})
+    (let [parsed (edn/read-string (#'peer/beacon-payload))]
+      (is (contains? parsed :backends))
+      (is (= {:sc {:host "127.0.0.1" :sc-port 57110}}
+             (:backends parsed))))))
+
+(deftest beacon-backends-empty-when-no-backends
+  (testing "beacon-payload :backends is empty map when no backends registered"
+    (set-backends! {})
+    (let [parsed (edn/read-string (#'peer/beacon-payload))]
+      (is (= {} (:backends parsed))))))
+
+(deftest peer-backends-returns-backends-from-beacon
+  (testing "peer-backends returns the :backends from a discovered peer's beacon data"
+    (set-registry! {:ubuntu {:node-id :ubuntu
+                              :host "192.168.1.10"
+                              :http-port 7177
+                              :backends {:sc {:host "192.168.1.10" :sc-port 57110}}
+                              :last-seen-ms (System/currentTimeMillis)}})
+    (is (= {:sc {:host "192.168.1.10" :sc-port 57110}}
+           (peer/peer-backends :ubuntu)))))
+
+(deftest peer-backends-nil-for-unknown-peer
+  (testing "peer-backends returns nil when peer not in registry"
+    (set-registry! {})
+    (is (nil? (peer/peer-backends :nonexistent)))))
+
+(deftest peer-backends-nil-when-no-backends-field
+  (testing "peer-backends returns nil when peer beacon has no :backends"
+    (set-registry! {:old-node {:node-id :old-node :host "10.0.0.1"
+                                :http-port 7177
+                                :last-seen-ms (System/currentTimeMillis)}})
+    (is (nil? (peer/peer-backends :old-node)))))

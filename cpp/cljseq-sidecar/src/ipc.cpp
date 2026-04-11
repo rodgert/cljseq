@@ -95,19 +95,21 @@ void write_le_double(uint8_t* p, double v) noexcept {
 // ---------------------------------------------------------------------------
 
 enum class MsgType : uint8_t {
-    NoteOn       = 0x01,
-    NoteOff      = 0x02,
-    CC           = 0x03,
-    PitchBend    = 0x04,  // per-note MPE pitch bend
-    ChanPressure = 0x05,  // per-channel pressure (MPE aftertouch)
-    SysEx        = 0x06,  // raw SysEx blob (payload = F0 ... F7)
-    LinkEnable   = 0x10,
-    LinkDisable  = 0x11,
-    LinkSetBpm   = 0x12,
-    MidiIn       = 0x20,  // sidecar→JVM: MIDI message received on input port
-    LinkState    = 0x80,
-    Ping         = 0xF0,
-    Shutdown     = 0xFF,
+    NoteOn              = 0x01,
+    NoteOff             = 0x02,
+    CC                  = 0x03,
+    PitchBend           = 0x04,  // per-note MPE pitch bend
+    ChanPressure        = 0x05,  // per-channel pressure (MPE aftertouch)
+    SysEx               = 0x06,  // raw SysEx blob (payload = F0 ... F7)
+    LinkEnable          = 0x10,
+    LinkDisable         = 0x11,
+    LinkSetBpm          = 0x12,
+    LinkTransportStart  = 0x13,  // JVM→sidecar: request transport start
+    LinkTransportStop   = 0x14,  // JVM→sidecar: request transport stop
+    MidiIn              = 0x20,  // sidecar→JVM: MIDI message received on input port
+    LinkState           = 0x80,
+    Ping                = 0xF0,
+    Shutdown            = 0xFF,
 };
 
 // ---------------------------------------------------------------------------
@@ -268,6 +270,14 @@ private:
                 double bpm = read_le_double(payload);
                 link_.set_bpm(bpm);
             }
+            break;
+
+        case MsgType::LinkTransportStart:
+            link_.start_playing();
+            break;
+
+        case MsgType::LinkTransportStop:
+            link_.stop_playing();
             break;
 
         case MsgType::Ping:

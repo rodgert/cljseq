@@ -51,6 +51,7 @@
             [cljseq.fm       :as fm]
             [cljseq.osc      :as osc]
             [cljseq.patch    :as patch]
+            [cljseq.peer     :as peer]
             [cljseq.synth    :as synth]))
 
 ;; ---------------------------------------------------------------------------
@@ -97,6 +98,7 @@
          :connected true)
   (reset! sent-synthdefs #{})
   (reset! bus-alloc {:audio-next 8 :control-next 0 :named {}})
+  (peer/register-backend! :sc {:host host :sc-port sc-port :lang-port lang-port})
   (println (str "[sc] connected to " host " (scsynth:" sc-port " sclang:" lang-port ")"))
   nil)
 
@@ -106,6 +108,7 @@
   (swap! sc-state assoc :connected false)
   (reset! sent-synthdefs #{})
   (reset! bus-alloc {:audio-next 8 :control-next 0 :named {}})
+  (peer/deregister-backend! :sc)
   (println "[sc] disconnected")
   nil)
 

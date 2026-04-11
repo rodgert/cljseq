@@ -17,6 +17,7 @@
   Q11 (live-loop alias), Q1 (virtual time), phase0-readiness.md."
   (:require [cljseq.clock           :as clock]
             [cljseq.conductor       :as conductor]
+            [cljseq.config          :as config]
             [cljseq.ctrl            :as ctrl]
             [cljseq.flux            :as flux]
             [cljseq.link            :as link]
@@ -91,6 +92,14 @@
   (doseq [[_ entry] (:loops @system-state)]
     (when-let [^Thread t (:thread entry)]
       (LockSupport/unpark t)))
+  ;; Phase 2: propagate tempo change to the Link session when active.
+  ;; This makes (core/set-bpm! x) equivalent to (link/set-bpm! x) when linked.
+  (when (link/active?)
+    (link/set-bpm! bpm))
+  ;; Sync BPM to ctrl tree so HTTP GET /ctrl/config/bpm reflects current value.
+  ;; Guarded by timeline presence (proxy for start! having been called).
+  (when (:timeline @system-state)
+    (ctrl/set! [:config :bpm] (double bpm)))
   nil)
 
 ;; ---------------------------------------------------------------------------
@@ -110,16 +119,24 @@
     (swap! system-state
            (fn [s]
              (-> s
-                 (assoc-in [:config :bpm] bpm)
+                 (assoc :config (assoc (config/default-config) :bpm bpm))
                  (assoc :timeline {:bpm            bpm
                                    :beat0-epoch-ms now-ms
-                                   :beat0-beat     0.0}))))
+                                   :beat0-beat     0.0})
+                 (assoc :undo-stack [])
+                 (dissoc :link-state :link-timeline))))
     (loop-ns/-register-system! system-state)
     (ctrl/-register-system! system-state)
     (flux/-register-system! system-state)
     (tbuf/-register-system! system-state)
     (link/-register-system! system-state)
     (mod/-register-system! system-state)
+    (config/-register-system! system-state)
+    ;; Register side effects for params with runtime consequences.
+    ;; :bpm — full timeline reanchor + thread unpark + Link propagation.
+    (config/-register-effect! :bpm set-bpm!)
+    ;; Seed ctrl tree nodes for all registry params (HTTP/OSC read access).
+    (config/seed-ctrl-tree!)
     (println (str "cljseq started at " bpm " BPM"))
     nil))
 

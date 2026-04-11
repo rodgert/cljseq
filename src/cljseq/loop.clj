@@ -209,9 +209,12 @@
   so the loop joins the session in phase (§15.4).
   When Link is inactive, returns the current beat immediately."
   ^double []
-  (let [current (-current-beat)]
+  (let [current (-current-beat)
+        quantum (or (when-let [s @system-ref]
+                      (clojure.core/get-in @s [:config :link/quantum]))
+                    4)]
     (if (link/active?)
-      (link/next-quantum-beat current 4)
+      (link/next-quantum-beat current quantum)
       current)))
 
 (defn- park-until-beat!

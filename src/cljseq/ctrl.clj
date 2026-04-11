@@ -102,16 +102,18 @@
 
 (defn- push-undo
   "Return updated state with the current :tree and :serial pushed onto the
-  undo stack, bounded at default-undo-depth."
+  undo stack, bounded at the configured depth (falls back to default-undo-depth)."
   [state]
-  (update state :undo-stack
-          (fn [stack]
-            (let [entry    {:tree   (:tree state)
-                            :serial (:serial state)}
-                  new-stack (conj stack entry)]
-              (if (> (count new-stack) default-undo-depth)
-                (subvec new-stack 1)
-                new-stack)))))
+  (let [depth (or (clojure.core/get-in state [:config :ctrl/undo-stack-depth])
+                  default-undo-depth)]
+    (update state :undo-stack
+            (fn [stack]
+              (let [entry     {:tree   (:tree state)
+                               :serial (:serial state)}
+                    new-stack (conj stack entry)]
+                (if (> (count new-stack) depth)
+                  (subvec new-stack 1)
+                  new-stack))))))
 
 (defn- fire-watchers!
   "Fire all watchers registered on `path` with `value`.
