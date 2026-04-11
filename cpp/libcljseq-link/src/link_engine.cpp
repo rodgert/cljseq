@@ -61,6 +61,22 @@ void LinkEngine::set_bpm(double bpm) {
     // push_state() will fire via the tempo callback registered in the ctor.
 }
 
+void LinkEngine::start_playing() {
+    if (!active_.load()) return;
+    auto state = link_.captureAppSessionState();
+    state.setIsPlaying(true, link_.clock().micros());
+    link_.commitAppSessionState(state);
+    // push_state() will fire via the startStop callback registered in the ctor.
+}
+
+void LinkEngine::stop_playing() {
+    if (!active_.load()) return;
+    auto state = link_.captureAppSessionState();
+    state.setIsPlaying(false, link_.clock().micros());
+    link_.commitAppSessionState(state);
+    // push_state() will fire via the startStop callback registered in the ctor.
+}
+
 void LinkEngine::set_state_callback(LinkStateCallback cb) {
     std::lock_guard<std::mutex> lock(cb_mutex_);
     state_cb_ = std::move(cb);

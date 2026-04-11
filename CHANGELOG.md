@@ -10,6 +10,117 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.8.0] — 2026-04-10
+
+### Added
+
+#### cljseq.composition (renamed from cljseq.midi-repair)
+
+- **Namespace renamed** — `cljseq.midi-repair` → `cljseq.composition`; framing changed from
+  "repair" to "composition": capturing a musical idea from hardware, working it as a Clojure
+  value with the full cljseq vocabulary
+- **`ingest!` replaces `repair-pipeline!`** — same pipeline, clearer name
+
+#### Leviasynth 8-op FM (`cljseq.fm`)
+
+- **Per-operator waveforms** — `:waveform` key per op; `:sin`, `:saw`, `:tri`, `:pulse`,
+  `:sin-fb` (auto-selects `SinOscFB.ar` with `:feedback` depth)
+- **TZFM routing** — routing values accept `{:to target :depth n :tzfm? true}`; frequency
+  scaling makes timbre pitch-invariant; shorthand `{mod-id target-id}` still supported
+- **Cross-feedback** — `:cross-feedback [{:from A :to B :depth n} ...]` generates
+  `LocalIn.ar` / `LocalOut.ar` SC pairs for inter-operator feedback loops
+- **5 new 8-op algorithm templates**: `:8op-stack`, `:4-pairs`, `:2x4-stacks`, `:8-carriers`,
+  `:4mod-1`
+- **4 named 8-op presets**: `:8op-brass` (series chain + TZFM), `:8op-bells` (4 C+M pairs
+  with cross-feedback), `:8op-evolving-pad` (transient mods + `SinOscFB` op),
+  `:8op-dx7-pno` (DX7-inspired piano)
+
+#### OSC push-subscribe (§17 Phase 3)
+
+- **`subscribe!`** — register `{host port}` to receive OSC push when a ctrl tree path changes;
+  installs a `ctrl/watch!` watcher on the subscribed path
+- **`unsubscribe!`** — cancel a specific subscription; removes the watcher when last subscriber leaves
+- **`unsubscribe-all!`** — clear all subscribers for a path
+- **`subscribers`** — return the subscriber registry snapshot
+- **`ctrl-path->osc-address`** — convert `[:filter/cutoff]` → `"/ctrl/filter%2Fcutoff"` (inverse
+  of the existing `parse-ctrl-path`); exported from `cljseq.user`
+- **`/sub` wire route** — inbound OSC: `/sub <ctrl-addr> <callback-host> <callback-port>`;
+  registers a subscription the same way as `subscribe!`
+- **`/unsub` wire route** — inbound OSC: `/unsub <ctrl-addr> <callback-host> <callback-port>`
+- **`/tree` wire route** — pull-on-demand: `/tree <ctrl-addr>`; server pushes the current value
+  back to the packet's sender address; complements HTTP GET `/ctrl/<path>`
+- **`*push-fn*` dynamic var** — injectable for tests; defaults to `osc-send!`
+- All functions exported from `cljseq.user` as `osc-subscribe!`, `osc-unsubscribe!`,
+  `osc-unsubscribe-all!`, `osc-subscribers`, `ctrl-path->osc-address`, plus the existing
+  `start-osc-server!`, `stop-osc-server!`, `osc-running?`, `osc-port`, `osc-send!`
+
+#### Configuration Registry (§25)
+
+- **`cljseq.config`** — new namespace: registry of all §25 tunable parameters with
+  defaults, types, docs, and validation functions
+- **`get-config`** / **`set-config!`** / **`all-configs`** / **`all-param-keys`** / **`param-info`** —
+  Clojure API for reading and writing config values with validation
+- **Ctrl tree seeding** — `core/start!` calls `config/seed-ctrl-tree!` which creates typed
+  ctrl nodes for all registry params; all 11 parameters immediately visible via
+  `GET /ctrl/config/<key>` without extra wiring
+- **BPM sync** — `core/set-bpm!` now writes to `[:config :bpm]` in the ctrl tree so
+  `GET /ctrl/config/bpm` always reflects the live tempo
+- **`set-config! :bpm v`** applies the full side effect (timeline reanchor + thread
+  unpark + Link propagation) via the injected effect registry
+- **`:link/quantum` connected** — `loop/-start-beat` reads the quantum from
+  `system-state [:config :link/quantum]` (default 4) instead of a hard-coded literal;
+  `set-config! :link/quantum 8` takes effect on the next loop start
+- **`:ctrl/undo-stack-depth` connected** — `ctrl/push-undo` reads the depth from
+  `system-state [:config :ctrl/undo-stack-depth]` (default 50)
+- **`core/start!` resets config and undo stack** — each `start!` call resets `:config`
+  to registry defaults (with BPM overridden by the `:bpm` argument) and clears
+  `:undo-stack`, ensuring no state leaks between sessions
+- All functions exported from `cljseq.user` as `get-config`, `set-config!`,
+  `all-configs`, `all-param-keys`, `param-info`
+
+#### Ableton Link Phase 2 — bidirectional BPM sync + transport control
+
+- **BPM push (JVM → Link)** — `core/set-bpm!` now calls `link/set-bpm!` when Link is active,
+  propagating local tempo changes to all Link peers automatically
+- **`start-transport!`** — sends IPC 0x13 to the sidecar; commits `isPlaying=true` to the Link
+  session state; all Link peers transition to playing
+- **`stop-transport!`** — sends IPC 0x14; commits `isPlaying=false`; all peers transition to stopped
+- **`on-transport-change!`** — register a `(fn [playing?])` callback fired on every Link transport
+  state transition; hook key allows replacement and removal
+- **`remove-transport-hook!`** — deregister by key; no-op if absent
+- **`transport-hooks`** — return a snapshot of the registered hook map
+- **C++ `LinkEngine::start_playing` / `stop_playing`** — uses
+  `captureAppSessionState` + `setIsPlaying` + `commitAppSessionState` on the Ableton Link session
+- **IPC 0x13 / 0x14** — new `MsgType` entries `LinkTransportStart` / `LinkTransportStop`
+  dispatched in `ipc.cpp`; pure no-ops when Link is not active
+- **`core/start!` clears Link state** — `start!` now dissocs `:link-state` and `:link-timeline`
+  so a fresh system session always begins with Link inactive (prevents stale timeline leaking
+  into tests)
+- All new functions exported from `cljseq.user` as `link-enable!`, `link-disable!`, `link-bpm`,
+  `link-peers`, `link-playing?`, `link-active?`, `link-set-bpm!`, `link-start-transport!`,
+  `link-stop-transport!`, `link-on-transport-change!`, `link-remove-transport-hook!`,
+  `link-transport-hooks`
+
+#### Topology Layer 3 — nREPL remote eval + backend registry
+
+- **`cljseq.bencode`** — minimal hand-rolled bencode encoder/decoder; implements the nREPL
+  wire protocol without adding nREPL as a dependency (see namespace docstring for rationale)
+- **`cljseq.remote`** — nREPL client: `connect!`, `disconnect!`, `remote-eval!`,
+  `eval-on-peer!`, `with-peer` macro; `*open-connection*` dynamic var for test injection
+- **Backend registry in `cljseq.peer`** — `register-backend!`, `deregister-backend!`,
+  `active-backends`, `peer-backends`; beacon now includes `:backends` map so peers see
+  what synthesis backends are reachable
+- **`publish-session-profile!`** — pushes a session profile map to `[:session :profile]`
+  in the ctrl tree for peer discovery
+- **`connect-sc!` / `disconnect-sc!`** now auto-register / deregister the `:sc` backend
+  in the peer backend registry
+- All new public functions exported from `cljseq.user`:
+  `connect-peer!`, `disconnect-peer!`, `remote-eval!`, `eval-on-peer!`, `with-peer`,
+  `register-backend!`, `deregister-backend!`, `active-backends`, `peer-backends`,
+  `publish-session-profile!`
+
+---
+
 ## [0.7.0] — 2026-04-10
 
 ### Added

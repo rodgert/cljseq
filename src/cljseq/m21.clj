@@ -158,7 +158,7 @@
   "Send an arbitrary op request to the m21 server and return the response map.
   Ensures the server is running first. Keys are keywordized in the response.
 
-  Used by cljseq.midi-repair and other namespaces that extend the m21 protocol.
+  Used by cljseq.composition and other namespaces that extend the m21 protocol.
 
   Example:
     (server-call! {:op \"parse-midi\" :path \"/abs/path/file.mid\"})"

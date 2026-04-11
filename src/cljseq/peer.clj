@@ -55,7 +55,12 @@
      :http-port     7177
      :nrepl-port    7888
      :version       \"0.4.0\"
+     :backends      {:sc {:host \"127.0.0.1\" :sc-port 57110}}
      :timestamp-ms  1712678400000}
+
+  The `:backends` map carries the synthesis backends currently active on
+  this node. Peers can inspect it with `peer-backends`. Layer 3 nREPL
+  remote-eval uses `:nrepl-port` to open a connection.
 
   Sender: DatagramSocket → multicast group.
   Receiver: MulticastSocket joined to the same group.
@@ -150,6 +155,84 @@
 (defonce ^:private mount-registry (atom {}))
 
 ;; ---------------------------------------------------------------------------
+;; Backend registry — Layer 3
+;;
+;; Tracks synthesis backends currently active on this node.
+;; {backend-kw info-map}  e.g. {:sc {:host "127.0.0.1" :sc-port 57110}}
+;; Included in beacon so peers know what backends are reachable.
+;; ---------------------------------------------------------------------------
+
+(defonce ^:private backend-registry (atom {}))
+
+(defn register-backend!
+  "Register a synthesis backend as active on this node.
+
+  `backend-kw` — keyword identifying the backend (e.g. `:sc`, `:surge-xt`)
+  `info`        — map of connection details to advertise in the beacon
+
+  Called automatically by `cljseq.sc/connect-sc!`.
+
+  Example:
+    (peer/register-backend! :sc {:host \"127.0.0.1\" :sc-port 57110})"
+  [backend-kw info]
+  (swap! backend-registry assoc backend-kw info)
+  nil)
+
+(defn deregister-backend!
+  "Remove a synthesis backend from the active backend registry.
+
+  Called automatically by `cljseq.sc/disconnect-sc!`.
+
+  Example:
+    (peer/deregister-backend! :sc)"
+  [backend-kw]
+  (swap! backend-registry dissoc backend-kw)
+  nil)
+
+(defn active-backends
+  "Return a snapshot of synthesis backends currently active on this node.
+
+  Returns a map of {backend-kw info-map}.
+
+  Example:
+    (peer/active-backends)
+    ;=> {:sc {:host \"127.0.0.1\" :sc-port 57110}}"
+  []
+  @backend-registry)
+
+(defn peer-backends
+  "Return the backends map advertised by `peer-node-id` in its beacon,
+  or nil if the peer is not in the registry or has no :backends field.
+
+  Example:
+    (peer/peer-backends :ubuntu)
+    ;=> {:sc {:host \"192.168.1.42\" :sc-port 57110}}"
+  [peer-node-id]
+  (:backends (get @peer-registry peer-node-id)))
+
+;; ---------------------------------------------------------------------------
+;; Session profile — Layer 3
+;; ---------------------------------------------------------------------------
+
+(defn publish-session-profile!
+  "Publish a session profile to the ctrl tree at [:session :profile].
+
+  The profile map is arbitrary — intended to capture the current musical
+  context (e.g. active scale, tempo, key synths) so that peers mounting
+  this node via `mount-peer!` can read it.
+
+  Example:
+    (peer/publish-session-profile!
+      {:scale :D-dorian :bpm 120 :synths [:blade :prophet]})"
+  [profile]
+  (try
+    (ctrl/set! [:session :profile] profile)
+    (catch Exception e
+      (binding [*out* *err*]
+        (println "[peer] publish-session-profile! error:" (.getMessage e)))))
+  nil)
+
+;; ---------------------------------------------------------------------------
 ;; HTTP GET helper — injectable via dynamic binding for tests
 ;; ---------------------------------------------------------------------------
 
@@ -233,9 +316,12 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- beacon-payload
-  "Return this node's beacon as a pr-str EDN string."
+  "Return this node's beacon as a pr-str EDN string.
+  Includes :backends so peers know what synthesis backends are reachable."
   []
-  (pr-str (assoc @node-profile-atom :timestamp-ms (System/currentTimeMillis))))
+  (pr-str (assoc @node-profile-atom
+                 :backends     @backend-registry
+                 :timestamp-ms (System/currentTimeMillis))))
 
 (defn- make-beacon-thread
   "Create (but do not start) the UDP multicast beacon sender thread."

@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.link
-  "cljseq Ableton Link integration.
+  "cljseq Ableton Link integration — Phase 1 + Phase 2.
 
   Coordinates with the C++ sidecar's LinkEngine via the IPC protocol.
   When Link is active, cljseq.loop/sleep! uses the Link timeline instead of
@@ -11,9 +11,11 @@
     (link/enable!)              ; join/create a Link session
     (link/bpm)                  ; => session BPM (from most recent push)
     (link/peers)                ; => number of connected peers
+    (link/start-transport!)     ; request all peers begin playing
+    (link/stop-transport!)      ; request all peers stop playing
     (link/disable!)             ; leave the session
 
-  ## How it works
+  ## How it works (Phase 1)
   The sidecar pushes a LinkState frame (IPC 0x80) whenever tempo, peer count,
   or transport state changes. This namespace registers a push handler at load
   time. Each push updates :link-timeline in system-state — a map with the same
@@ -22,6 +24,19 @@
   cljseq.loop/sleep! checks (link/active?) and, when true, uses :link-timeline
   to compute its wall-clock deadline. BPM changes from other Link peers take
   effect on the next sleep! call with no explicit broadcast (Q60-equivalent).
+
+  ## Phase 2 additions
+
+  * **BPM push (JVM → Link)**: `core/set-bpm!` calls `link/set-bpm!` when Link
+    is active, propagating local tempo changes to all Link peers.
+
+  * **Transport start/stop**: `start-transport!` / `stop-transport!` send IPC
+    0x13 / 0x14 to the sidecar, which commits the change to the Link session and
+    notifies all peers. The transport state is broadcast back via the 0x80 push.
+
+  * **Transport-change hooks**: register a callback with `on-transport-change!`
+    to react when the Link session's playing state changes (e.g. start/stop
+    cljseq live loops from a Link peer's transport button).
 
   Key design decisions: Q7 (Link integration), §15 of R&R doc."
   (:require [cljseq.sidecar :as sidecar])
@@ -39,6 +54,15 @@
   Not part of the public API."
   [state-atom]
   (reset! system-ref state-atom))
+
+;; ---------------------------------------------------------------------------
+;; Transport-change hook registry (Phase 2)
+;;
+;; {hook-key fn} — fn called (fn [playing?]) on every transport state change.
+;; Hooks fire synchronously on the sidecar reader thread; keep them fast.
+;; ---------------------------------------------------------------------------
+
+(defonce ^:private transport-hook-registry (atom {}))
 
 ;; ---------------------------------------------------------------------------
 ;; LinkState push handler — registered with sidecar at namespace load time
@@ -72,21 +96,32 @@
 
 (defn- on-link-state-push
   "Handle a 0x80 LinkState push from the sidecar.
-  Updates :link-state and :link-timeline in system-state and unparks
-  all sleeping loop threads so they recompute their deadline (same
-  mechanism as Q60)."
+  Updates :link-state and :link-timeline in system-state, unparks
+  sleeping loop threads so they recompute their deadline (Q60),
+  and fires transport-change hooks when the playing state changes."
   [^bytes payload]
   (when-let [ls (parse-link-state payload)]
     (when-let [s @system-ref]
-      (swap! s (fn [state]
-                 (-> state
-                     (assoc :link-state    ls)
-                     (assoc :link-timeline (link-state->timeline ls)))))
-      ;; Unpark sleeping loop threads — they will recompute their wall-clock
-      ;; deadline against the updated :link-timeline on next park-until-beat!
-      (doseq [[_ entry] (:loops @s)]
-        (when-let [^Thread t (:thread entry)]
-          (LockSupport/unpark t))))))
+      (let [prev-playing (get-in @s [:link-state :playing])]
+        (swap! s (fn [state]
+                   (-> state
+                       (assoc :link-state    ls)
+                       (assoc :link-timeline (link-state->timeline ls)))))
+        ;; Unpark sleeping loop threads so they recompute their deadline.
+        (doseq [[_ entry] (:loops @s)]
+          (when-let [^Thread t (:thread entry)]
+            (LockSupport/unpark t)))
+        ;; Fire transport-change hooks when playing state transitions.
+        ;; Treat nil (no prior state) as false so the first push doesn't
+        ;; spuriously fire hooks when the session initialises as stopped.
+        (when (not= (boolean prev-playing) (boolean (:playing ls)))
+          (let [playing? (:playing ls)]
+            (doseq [[_ hook-fn] @transport-hook-registry]
+              (try
+                (hook-fn playing?)
+                (catch Exception e
+                  (binding [*out* *err*]
+                    (println "[link] transport hook error:" (.getMessage e))))))))))))
 
 ;; Register push handler at namespace load time. The handler survives
 ;; stop!/start! cycles; sidecar/register-push-handler! just updates a map.
@@ -156,6 +191,62 @@
   [bpm]
   (when (sidecar/connected?)
     (sidecar/send-link-set-bpm! (double bpm))))
+
+(defn start-transport!
+  "Request transport start on the Link session.
+  Sends IPC 0x13 to the sidecar; the sidecar commits `isPlaying=true` to the
+  Link session state. All Link peers will transition to playing.
+  The 0x80 push will follow and fire any registered transport-change hooks.
+
+  Requires the sidecar to be connected and Link to be enabled."
+  []
+  (when (sidecar/connected?)
+    (sidecar/send-link-transport-start!)))
+
+(defn stop-transport!
+  "Request transport stop on the Link session.
+  Sends IPC 0x14 to the sidecar; the sidecar commits `isPlaying=false` to the
+  Link session state. All Link peers will transition to stopped.
+  The 0x80 push will follow and fire any registered transport-change hooks.
+
+  Requires the sidecar to be connected and Link to be enabled."
+  []
+  (when (sidecar/connected?)
+    (sidecar/send-link-transport-stop!)))
+
+;; ---------------------------------------------------------------------------
+;; Transport-change hooks — Phase 2
+;; ---------------------------------------------------------------------------
+
+(defn on-transport-change!
+  "Register a hook function called whenever the Link transport state changes.
+
+  `hook-key` — any value; used to identify and remove the hook.
+  `f`         — (fn [playing?]) where playing? is true when transport started,
+                false when stopped. Called synchronously on the sidecar reader
+                thread — keep it fast; throw exceptions are caught and logged.
+
+  Re-registering the same key replaces the previous hook.
+
+  Example:
+    (link/on-transport-change! ::my-hook
+      (fn [playing?]
+        (if playing? (session!) (end-session!))))"
+  [hook-key f]
+  (swap! transport-hook-registry assoc hook-key f)
+  nil)
+
+(defn remove-transport-hook!
+  "Remove the transport-change hook identified by `hook-key`.
+  No-op if the key is not registered."
+  [hook-key]
+  (swap! transport-hook-registry dissoc hook-key)
+  nil)
+
+(defn transport-hooks
+  "Return a snapshot of the currently registered transport-change hooks."
+  []
+  @transport-hook-registry)
 
 ;; ---------------------------------------------------------------------------
 ;; Quantum alignment helpers (used by deflive-loop when Link is active)

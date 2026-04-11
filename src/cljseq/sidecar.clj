@@ -98,11 +98,13 @@
 (def ^:private MSG-PITCH-BEND   (unchecked-byte 0x04))  ; per-note MPE pitch bend
 (def ^:private MSG-CHAN-PRESSURE (unchecked-byte 0x05)) ; per-channel pressure (MPE)
 (def ^:private MSG-SYSEX        (unchecked-byte 0x06))  ; raw SysEx blob (F0 ... F7)
-(def ^:private MSG-LINK-ENABLE  (unchecked-byte 0x10))
-(def ^:private MSG-LINK-DISABLE (unchecked-byte 0x11))
-(def ^:private MSG-LINK-SET-BPM (unchecked-byte 0x12))
-(def ^:private MSG-MIDI-IN      (unchecked-byte 0x20))  ; sidecar→JVM: MIDI input received
-(def ^:private MSG-LINK-STATE   (unchecked-byte 0x80))
+(def ^:private MSG-LINK-ENABLE           (unchecked-byte 0x10))
+(def ^:private MSG-LINK-DISABLE          (unchecked-byte 0x11))
+(def ^:private MSG-LINK-SET-BPM          (unchecked-byte 0x12))
+(def ^:private MSG-LINK-TRANSPORT-START  (unchecked-byte 0x13))
+(def ^:private MSG-LINK-TRANSPORT-STOP   (unchecked-byte 0x14))
+(def ^:private MSG-MIDI-IN               (unchecked-byte 0x20))  ; sidecar→JVM: MIDI input received
+(def ^:private MSG-LINK-STATE            (unchecked-byte 0x80))
 (def ^:private MSG-PING         (unchecked-byte 0xF0))
 (def ^:private MSG-SHUTDOWN     (unchecked-byte 0xFF))
 
@@ -290,6 +292,20 @@
     (.order buf ByteOrder/LITTLE_ENDIAN)
     (.putDouble buf bpm)
     (send-frame! (make-frame MSG-LINK-SET-BPM (.array buf)))))
+
+(defn send-link-transport-start!
+  "Request transport start on the Link session.
+  All Link peers will transition to playing state.
+  No-op if the sidecar is not connected."
+  []
+  (send-frame! (make-frame MSG-LINK-TRANSPORT-START (byte-array 0))))
+
+(defn send-link-transport-stop!
+  "Request transport stop on the Link session.
+  All Link peers will transition to stopped state.
+  No-op if the sidecar is not connected."
+  []
+  (send-frame! (make-frame MSG-LINK-TRANSPORT-STOP (byte-array 0))))
 
 ;; ---------------------------------------------------------------------------
 ;; Inbound frame reader (sidecar → JVM)

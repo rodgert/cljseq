@@ -77,6 +77,15 @@ public:
     /// No-op when inactive.
     virtual void set_bpm(double bpm) = 0;
 
+    /// Request that the Link session begin playing (transport start).
+    /// The change is committed to the session state and peers are notified.
+    /// No-op when inactive.
+    virtual void start_playing() = 0;
+
+    /// Request that the Link session stop playing (transport stop).
+    /// No-op when inactive.
+    virtual void stop_playing() = 0;
+
     /// Register the callback that receives LinkState pushes.
     /// Must be called before enable().
     virtual void set_state_callback(LinkStateCallback cb) = 0;
@@ -97,6 +106,8 @@ public:
     void disable() override {}
     bool active() const override { return false; }
     void set_bpm(double /*bpm*/) override {}
+    void start_playing() override {}
+    void stop_playing() override {}
     void set_state_callback(LinkStateCallback /*cb*/) override {}
     AudioClockSnapshot capture_audio_clock() const override {
         return {120.0, 0.0, false};

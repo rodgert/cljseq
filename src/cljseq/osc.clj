@@ -1,15 +1,32 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.osc
-  "OSC (Open Sound Control) UDP receiver — §17 Phase 2.
+  "OSC (Open Sound Control) UDP receiver + push-subscribe — §17 Phase 2/3.
 
   Listens on a UDP port for OSC messages and routes them to the ctrl tree
   using the same addressing scheme as the HTTP control-plane server.
 
-  ## Routes
+  ## Inbound routes (Phase 2)
 
     /ping                       — log receipt (no-op)
     /bpm  <f-or-i>              — set master BPM
     /ctrl/<p0>/<p1>/...  <val>  — write value to ctrl path [p0 p1 ...]
+
+  ## Push-subscribe routes (Phase 3)
+
+    /sub   <ctrl-addr> <callback-host> <callback-port>
+      — subscribe to changes at ctrl-addr; server pushes to callback on every write
+
+    /unsub <ctrl-addr> <callback-host> <callback-port>
+      — cancel a specific subscription
+
+    /tree  <ctrl-addr>
+      — pull: server pushes the current value at ctrl-addr back to the sender
+
+  Push messages use the same address as the subscribed ctrl-addr, e.g.:
+    /ctrl/filter%2Fcutoff 0.75     (float32)
+    /ctrl/loops/bass/vel 88        (int32)
+    /ctrl/some/key \"value\"         (string)
+    /ctrl/opaque/data \"(pr-str v)\" (all other types serialized via pr-str)
 
   ## Path encoding
 
@@ -18,7 +35,7 @@
     /ctrl/filter%2Fcutoff  →  [:filter/cutoff]
     /ctrl/loops/bass       →  [:loops :bass]
 
-  ## Supported OSC argument types
+  ## Supported OSC argument types (inbound)
 
     f — float32 (standard OSC single-precision float)
     i — int32
@@ -30,11 +47,24 @@
   ## Start / stop
 
     (osc/start-osc-server! :port 57120)
-    (osc/stop-osc-server!)"
+    (osc/stop-osc-server!)
+
+  ## Push-subscribe quick start
+
+    ;; Subscribe a peer at 192.168.1.42:9000 to filter cutoff changes
+    (osc/subscribe! [:filter/cutoff] \"192.168.1.42\" 9000)
+
+    ;; Peer receives OSC push: /ctrl/filter%2Fcutoff 0.75 whenever cutoff changes
+
+    ;; Pull current value (responds to sender's address via /tree roundtrip)
+    ;; — wire: client sends /tree /ctrl/filter%2Fcutoff to this server's port
+
+    ;; Cancel subscription
+    (osc/unsubscribe! [:filter/cutoff] \"192.168.1.42\" 9000)"
   (:require [clojure.string :as str]
             [cljseq.ctrl    :as ctrl]
             [cljseq.core    :as core])
-  (:import  [java.net DatagramSocket DatagramPacket InetSocketAddress URLDecoder]
+  (:import  [java.net DatagramSocket DatagramPacket InetSocketAddress URLDecoder URLEncoder]
             [java.nio ByteBuffer ByteOrder]
             [java.nio.charset StandardCharsets]
             [java.util Arrays]))
@@ -45,7 +75,144 @@
 
 (defonce ^:private server-atom (atom nil))
 
-(declare stop-osc-server!)
+;; Subscriber registry — {ctrl-path #{:host :port}}
+(defonce ^:private subscriber-registry (atom {}))
+
+(declare stop-osc-server! osc-send!)
+
+;; ---------------------------------------------------------------------------
+;; Push-subscribe: injectable send function for testing
+;; ---------------------------------------------------------------------------
+
+(def ^:dynamic *push-fn*
+  "Function used to deliver push messages: `(fn [host port address & args])`.
+  Defaults to `osc-send!`. Rebind in tests to capture outbound push calls."
+  nil)   ; forward-declared; set after osc-send! is defined
+
+;; ---------------------------------------------------------------------------
+;; Path ↔ OSC address helpers
+;; ---------------------------------------------------------------------------
+
+(defn ctrl-path->osc-address
+  "Convert a ctrl-tree path vector to an OSC address string.
+
+  Inverse of `parse-ctrl-path`. Namespaced keywords are URL-encoded:
+    [:filter/cutoff]  →  \"/ctrl/filter%2Fcutoff\"
+    [:loops :bass]    →  \"/ctrl/loops/bass\"
+
+  Example:
+    (ctrl-path->osc-address [:filter/cutoff])   ;=> \"/ctrl/filter%2Fcutoff\"
+    (ctrl-path->osc-address [:loops :bass :vel]) ;=> \"/ctrl/loops/bass/vel\""
+  [path]
+  (str "/ctrl/"
+       (str/join "/"
+                 (map (fn [k]
+                        (URLEncoder/encode
+                          (str (when (namespace k) (str (namespace k) "/")) (name k))
+                          "UTF-8"))
+                      path))))
+
+;; ---------------------------------------------------------------------------
+;; Push watcher
+;; ---------------------------------------------------------------------------
+
+(defn- coerce-for-osc
+  "Coerce `value` to a type that `osc-send!` accepts (Long, Double, or String)."
+  [value]
+  (cond
+    (nil? value)      "nil"
+    (integer? value)  (long value)
+    (number? value)   (double value)
+    (string? value)   value
+    :else             (pr-str value)))
+
+(defn- sub-watcher-key
+  "The ctrl watch-key used for a subscribed path."
+  [path]
+  [::sub path])
+
+(defn- make-push-watcher
+  "Return a ctrl watcher fn that pushes the value to all registered subscribers
+  for `path` using `*push-fn*` (or `osc-send!` when not rebound)."
+  [path]
+  (fn [_ value]
+    (when-let [subs (seq (get @subscriber-registry path))]
+      (let [address (ctrl-path->osc-address path)
+            coerced (coerce-for-osc value)
+            send-fn (or *push-fn* osc-send!)]
+        (doseq [{:keys [host port]} subs]
+          (try
+            (send-fn host port address coerced)
+            (catch Exception e
+              (binding [*out* *err*]
+                (println "[osc/pub] push error →" host ":" port ":" (.getMessage e))))))))))
+
+(defn- ensure-watcher!
+  "Install a ctrl push watcher on `path` if not already present."
+  [path]
+  (ctrl/watch! path (sub-watcher-key path) (make-push-watcher path)))
+
+(defn- remove-watcher-if-empty!
+  "Remove the ctrl push watcher for `path` if there are no more subscribers."
+  [path]
+  (when (empty? (get @subscriber-registry path))
+    (ctrl/unwatch! path (sub-watcher-key path))))
+
+;; ---------------------------------------------------------------------------
+;; Public push-subscribe API
+;; ---------------------------------------------------------------------------
+
+(defn subscribe!
+  "Subscribe `host`:`port` to receive OSC push messages whenever the ctrl
+  tree value at `path` changes.
+
+  The push message is sent as an OSC datagram to `host`:`port` with the
+  OSC address `(ctrl-path->osc-address path)`. The value is coerced:
+    numbers → float64 (f)
+    integers → int32 (i) [see `coerce-for-osc`]
+    strings → string (s)
+    other   → pr-str string (s)
+
+  Idempotent: re-subscribing the same {path host port} is a no-op.
+
+  Example:
+    (osc/subscribe! [:filter/cutoff] \"192.168.1.42\" 9000)"
+  [path host port]
+  (swap! subscriber-registry update path (fnil conj #{}) {:host host :port port})
+  (ensure-watcher! path)
+  nil)
+
+(defn unsubscribe!
+  "Remove `host`:`port` from push subscribers for `path`.
+  Removes the ctrl watcher when the last subscriber leaves.
+
+  Example:
+    (osc/unsubscribe! [:filter/cutoff] \"192.168.1.42\" 9000)"
+  [path host port]
+  (swap! subscriber-registry update path disj {:host host :port port})
+  (remove-watcher-if-empty! path)
+  nil)
+
+(defn unsubscribe-all!
+  "Remove all subscribers for `path` and the associated ctrl watcher.
+
+  Example:
+    (osc/unsubscribe-all! [:filter/cutoff])"
+  [path]
+  (swap! subscriber-registry dissoc path)
+  (ctrl/unwatch! path (sub-watcher-key path))
+  nil)
+
+(defn subscribers
+  "Return a snapshot of the subscriber registry.
+
+  Returns a map of {ctrl-path #{:host :port}}.
+
+  Example:
+    (osc/subscribers)
+    ;=> {[:filter/cutoff] #{{:host \"192.168.1.42\" :port 9000}}}"
+  []
+  @subscriber-registry)
 
 ;; ---------------------------------------------------------------------------
 ;; OSC wire format helpers
@@ -119,8 +286,9 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- dispatch
-  "Route a decoded OSC message to the appropriate handler."
-  [{:keys [address args]}]
+  "Route a decoded OSC message to the appropriate handler.
+  `sender-host` and `sender-port` are used by /tree to push the response."
+  [{:keys [address args]} sender-host sender-port]
   (cond
     (= "/ping" address)
     (println "[osc] ping")
@@ -128,6 +296,31 @@
     (= "/bpm" address)
     (when-let [bpm (first args)]
       (core/set-bpm! (double bpm)))
+
+    (= "/sub" address)
+    (let [[path-addr callback-host callback-port] args]
+      (when (and path-addr callback-host callback-port)
+        (when-let [path (parse-ctrl-path path-addr)]
+          (subscribe! path callback-host (int callback-port)))))
+
+    (= "/unsub" address)
+    (let [[path-addr callback-host callback-port] args]
+      (when (and path-addr callback-host callback-port)
+        (when-let [path (parse-ctrl-path path-addr)]
+          (unsubscribe! path callback-host (int callback-port)))))
+
+    (= "/tree" address)
+    (let [[path-addr] args]
+      (when (and path-addr sender-host sender-port)
+        (when-let [path (parse-ctrl-path path-addr)]
+          (let [value   (ctrl/get path)
+                coerced (coerce-for-osc value)
+                send-fn (or *push-fn* osc-send!)]
+            (try
+              (send-fn sender-host sender-port (ctrl-path->osc-address path) coerced)
+              (catch Exception e
+                (binding [*out* *err*]
+                  (println "[osc/tree] error:" (.getMessage e)))))))))
 
     (str/starts-with? address "/ctrl/")
     (let [ctrl-path (parse-ctrl-path address)
@@ -154,8 +347,10 @@
         (try
           (.receive sock pkt)
           (when @running?
-            (let [data (Arrays/copyOfRange buf 0 (.getLength pkt))]
-              (try (dispatch (decode-message data))
+            (let [data        (Arrays/copyOfRange buf 0 (.getLength pkt))
+                  sender-host (.getHostAddress (.getAddress pkt))
+                  sender-port (.getPort pkt)]
+              (try (dispatch (decode-message data) sender-host sender-port)
                    (catch Exception e
                      (binding [*out* *err*]
                        (println "[osc] decode error:" (.getMessage e)))))))
@@ -248,6 +443,10 @@
         pkt  (DatagramPacket. msg (alength msg) addr)]
     (with-open [sock (DatagramSocket.)]
       (.send sock pkt))))
+
+;; Set *push-fn* default now that osc-send! is defined.
+;; The forward-declared nil is replaced with the real function.
+(alter-var-root #'*push-fn* (constantly osc-send!))
 
 ;; ---------------------------------------------------------------------------
 ;; Public API

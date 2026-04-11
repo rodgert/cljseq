@@ -34,6 +34,7 @@
   (:require [cljseq.analyze    :as analyze]
             [cljseq.arc        :as arc]
             [cljseq.ardour     :as ardour]
+            [cljseq.link       :as link]
             [cljseq.chord      :as chord]
             [cljseq.conductor  :as conductor]
             [cljseq.core       :as core]
@@ -60,6 +61,9 @@
             [cljseq.sample        :as smp]
             [cljseq.freesound     :as freesound]
             [cljseq.spatial-field :as sf]
+            [cljseq.config     :as config]
+            [cljseq.osc        :as osc]
+            [cljseq.remote     :as remote]
             [cljseq.transform  :as xf]
             [cljseq.voice      :as voice]))
 
@@ -261,6 +265,23 @@
 (def ctx->serial         peer/ctx->serial)
 (def serial->scale       peer/serial->scale)
 
+;; Topology Layer 3 — backends + session profile
+(def register-backend!        peer/register-backend!)
+(def deregister-backend!      peer/deregister-backend!)
+(def active-backends          peer/active-backends)
+(def peer-backends            peer/peer-backends)
+(def publish-session-profile! peer/publish-session-profile!)
+
+;; ---------------------------------------------------------------------------
+;; nREPL remote eval (Topology Layer 3)
+;; ---------------------------------------------------------------------------
+
+(def connect-peer!    remote/connect!)
+(def disconnect-peer! remote/disconnect!)
+(def remote-eval!     remote/remote-eval!)
+(def eval-on-peer!    remote/eval-on-peer!)
+(defmacro with-peer [conn & body] `(remote/with-peer ~conn ~@body))
+
 ;; ---------------------------------------------------------------------------
 ;; Note transformers
 ;; ---------------------------------------------------------------------------
@@ -417,6 +438,21 @@
 (def server-running?  server/server-running?)
 
 ;; ---------------------------------------------------------------------------
+;; OSC receive + push-subscribe (§17 Phase 2/3)
+;; ---------------------------------------------------------------------------
+
+(def start-osc-server!       osc/start-osc-server!)
+(def stop-osc-server!        osc/stop-osc-server!)
+(def osc-running?            osc/osc-running?)
+(def osc-port                osc/osc-port)
+(def osc-send!               osc/osc-send!)
+(def osc-subscribe!          osc/subscribe!)
+(def osc-unsubscribe!        osc/unsubscribe!)
+(def osc-unsubscribe-all!    osc/unsubscribe-all!)
+(def osc-subscribers         osc/subscribers)
+(def ctrl-path->osc-address  osc/ctrl-path->osc-address)
+
+;; ---------------------------------------------------------------------------
 ;; Sidecar shorthand
 ;; ---------------------------------------------------------------------------
 
@@ -454,6 +490,35 @@
 
 (def send-sysex! sidecar/send-sysex!)
 (def send-mts!   sidecar/send-mts!)
+
+;; ---------------------------------------------------------------------------
+;; Ableton Link (Phase 1 + Phase 2)
+;; ---------------------------------------------------------------------------
+
+(def link-enable!             link/enable!)
+(def link-disable!            link/disable!)
+(def link-active?             link/active?)
+(def link-bpm                 link/bpm)
+(def link-peers               link/peers)
+(def link-playing?            link/playing?)
+(def link-set-bpm!            link/set-bpm!)
+(def link-start-transport!    link/start-transport!)
+(def link-stop-transport!     link/stop-transport!)
+(def on-transport-change!     link/on-transport-change!)
+(def remove-transport-hook!   link/remove-transport-hook!)
+(def link-state               link/link-state)
+(def link-timeline            link/link-timeline)
+(def next-quantum-beat        link/next-quantum-beat)
+
+;; ---------------------------------------------------------------------------
+;; Configuration registry (§25)
+;; ---------------------------------------------------------------------------
+
+(def get-config       config/get-config)
+(def set-config!      config/set-config!)
+(def all-configs      config/all-configs)
+(def all-param-keys   config/all-param-keys)
+(def param-info       config/param-info)
 
 ;; ---------------------------------------------------------------------------
 ;; Handy theory shortcuts at the top level

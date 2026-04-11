@@ -48,8 +48,10 @@
             [cljseq.clock    :as clock]
             [cljseq.core     :as core]
             [cljseq.ctrl     :as ctrl]
+            [cljseq.fm       :as fm]
             [cljseq.osc      :as osc]
             [cljseq.patch    :as patch]
+            [cljseq.peer     :as peer]
             [cljseq.synth    :as synth]))
 
 ;; ---------------------------------------------------------------------------
@@ -96,6 +98,7 @@
          :connected true)
   (reset! sent-synthdefs #{})
   (reset! bus-alloc {:audio-next 8 :control-next 0 :named {}})
+  (peer/register-backend! :sc {:host host :sc-port sc-port :lang-port lang-port})
   (println (str "[sc] connected to " host " (scsynth:" sc-port " sclang:" lang-port ")"))
   nil)
 
@@ -105,6 +108,7 @@
   (swap! sc-state assoc :connected false)
   (reset! sent-synthdefs #{})
   (reset! bus-alloc {:audio-next 8 :control-next 0 :named {}})
+  (peer/deregister-backend! :sc)
   (println "[sc] disconnected")
   nil)
 
@@ -307,6 +311,10 @@
   Returns a string suitable for evaluating in the SC IDE or sending
   to sclang via /cmd.
 
+  For synths registered via `synth/register-precompiled!` (e.g. FM synths
+  loaded via `send-fm-synthdef!`) the stored string is returned directly
+  without graph recompilation.
+
   Example:
     (sc/synthdef-str :blade)
     ;=> \"SynthDef(\\\\blade, {\\n  |freq=440.0, ...|\\n  ...\\n}).add;\""
@@ -314,14 +322,16 @@
   (let [synth (synth/get-synth synth-name)]
     (when-not synth
       (throw (ex-info "synthdef-str: synth not found" {:name synth-name})))
-    (let [sc-name   (-> (name synth-name)
-                        (str/replace #"[^a-zA-Z0-9_]" "_"))
-          args-str  (arg-list-str (:args synth))
-          graph-str (emit-node (:graph synth))]
-      (str "SynthDef(\\" sc-name ", {\n"
-           "    " args-str "\n"
-           "    " graph-str "\n"
-           "}).add;"))))
+    (if-let [precompiled (:sc/precompiled synth)]
+      precompiled
+      (let [sc-name   (-> (name synth-name)
+                          (str/replace #"[^a-zA-Z0-9_]" "_"))
+            args-str  (arg-list-str (:args synth))
+            graph-str (emit-node (:graph synth))]
+        (str "SynthDef(\\" sc-name ", {\n"
+             "    " args-str "\n"
+             "    " graph-str "\n"
+             "}).add;")))))
 
 ;; Register :sc backend with the compile-synth multimethod
 (defmethod synth/compile-synth :sc [_ synth-name]
@@ -356,6 +366,40 @@
   []
   (doseq [name (synth/synth-names)]
     (send-synthdef! name)))
+
+(defn send-fm-synthdef!
+  "Compile a registered FM algorithm to SC and send it to the sclang interpreter.
+
+  Also registers the compiled synth in the synth registry (via
+  `synth/register-precompiled!`) so it is addressable via `sc-play!`
+  and `sc-synth!` just like any EDN-defined synth.
+
+  `fm-name-or-def` — a keyword naming a registered FM algorithm (from `fm/def-fm!`)
+                     or an inline fm-def map.
+
+  Returns the synth name keyword.
+
+  Example:
+    (sc/connect-sc!)
+    (sc/send-fm-synthdef! :8op-brass)
+    (sc/sc-play! {:synth :8op-brass :freq 440 :amp 0.5 :dur-ms 2000})"
+  [fm-name-or-def]
+  (when-not (sc-connected?)
+    (throw (ex-info "send-fm-synthdef!: not connected — call (sc/connect-sc!) first"
+                    {:fm fm-name-or-def})))
+  (let [fm-def   (if (keyword? fm-name-or-def)
+                   (or (fm/get-fm fm-name-or-def)
+                       (throw (ex-info "send-fm-synthdef!: FM definition not found"
+                                       {:name fm-name-or-def})))
+                   fm-name-or-def)
+        nm       (or (:fm/name fm-def) :fm-synth)
+        sc-code  (fm/compile-fm :sc fm-def)
+        args-map (or (:fm/args fm-def) {})]
+    (synth/register-precompiled! nm args-map sc-code)
+    (osc/osc-send! (sc-host) (lang-port) "/cmd" sc-code)
+    (swap! sent-synthdefs conj nm)
+    (println (str "[sc] sent FM SynthDef " nm " to sclang"))
+    nm))
 
 ;; ---------------------------------------------------------------------------
 ;; Node lifecycle — talk directly to scsynth

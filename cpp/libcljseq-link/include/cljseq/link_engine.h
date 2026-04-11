@@ -24,6 +24,8 @@ public:
     void disable() override;
     bool active() const override;
     void set_bpm(double bpm) override;
+    void start_playing() override;
+    void stop_playing() override;
     void set_state_callback(LinkStateCallback cb) override;
     AudioClockSnapshot capture_audio_clock() const override;
 
