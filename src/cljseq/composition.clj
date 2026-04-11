@@ -1,36 +1,40 @@
 ; SPDX-License-Identifier: EPL-2.0
-(ns cljseq.midi-repair
-  "MIDI repair pipeline — from raw single-channel recording to cljseq score.
+(ns cljseq.composition
+  "Composition pipeline — capture an idea, work it with the full cljseq vocabulary.
 
-  Designed around the TheoryBoard + NDLR user story: a single-channel MIDI
-  recording whose four structural voices (drone, pad, motif-1, motif-2) need
-  to be separated, whose key/mode has been forgotten, whose motif position
-  modulation introduced a few out-of-place notes, and whose journey arc
-  ended without harmonic resolution.
+  The entry point is a recorded MIDI idea (from hardware like the TheoryBoard or
+  NDLR), but the namespace is not about fixing recordings — it is about treating
+  a musical idea as a Clojure value that can be analyzed, transformed, serialised,
+  and fed into live loops with all of cljseq's synthesis vocabulary and generative
+  tooling.
 
-  The output of `repair-pipeline!` is a Clojure map — the score — that is
-  simultaneously the composition and the analysis. Because it is a Clojure
-  value, it can be transformed, serialised to EDN, queried with standard
-  Clojure, and fed directly into live loops.
+  The ingestion pipeline handles the TheoryBoard + NDLR user story: a single-
+  channel MIDI recording whose four structural voices (drone, pad, motif-1,
+  motif-2) are separated, whose key/mode is inferred, whose outlier notes are
+  flagged (never silently corrected), and whose journey arc is extended with a
+  generated harmonic resolution.
+
+  The composition-as-data API (to-score, transpose, mode-shift, retrograde)
+  then operates on the score as a plain Clojure map — no special query language.
 
   ## Quick start
-    (require '[cljseq.midi-repair :as repair])
+    (require '[cljseq.composition :as comp])
 
     ;; Full pipeline — returns the score map
-    (def score (repair/repair-pipeline! \"recording.mid\" {:structure :ndlr}))
+    (def score (comp/ingest! \"recording.mid\" {:structure :ndlr}))
 
     ;; Inspect what was detected
     (get-in score [:meta :mode])          ; => :dorian
     (get-in score [:meta :tonic])         ; => :D
 
-    ;; Play the repaired voices back
-    (repair/play-score! score)
+    ;; Play the voices back
+    (comp/play-score! score)
 
     ;; Review correction proposals before accepting
-    (repair/print-corrections score)
+    (comp/print-corrections score)
 
     ;; Accept all corrections
-    (def accepted (repair/accept-corrections score))
+    (def accepted (comp/accept-corrections score))
 
     ;; Save the score as EDN
     (spit \"shipwreck-piano.edn\" (pr-str score))"
@@ -539,25 +543,25 @@
 ;; 7. Full pipeline
 ;; ---------------------------------------------------------------------------
 
-(defn repair-pipeline!
-  "Run the complete MIDI repair pipeline on a recording file.
+(defn ingest!
+  "Ingest a MIDI recording and return a composition score map.
 
-  Combines all phases: ingest → key detect → voice separate →
-  structure annotate → outlier correct → resolution generate.
+  Runs the full pipeline: parse → key detect → voice separate →
+  structure annotate → outlier flag → resolution generate.
 
   `path` — path to .mid file
   `opts`:
-    :structure     — voice separation prior: :ndlr (default)
-    :resolution    — :ambient-fade (default), :authentic-cadence, :cyclical-return
+    :structure       — voice separation prior: :ndlr (default)
+    :resolution      — :ambient-fade (default), :authentic-cadence, :cyclical-return
     :resolution-bars — bars for resolution passage (default 4)
 
-  Returns a score map:
+  Returns a composition map (also the score):
     {:meta        {:tonic :D :mode :dorian :tempo 112 :bars 32}
      :voices      {:drone [...] :pad [...] :motif-1 [...] :motif-2 [...]}
      :structure   {:progression [...] :tension-arc [...] :peak-bar N ...}
      :corrections {:corrected [...] :unchanged [...]}
      :resolution  {:bars 4 :style :ambient-fade :voices {...}}}"
-  ([path] (repair-pipeline! path {}))
+  ([path] (ingest! path {}))
   ([path {:keys [structure resolution resolution-bars]
           :or   {structure :ndlr resolution :ambient-fade resolution-bars 4}}]
    (println "Parsing MIDI file...")
@@ -619,12 +623,12 @@
 ;; ---------------------------------------------------------------------------
 
 (defn play-score!
-  "Play back a repaired score via cljseq live loops.
+  "Play back a composition score via cljseq live loops.
 
   Starts one live loop per voice. Plays the original voices followed by
   the resolution passage.
 
-  `score`  — result map from repair-pipeline!
+  `score`  — result map from ingest!
   `opts`:
     :include-resolution? — play the generated resolution after original (default true)
     :channels — voice → MIDI channel map (default {:drone 1 :pad 2 :motif-1 3 :motif-2 4})"
@@ -710,7 +714,7 @@
     track))
 
 (defn save-midi!
-  "Write the repaired score to a Standard MIDI File for DAW import.
+  "Write a composition score to a Standard MIDI File for DAW import.
 
   Produces Format 1 MIDI (multi-track) so each voice lands on a separate
   lane in Bitwig/Ableton/Logic:
@@ -723,8 +727,8 @@
   The resolution passage (if included) is appended after the last original
   bar, time-shifted so it starts exactly at bar (:bars meta).
 
-  `score`  — result map from repair-pipeline! or load-score
-  `path`   — output path, e.g. \"shipwreck-piano-repaired.mid\"
+  `score`  — result map from ingest! or load-score
+  `path`   — output path, e.g. \"shipwreck-piano.mid\"
   `opts`:
     :include-resolution? — append resolution passage (default true)
     :channels — voice-kw → MIDI-channel map
@@ -852,13 +856,13 @@
 ;; --- Public API -------------------------------------------------------------
 
 (defn to-score
-  "Convert the repair-pipeline! output to a canonical EDN-serializable cljseq score.
+  "Normalise an ingest! output map to a canonical EDN-serializable cljseq score.
 
   The score is the composition as a Clojure value: simultaneously the analysis
   and the artefact. Standard Clojure operates on it directly — no special API,
   no query language.
 
-  `repair-out` — result of repair-pipeline!
+  `repair-out` — result of ingest!
   opts:
     :apply-corrections? — apply proposed corrections before building (default false)
     :include-coda?      — include generated resolution as :coda (default true)
@@ -887,10 +891,10 @@
 (defn transpose
   "Shift all note pitches in a score by `semitones`. Updates :meta :tonic and :key-sig.
 
-  Works on both to-score output (with :arc / :coda) and raw repair-pipeline!
+  Works on both to-score output (with :arc / :coda) and raw ingest!
   output (with :structure / :resolution).
 
-  `score`     — score map from to-score or repair-pipeline!
+  `score`     — score map from to-score or ingest!
   `semitones` — integer semitone offset (positive = up, negative = down)"
   [score semitones]
   (let [old-tonic (get-in score [:meta :tonic])
@@ -919,7 +923,7 @@
   Notes outside the original scale are snapped to the nearest in-scale
   neighbor before remapping.
 
-  `score`    — score map from to-score or repair-pipeline!
+  `score`    — score map from to-score or ingest!
   `new-mode` — target mode keyword, e.g. :aeolian, :phrygian, :mixolydian"
   [score new-mode]
   (let [tonic    (get-in score [:meta :tonic])
@@ -945,7 +949,7 @@
 
   With :voice kw: retrograde only that voice using its own span.
 
-  `score` — score map from to-score or repair-pipeline!
+  `score` — score map from to-score or ingest!
   opts:
     :voice — keyword of a single voice to retrograde (e.g. :motif-1)
              omit to retrograde all voices"
