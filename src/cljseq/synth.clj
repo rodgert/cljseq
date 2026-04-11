@@ -91,6 +91,27 @@
   (swap! synth-registry assoc synth-name synth-map)
   synth-name)
 
+(defn register-precompiled!
+  "Register a named synth whose SC SynthDef string is already compiled.
+
+  Used by `cljseq.sc/send-fm-synthdef!` to make FM synths available via
+  `sc-synth!` and `sc-play!` without going through the graph compiler.
+
+  `synth-name` — keyword name the synth will be addressable as
+  `args-map`   — default arg values (same shape as :args in defsynth!)
+  `sc-string`  — complete sclang SynthDef string
+
+  The stored entry carries `:sc/precompiled` so `sc/synthdef-str` can
+  return it directly instead of trying to compile a :graph."
+  [synth-name args-map sc-string]
+  (when-not (keyword? synth-name)
+    (throw (ex-info "register-precompiled!: synth name must be a keyword" {:name synth-name})))
+  (swap! synth-registry assoc synth-name
+         {:args         (or args-map {})
+          :graph        [:out 0 [:sin-osc 440]]   ; placeholder — never compiled
+          :sc/precompiled sc-string})
+  synth-name)
+
 (defn get-synth
   "Return the synth definition for `synth-name`, or nil if not found."
   [synth-name]

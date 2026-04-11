@@ -428,6 +428,277 @@
       (is (< (:value osc1) 64)))))
 
 ;; ---------------------------------------------------------------------------
+;; Waveform selection
+;; ---------------------------------------------------------------------------
+
+(deftest waveform-selection-test
+  (testing ":waveform :sin (default) emits SinOsc.ar"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr
+                                                   :waveform :sin}]
+                                   :fm/carriers #{1} :fm/routing {}})]
+      (is (contains-str? code "SinOsc.ar"))))
+
+  (testing ":waveform :saw emits Saw.ar"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr
+                                                   :waveform :saw}]
+                                   :fm/carriers #{1} :fm/routing {}})]
+      (is (contains-str? code "Saw.ar"))
+      (is (not (contains-str? code "SinOsc.ar")))))
+
+  (testing ":waveform :tri emits LFTri.ar"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr
+                                                   :waveform :tri}]
+                                   :fm/carriers #{1} :fm/routing {}})]
+      (is (contains-str? code "LFTri.ar"))))
+
+  (testing ":waveform :pulse emits Pulse.ar"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr
+                                                   :waveform :pulse}]
+                                   :fm/carriers #{1} :fm/routing {}})]
+      (is (contains-str? code "Pulse.ar"))))
+
+  (testing ":waveform :sin-fb emits SinOscFB.ar"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr
+                                                   :waveform :sin-fb :feedback 0.4}]
+                                   :fm/carriers #{1} :fm/routing {}})]
+      (is (contains-str? code "SinOscFB.ar"))))
+
+  (testing "mixed waveforms in one synth"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr
+                                                   :waveform :sin}
+                                                  {:id 2 :ratio 2.0 :level 0.5 :env :perc
+                                                   :waveform :saw}]
+                                   :fm/carriers #{1} :fm/routing {2 1}})]
+      (is (contains-str? code "SinOsc.ar"))
+      (is (contains-str? code "Saw.ar")))))
+
+;; ---------------------------------------------------------------------------
+;; Self-feedback
+;; ---------------------------------------------------------------------------
+
+(deftest self-feedback-test
+  (testing ":feedback > 0 auto-selects SinOscFB when no :waveform specified"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr
+                                                   :feedback 0.3}]
+                                   :fm/carriers #{1} :fm/routing {}})]
+      (is (contains-str? code "SinOscFB.ar"))
+      (is (contains-str? code "0.3"))))
+
+  (testing ":feedback 0 uses SinOsc (no feedback)"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr
+                                                   :feedback 0.0}]
+                                   :fm/carriers #{1} :fm/routing {}})]
+      (is (contains-str? code "SinOsc.ar"))
+      (is (not (contains-str? code "SinOscFB.ar")))))
+
+  (testing "feedback value appears in SinOscFB call"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr
+                                                   :feedback 0.75}]
+                                   :fm/carriers #{1} :fm/routing {}})]
+      (is (contains-str? code "0.75")))))
+
+;; ---------------------------------------------------------------------------
+;; TZFM — through-zero FM
+;; ---------------------------------------------------------------------------
+
+(deftest tzfm-test
+  (testing "TZFM routing scales modulation by freq * ratio"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                  {:id 2 :ratio 2.0 :level 0.5 :env :perc}]
+                                   :fm/carriers #{1}
+                                   :fm/routing {2 {:to 1 :depth 1.0 :tzfm? true}}})]
+      ;; TZFM: op_2 * freq * ratio * depth should appear
+      (is (contains-str? code "op_2 * freq"))
+      (is (contains-str? code "SinOsc.ar"))))
+
+  (testing "non-TZFM routing does not scale by freq"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                  {:id 2 :ratio 2.0 :level 0.5 :env :perc}]
+                                   :fm/carriers #{1}
+                                   :fm/routing {2 {:to 1 :depth 1.0 :tzfm? false}}})]
+      ;; Non-TZFM: plain op_2 * depth, no freq factor
+      (is (not (contains-str? code "op_2 * freq")))))
+
+  (testing "shorthand routing {2 1} behaves as non-TZFM depth-1.0"
+    (let [code-short    (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                           {:id 2 :ratio 2.0 :level 0.5 :env :perc}]
+                                            :fm/carriers #{1}
+                                            :fm/routing {2 1}})
+          code-explicit (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                           {:id 2 :ratio 2.0 :level 0.5 :env :perc}]
+                                            :fm/carriers #{1}
+                                            :fm/routing {2 {:to 1 :depth 1.0 :tzfm? false}}})]
+      (is (= code-short code-explicit))))
+
+  (testing "routing depth appears in modulation expression"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                  {:id 2 :ratio 2.0 :level 0.5 :env :perc}]
+                                   :fm/carriers #{1}
+                                   :fm/routing {2 {:to 1 :depth 0.6 :tzfm? false}}})]
+      (is (contains-str? code "0.6")))))
+
+;; ---------------------------------------------------------------------------
+;; Cross-feedback (LocalIn / LocalOut)
+;; ---------------------------------------------------------------------------
+
+(deftest cross-feedback-test
+  (testing "cross-feedback emits LocalIn.ar"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                  {:id 2 :ratio 2.0 :level 0.5 :env :adsr}]
+                                   :fm/carriers #{1}
+                                   :fm/routing {2 1}
+                                   :fm/cross-feedback [{:from 1 :to 2 :depth 0.1}]})]
+      (is (contains-str? code "LocalIn.ar"))))
+
+  (testing "cross-feedback emits LocalOut.ar"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                  {:id 2 :ratio 2.0 :level 0.5 :env :adsr}]
+                                   :fm/carriers #{1}
+                                   :fm/routing {2 1}
+                                   :fm/cross-feedback [{:from 1 :to 2 :depth 0.1}]})]
+      (is (contains-str? code "LocalOut.ar"))))
+
+  (testing "LocalIn channel count matches number of cross-feedback entries"
+    ;; 2 entries → LocalIn.ar(2)
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                  {:id 2 :ratio 2.0 :level 0.5 :env :adsr}
+                                                  {:id 3 :ratio 3.0 :level 0.4 :env :adsr}]
+                                   :fm/carriers #{1}
+                                   :fm/routing {2 1, 3 2}
+                                   :fm/cross-feedback [{:from 1 :to 3 :depth 0.08}
+                                                       {:from 2 :to 3 :depth 0.05}]})]
+      (is (contains-str? code "LocalIn.ar(2)"))))
+
+  (testing "single cross-feedback entry uses LocalIn.ar(1)"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                  {:id 2 :ratio 2.0 :level 0.5 :env :adsr}]
+                                   :fm/carriers #{1}
+                                   :fm/routing {2 1}
+                                   :fm/cross-feedback [{:from 1 :to 2 :depth 0.1}]})]
+      (is (contains-str? code "LocalIn.ar(1)"))))
+
+  (testing "no cross-feedback → no LocalIn/LocalOut"
+    (let [code (fm/compile-fm :sc (fm/fm-algorithm :2op))]
+      (is (not (contains-str? code "LocalIn")))
+      (is (not (contains-str? code "LocalOut")))))
+
+  (testing "LocalOut references the from-op var"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                  {:id 2 :ratio 2.0 :level 0.5 :env :adsr}]
+                                   :fm/carriers #{1}
+                                   :fm/routing {2 1}
+                                   :fm/cross-feedback [{:from 1 :to 2 :depth 0.1}]})]
+      ;; LocalOut should reference op_1
+      (is (contains-str? code "op_1"))))
+
+  (testing "LocalIn declaration appears before op var declarations"
+    (let [code (fm/compile-fm :sc {:fm/operators [{:id 1 :ratio 1.0 :level 1.0 :env :adsr}
+                                                  {:id 2 :ratio 2.0 :level 0.5 :env :adsr}]
+                                   :fm/carriers #{1}
+                                   :fm/routing {2 1}
+                                   :fm/cross-feedback [{:from 1 :to 2 :depth 0.1}]})]
+      (is (< (.indexOf code "LocalIn") (.indexOf code "var op_"))))))
+
+;; ---------------------------------------------------------------------------
+;; 8-op algorithm templates
+;; ---------------------------------------------------------------------------
+
+(deftest fm-8op-templates-test
+  (testing "all 8-op templates are accessible"
+    (are [k] (map? (fm/fm-algorithm k))
+      :8op-stack
+      :4-pairs
+      :2x4-stacks
+      :8-carriers
+      :4mod-1))
+
+  (testing ":8op-stack has 8 operators and 1 carrier"
+    (let [alg (fm/fm-algorithm :8op-stack)]
+      (is (= 8 (count (:fm/operators alg))))
+      (is (= #{1} (:fm/carriers alg)))))
+
+  (testing ":8op-stack is a series chain 8→7→…→1"
+    (let [r (:fm/routing (fm/fm-algorithm :8op-stack))]
+      (is (= 1 (get r 2)))
+      (is (= 2 (get r 3)))
+      (is (= 7 (get r 8)))))
+
+  (testing ":4-pairs has 4 carriers and 4 modulators"
+    (let [alg (fm/fm-algorithm :4-pairs)]
+      (is (= #{1 3 5 7} (:fm/carriers alg)))
+      (is (= 8 (count (:fm/operators alg))))))
+
+  (testing ":2x4-stacks has 2 carriers"
+    (let [alg (fm/fm-algorithm :2x4-stacks)]
+      (is (= #{1 5} (:fm/carriers alg)))
+      (is (= 8 (count (:fm/operators alg))))))
+
+  (testing ":8-carriers has all 8 as carriers and no routing"
+    (let [alg (fm/fm-algorithm :8-carriers)]
+      (is (= #{1 2 3 4 5 6 7 8} (:fm/carriers alg)))
+      (is (empty? (:fm/routing alg)))))
+
+  (testing ":4mod-1 has 4 carriers including the main carrier"
+    (let [alg (fm/fm-algorithm :4mod-1)]
+      (is (contains? (:fm/carriers alg) 1))
+      (is (= 4 (count (:fm/carriers alg))))))
+
+  (testing "all 8-op templates compile to valid SC strings"
+    (doseq [k [:8op-stack :4-pairs :2x4-stacks :8-carriers :4mod-1]]
+      (let [code (fm/compile-fm :sc (fm/fm-algorithm k))]
+        (is (string? code) (str k " should compile"))
+        (is (contains-str? code "SynthDef") (str k " should contain SynthDef"))
+        (is (contains-str? code "}).add;") (str k " should end with }).add;"))
+        (is (= 8 (count (re-seq #"var op_" code)))
+            (str k " should have 8 op vars"))))))
+
+;; ---------------------------------------------------------------------------
+;; Named 8-op presets
+;; ---------------------------------------------------------------------------
+
+(deftest named-8op-presets-test
+  (testing "all named 8-op presets are registered"
+    (let [names (set (fm/fm-names))]
+      (is (contains? names :8op-brass))
+      (is (contains? names :8op-bells))
+      (is (contains? names :8op-evolving-pad))
+      (is (contains? names :8op-dx7-pno))))
+
+  (testing "all 8-op presets compile to valid SC strings"
+    (doseq [nm [:8op-brass :8op-bells :8op-evolving-pad :8op-dx7-pno]]
+      (let [code (fm/compile-fm :sc nm)]
+        (is (string? code) (str nm " should compile"))
+        (is (contains-str? code "SynthDef") (str nm " should contain SynthDef"))
+        (is (contains-str? code "}).add;") (str nm " should end with }).add;"))
+        (is (= 8 (count (re-seq #"var op_" code)))
+            (str nm " should have 8 op vars")))))
+
+  (testing ":8op-brass uses TZFM (freq appears in modulation)"
+    (let [code (fm/compile-fm :sc :8op-brass)]
+      (is (contains-str? code "op_2 * freq"))))
+
+  (testing ":8op-bells has cross-feedback (LocalIn/LocalOut)"
+    (let [code (fm/compile-fm :sc :8op-bells)]
+      (is (contains-str? code "LocalIn.ar"))
+      (is (contains-str? code "LocalOut.ar"))))
+
+  (testing ":8op-evolving-pad has cross-feedback and self-feedback (SinOscFB)"
+    (let [code (fm/compile-fm :sc :8op-evolving-pad)]
+      (is (contains-str? code "LocalIn.ar"))
+      (is (contains-str? code "SinOscFB.ar"))))
+
+  (testing ":8op-dx7-pno has 4 carriers (Mix.ar)"
+    (let [code (fm/compile-fm :sc :8op-dx7-pno)]
+      (is (contains-str? code "Mix.ar"))))
+
+  (testing "all 8-op presets compile for leviasynth backend"
+    (doseq [nm [:8op-brass :8op-bells :8op-evolving-pad :8op-dx7-pno]]
+      (let [r (fm/compile-fm :leviasynth nm)]
+        (is (map? r))
+        (is (= 8 (count (filter #(= :level (last (:path %))) (:ccs r))))
+            (str nm " should have 8 level CCs"))))))
+
+;; ---------------------------------------------------------------------------
 ;; Unknown backend
 ;; ---------------------------------------------------------------------------
 
