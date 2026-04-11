@@ -40,7 +40,9 @@ Version 0.9.0 · April 2026
 32. [nREPL Remote Eval](#32-nrepl-remote-eval)
 33. [Configuration Registry](#33-configuration-registry)
 34. [MCP Bridge (AI Compositional Collaborator)](#34-mcp-bridge)
-35. [Reference: REPL Commands and Step Keys](#35-reference)
+35. [Keyboard Performance (`cljseq.ivk`)](#35-keyboard-performance-cljseqivk)
+36. [MIDI Input (`cljseq.midi-in`)](#36-midi-input-cljseqmidi-in)
+37. [Reference: REPL Commands and Step Keys](#37-reference)
 
 ---
 
@@ -256,6 +258,34 @@ new body starts.
 (stop-loop! :name)   ; stop after current iteration completes
 (set-bpm! 140)       ; change global BPM; all loops update on their next sleep
 ```
+
+### Beat-boundary sync — `:restart-on-bar` (Q32)
+
+When starting a new loop mid-session you often want it to begin on a clean beat
+boundary rather than wherever the clock happens to be. `:restart-on-bar` parks
+the loop body until the next boundary arrives, then releases it. It works with
+or without Ableton Link active.
+
+```clojure
+;; Snap to next system quantum (default 4 beats — reads :config :link/quantum)
+(deflive-loop :bass {:restart-on-bar true}
+  (play! :C2) (sleep! 1)
+  (play! :G2) (sleep! 1))
+
+;; Snap to next 2-beat boundary
+(deflive-loop :hi-hat {:restart-on-bar 2}
+  (play! :Cs4) (sleep! 1/2))
+
+;; Snap to next 8-beat (2-bar) boundary
+(deflive-loop :phrase {:restart-on-bar 8}
+  ;; body starts exactly on a 2-bar boundary
+  (play! :C4) (sleep! 4)
+  (play! :G4) (sleep! 4))
+```
+
+When used with the Torso T-1 as a Link peer, `:restart-on-bar true` snaps to
+the T-1's phrase boundary — new cljseq loops enter phase-locked to T-1 patterns
+without manual timing.
 
 ### Playing chords and voicings
 
@@ -3044,7 +3074,203 @@ evaluate code=(compile-fm :sc (fm-algorithm :8op-stack))
 
 ---
 
-## 35. Reference
+## 35. Keyboard Performance (`cljseq.ivk`)
+
+The `cljseq.ivk` namespace turns the computer keyboard into a live performance
+surface. Keyboard events from the C++ sidecar's `CGEventTap` (macOS) arrive as
+`0x21 KbdEvent` frames and are dispatched through an open multimethod, making
+layouts fully extensible without touching ivk internals.
+
+### Starting keyboard input
+
+```clojure
+;; Register the keyboard handler (optionally restarts the sidecar with --kbd)
+(start-kbd!)
+
+;; Switch to a layout
+(set-layout! :harmonic)   ; or :interval, :chromatic, :scale, :ndlr
+
+;; Stop keyboard input and clear any queued arp notes
+(stop-kbd!)
+```
+
+### Built-in layouts
+
+| Layout | Style | Left hand | Right hand |
+|--------|-------|-----------|------------|
+| `:interval` | Samchillian/Misha | Step down by scale degree | Step up by scale degree |
+| `:chromatic` | Piano | Lower white keys | Upper white / black keys |
+| `:scale` | Absolute degrees | Scale degrees I–IV | Scale degrees V–VII + upper |
+| `:ndlr` | NDLR chord surface | Chord functions (I/II/IV/V) | Chord tones over active chord |
+| `:harmonic` | TheoryBoard split | Harmonic context (I/IV/V/vi) | Melody (chord tones) |
+
+### The `:harmonic` layout in detail
+
+The home row is split at the `g`/`h` boundary. Left hand sets the harmonic
+context; right hand plays melody over it. Number row pivots the scale root.
+
+```
+1    2    3    4    5    6    7         8    9
+C    D    E    F    G    A    B         ♭    ♯
+scale root pivot pads                  semitone shift
+
+q    w    e    r    t    y    u    i    o    p
+                         oct+1 chord tones
+
+a    s    d    f    g  | h    j    k    l    ;
+I    IV   V    vi   I  | 1    2    3    4    5   ← home row split
+(chord functions)       (chord tones, root octave)
+
+z    x    c    v    b    n    m
+                              voiced mode toggle
+```
+
+The `|` marks the split. Tap `a`–`f` to change harmony (silent by default;
+enable voiced mode with `m` for a root note on each chord change). Then `h`–`;`
+play the melody tones of the active chord.
+
+### Arp mode
+
+```clojure
+;; Key presses queue notes instead of playing immediately
+(swap! ivk-state assoc :arp? true)
+(start-arp!)            ; cycle the queue at :arp-rate (default 1/4 beat)
+(stop-arp!)             ; stop cycling; clear queue
+```
+
+### Registering custom layouts
+
+Layouts are plain Clojure maps — write one and register it:
+
+```clojure
+(register-layout! :my-layout
+  {:layout/id   :my-layout
+   :layout/name "My Layout"
+   :key-map
+   {\a {:action :play-absolute :midi 60}   ; C4
+    \s {:action :apply-interval :n  1}     ; up one scale degree
+    \d {:action :apply-interval :n -1}     ; down one scale degree
+    \f {:action :set-chord-fn :roman :IV}
+    \[ {:action :set-octave :delta -1}
+    \] {:action :set-octave :delta  1}}})
+
+(set-layout! :my-layout)
+```
+
+`handle-action!` is a multimethod dispatching on `:action`. Add new action
+types with `defmethod`:
+
+```clojure
+(defmethod cljseq.ivk/handle-action! :my-action
+  [{:keys [my-param]} state]
+  ;; return updated state
+  (assoc state :current-pitch my-param))
+```
+
+### Rendering a layout as a cheatsheet
+
+```clojure
+(render-layout :harmonic)
+;; prints:
+;; Harmonic (TheoryBoard-style)
+;; ──────────────────────────────────────────────────
+;; `     1     2     3     4     5     6     7     8     9     0     -     =
+;;       C     D     E     F     G     A     B           ♭    ♯
+;; ...
+```
+
+### T-1 PassThru pattern
+
+When the Torso T-1 is connected as a MIDI input, use PassThru to anchor the
+keyboard to the T-1's current pitch:
+
+```clojure
+(open-input! "Torso T-1")
+(register-note-handler! "Torso T-1"
+  (fn [msg] (set-pitch! (:pitch msg)))
+  :passthru? true)
+
+;; Now the keyboard navigates intervals relative to whatever T-1 last played
+(set-layout! :interval)
+```
+
+---
+
+## 36. MIDI Input (`cljseq.midi-in`)
+
+`cljseq.midi-in` opens JVM MIDI input ports via `javax.sound.midi` — independent
+of the C++ sidecar. Multiple ports can be open simultaneously; handlers filter by
+source, channel, and pitch range.
+
+### Opening ports
+
+```clojure
+;; List available MIDI input ports
+(list-midi-ports)   ; shows both output and input ports
+
+;; Open by index
+(open-input! 0)
+
+;; Open by name substring (case-insensitive)
+(open-input! "Torso T-1")
+(open-input! "Hydra")
+
+;; See all currently open inputs
+(open-inputs)
+;; => {"Torso T-1" #object[...], "Hydrasynth" #object[...]}
+
+;; Close one port or all
+(close-input! "Torso T-1")
+(close-all-inputs!)
+```
+
+### Registering note handlers
+
+```clojure
+;; Basic handler — fires on every NoteOn from any open input
+(register-note-handler! :my-handler
+  (fn [{:keys [pitch velocity channel source]}]
+    (play! pitch)))
+
+;; Filter by source port
+(register-note-handler! :t1-handler
+  (fn [msg] (println "T-1 note:" (:pitch msg)))
+  :source "Torso T-1")
+
+;; Filter by channel and pitch range
+(register-note-handler! :bass-handler
+  (fn [msg] (play! (:pitch msg)))
+  :channel 1
+  :pitch-range [36 60])
+
+;; Remove a handler
+(unregister-note-handler! :my-handler)
+```
+
+Handler maps contain:
+- `:pitch` — MIDI note number 0–127
+- `:velocity` — 0–127 (0 = NoteOff)
+- `:channel` — MIDI channel 1–16
+- `:source` — port name string
+- `:type` — `:note-on` or `:note-off`
+
+### Torso T-1 device map
+
+The `resources/devices/torso-t1.edn` device map covers all T-1 MIDI parameters:
+
+```clojure
+(require '[cljseq.device :as device])
+(def t1 (device/load-device "torso-t1"))
+
+;; Send T-1 parameters via CC
+(device/send-cc! t1 :euclidean/steps 16)
+(device/send-cc! t1 :euclidean/pulses 5)
+(device/send-cc! t1 :tempo/bpm 120)
+```
+
+---
+
+## 37. Reference
 
 ### REPL commands
 
