@@ -152,11 +152,11 @@
       (is (= [2 2 1 2 2 2 1] (:intervals s))))))
 
 ;; ---------------------------------------------------------------------------
-;; Solar42 keyboard mode scales
+;; Drone synthesizer keyboard mode scales
 ;; ---------------------------------------------------------------------------
 
-(deftest solar42-scales-registered-test
-  (testing "Solar42 keyboard scales are registered"
+(deftest s42-scales-registered-test
+  (testing "Drone synthesizer keyboard mode scales are registered"
     (let [names (set (scale/scale-names))]
       (is (contains? names :pelog)    "Gamelan pelog")
       (is (contains? names :slendro)  "Gamelan slendro")

@@ -8,7 +8,7 @@
 ;;   2. apply-trajectory! driving a live SC node parameter in real time
 ;;   3. Trajectories as compositional arcs: each note samples a curve as it plays
 ;;   4. The "score as value" principle applied to timbre, not just pitch
-;;   5. The :solar42 patch as a second apply-trajectory! target (filter sweep)
+;;   5. The :s42 patch as a second apply-trajectory! target (filter sweep)
 ;;
 ;; What makes this interesting:
 ;;
@@ -45,7 +45,7 @@
 
 (session!)
 (connect-sc!)
-(send-all-synthdefs!)   ; upload :pluck, :solar42 voices, etc. to scsynth
+(send-all-synthdefs!)   ; upload :pluck, :s42 voices, etc. to scsynth
 
 ;; ---------------------------------------------------------------------------
 ;; § 2. A single pluck — verify the UGen works
@@ -182,15 +182,15 @@
 ;; (run! sc/free-synth! (vals chord-nodes))
 
 ;; ---------------------------------------------------------------------------
-;; § 6. Solar42-inspired filter sweep — the same mechanism, different target
+;; § 6. s42 (Solar42-inspired) filter sweep — the same mechanism, different target
 ;;
 ;;   apply-trajectory! doesn't know or care whether the parameter is a
 ;;   KS coefficient or a filter cutoff. The trajectory-to-node pipeline
 ;;   is identical. This is why trajectories are first-class values.
 ;; ---------------------------------------------------------------------------
 
-;; Requires the :solar42 patch to be instantiated:
-;; (def s42 (instantiate-patch! :solar42))
+;; Requires the :s42 patch to be instantiated:
+;; (def s42 (instantiate-patch! :s42))
 
 ;; Sweep the Polivoks-inspired filter from closed to open over 16 bars
 ;; (def cancel-filter!

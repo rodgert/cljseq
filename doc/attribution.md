@@ -27,6 +27,9 @@ the following convention applies:
 | Spectraphon spectral processor | MakeNoise                | `defspectral-resynthesizer` / `cljseq.spectral` |
 | Panharmonium spectral oscillator | Rossum Electro-Music   | `defspectral-resynthesizer` / `cljseq.spectral` |
 | GTE (Gestural Time Extractor)  | MakeNoise                | `defthreshold-extractor` / `cljseq.extractor`   |
+| Solar 42 multi-voice drone synthesizer | Soma Laboratory          | `defpatch! :s42` / `cljseq.patch`               |
+| Leviasynth 8-op FM synthesizer | ASM (Audiophile Synthesizer Machines) | `compile-fm :8op-cc` / `cljseq.fm` |
+| Digitone 4-op FM synthesizer   | Elektron                 | `compile-fm :4op-cc` / `cljseq.fm`              |
 
 New entries should be added to this table whenever a hardware-inspired abstraction
 is named.
@@ -85,12 +88,42 @@ The name "temporal-buffer" was chosen for the cljseq API to avoid trademark conf
 The R&R section covering this abstraction retains "(Mimeophon-Inspired)" as
 explicit attribution.
 
+### Soma Laboratory Solar 42
+The Solar 42 is a product of Soma Laboratory. The cljseq `defpatch! :s42` patch
+definition in `cljseq.patch` is directly inspired by the Solar 42's multi-voice
+architecture: independent drone oscillator voices each with per-oscillator gate
+and tuning ratio controls, VCO voices with PWM and sub-oscillator, FM+AM+noise
+voices (Papa Srapa section), and a dual 12 dB/oct resonant filter stage. The
+voice synths (`:s42-drone-voice`, `:s42-vco-voice`, `:s42-papa-voice`) and filter
+(`:s42-filter`) are structurally inspired by this topology; they are not a
+licensed reproduction of any specific circuit. The name `:s42` was chosen to
+avoid trademark conflict; the design notes retain "Solar42-inspired" as explicit
+attribution.
+
 ### Soma Laboratory Cosmos
 The Cosmos ("Drifting Memory Station") is a product of Soma Laboratory. The
 Memory Field preset within `cljseq.temporal-buffer` is directly inspired by the
 Cosmos' multiple drifting playback heads, probabilistic event decay, and
 scale-gravity pitch drift model. Referenced in `design-memory-field.md` (now
 superseded) and `design-temporal-buffer.md` §12.
+
+### ASM Leviasynth
+The Leviasynth is a product of ASM (Audiophile Synthesizer Machines). The cljseq
+`compile-fm :8op-cc` backend in `cljseq.fm` is directly inspired by the
+Leviasynth's 8-oscillator architecture, its per-OSC MIDI CC addressing scheme
+(level CCs 24–31, pitch-detune CCs 33–41 with the gap at CC 38, feedback CCs
+42–49), and its approach of using CC center-value 64 to represent zero pitch
+detune.  The algorithm keyword `:8op-cc` was chosen to avoid trademark conflict;
+the R&R design notes retain "Leviasynth-inspired" as explicit attribution.
+
+### Elektron Digitone
+The Digitone is a product of Elektron. The cljseq `compile-fm :4op-cc` backend
+in `cljseq.fm` is directly inspired by the Digitone's 8-algorithm topology
+table (4 operators arranged in fixed carrier/modulator roles with CC-addressable
+ratios, levels, and envelopes via CCs 16, 19, 20, 75–82, 90–92) and its A/B
+operator naming convention for modulator groups.  The algorithm keyword `:4op-cc`
+was chosen to avoid trademark conflict; the R&R design notes retain
+"Digitone-inspired" as explicit attribution.
 
 ### MakeNoise GTE (Gestural Time Extractor)
 The GTE is a product of MakeNoise (released 2026-03-26). The planned

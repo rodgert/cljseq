@@ -1,5 +1,5 @@
-{:synth/id   :solar-filter
- :synth/tags [:filter :polivoks-inspired :12db :stereo :bus-aware :solar42-inspired]
+{:synth/id   :s42-filter
+ :synth/tags [:filter :polivoks-inspired :12db :stereo :bus-aware :s42-inspired]
  :synth/doc  "Dual cascaded 12dB/oct resonant LPF — Polivoks-inspired approximation.
   Structurally similar to the dual 12dB filter topology found in certain Soviet-era-derived
   analog synthesizers, not a licensed reproduction of any specific circuit.

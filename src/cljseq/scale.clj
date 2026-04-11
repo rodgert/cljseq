@@ -97,7 +97,7 @@
    ;; Gamelan approximations (equal-temperament; true gamelan is non-ET/non-12TET)
    :pelog              [1 2 3 1 4 1]  ; Balinese pelog — 7-note ET approximation
    :slendro            [2 3 2 2 3]    ; Javanese slendro — same intervals as :yo, named for gamelan context
-   ;; Named aliases matching Solar42 keyboard modes and common usage
+   ;; Named aliases matching common drone synthesizer keyboard modes
    :hijaz              [1 3 1 2 1 2 2] ; Arabian hijaz maqam (same intervals as :phrygian-dominant)
    :folk               [2 1 3 1 2 1 2] ; Folk/klezmer flavour (same as :romanian-minor)
    :in-sen             [1 4 2 1 4]     ; Japanese in-sen (alias for :in-scale)
