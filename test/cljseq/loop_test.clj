@@ -339,3 +339,73 @@
       (Thread/sleep 30)
       (is (= :fresh @v) "fresh loop body ran after dead thread detected")
       (loop/stop-loop! :test-crash-loop))))
+
+;; ---------------------------------------------------------------------------
+;; -start-beat-for-period (Q32)
+;; ---------------------------------------------------------------------------
+
+(deftest start-beat-for-period-nil-no-link-test
+  (testing "nil period with no Link active returns current beat (no future snap)"
+    ;; At 60000 BPM, -current-beat changes fast; just verify the result is ≥ 0
+    ;; and that the function returns without blocking.
+    (let [b (loop/-start-beat-for-period nil)]
+      (is (>= b 0.0) "returned a beat ≥ 0"))))
+
+(deftest start-beat-for-period-true-snaps-to-quantum-test
+  (testing "true snaps to next system-quantum boundary (default 4)"
+    (let [b (loop/-start-beat-for-period true)]
+      ;; Result must be a positive multiple of 4.0 (within floating point tolerance)
+      (is (>= b 0.0))
+      (let [rem (mod b 4.0)]
+        (is (or (< rem 1e-6) (> rem 3.999999))
+            (str "beat " b " is not near a multiple of 4"))))))
+
+(deftest start-beat-for-period-number-snaps-to-period-test
+  (testing "numeric period snaps to next multiple of N beats"
+    (let [b2 (loop/-start-beat-for-period 2)]
+      (let [rem (mod b2 2.0)]
+        (is (or (< rem 1e-6) (> rem 1.999999))
+            (str "beat " b2 " is not near a multiple of 2"))))
+    (let [b8 (loop/-start-beat-for-period 8)]
+      (let [rem (mod b8 8.0)]
+        (is (or (< rem 1e-6) (> rem 7.999999))
+            (str "beat " b8 " is not near a multiple of 8"))))))
+
+;; ---------------------------------------------------------------------------
+;; deflive-loop :restart-on-bar — parks without Link active (Q32)
+;; ---------------------------------------------------------------------------
+
+(deftest restart-on-bar-true-parks-until-boundary-test
+  (testing ":restart-on-bar true parks until quantum boundary even without Link"
+    ;; At 60000 BPM (1 beat/ms), 4 beats = 4ms. The loop should not start
+    ;; immediately — it should wait until the next 4-beat boundary.
+    ;; We give it up to 50ms (several quantum periods) to fire at least once.
+    (let [started (promise)]
+      (loop/deflive-loop :test-rob-true {:restart-on-bar true}
+        (deliver started :ok)
+        (loop/sleep! 1000))
+      (let [result (deref started 100 :timeout)]
+        (is (= :ok result) "loop started after quantum boundary"))
+      (loop/stop-loop! :test-rob-true))))
+
+(deftest restart-on-bar-period-snaps-to-boundary-test
+  (testing ":restart-on-bar 2 parks until 2-beat boundary"
+    (let [started (promise)]
+      (loop/deflive-loop :test-rob-period {:restart-on-bar 2}
+        (deliver started :ok)
+        (loop/sleep! 1000))
+      (let [result (deref started 50 :timeout)]
+        (is (= :ok result) "loop started after 2-beat boundary"))
+      (loop/stop-loop! :test-rob-period))))
+
+(deftest restart-on-bar-false-starts-immediately-test
+  (testing "no :restart-on-bar — loop starts immediately (no extra park)"
+    ;; Control test: without :restart-on-bar a loop with no Link should
+    ;; fire immediately (within a few ms).
+    (let [started (promise)]
+      (loop/deflive-loop :test-rob-none {}
+        (deliver started :ok)
+        (loop/sleep! 1000))
+      (let [result (deref started 50 :timeout)]
+        (is (= :ok result) "loop started without parking"))
+      (loop/stop-loop! :test-rob-none))))

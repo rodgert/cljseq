@@ -21,6 +21,7 @@
 // One connection is accepted; reconnection is not supported in Phase 1.
 
 #include "ipc.h"
+#include "keyboard_capture.h"
 #include "midi_clock.h"
 #include "midi_dispatch.h"
 #include "midi_monitor.h"
@@ -107,6 +108,7 @@ enum class MsgType : uint8_t {
     LinkTransportStart  = 0x13,  // JVM→sidecar: request transport start
     LinkTransportStop   = 0x14,  // JVM→sidecar: request transport stop
     MidiIn              = 0x20,  // sidecar→JVM: MIDI message received on input port
+    KbdEvent            = 0x21,  // sidecar→JVM: keyboard event (CGEventTap)
     LinkState           = 0x80,
     Ping                = 0xF0,
     Shutdown            = 0xFF,
@@ -119,13 +121,15 @@ enum class MsgType : uint8_t {
 class IpcSession : public std::enable_shared_from_this<IpcSession> {
 public:
     IpcSession(tcp::socket socket, asio::io_context& io,
-               cljseq::LinkBridge& link, int midi_in_port)
+               cljseq::LinkBridge& link, int midi_in_port, bool enable_kbd)
         : socket_(std::move(socket)), io_(io), link_(link),
-          midi_in_port_(midi_in_port) {}
+          midi_in_port_(midi_in_port), enable_kbd_(enable_kbd) {}
 
     ~IpcSession() {
         if (midi_in_port_ >= 0)
             cljseq::midi_monitor_stop();
+        if (enable_kbd_)
+            cljseq::kbd_capture_stop();
     }
 
     void start() {
@@ -149,6 +153,19 @@ public:
                     midi_in_port_);
         }
 
+        // Optionally start keyboard capture (macOS CGEventTap).
+        if (enable_kbd_) {
+            auto self = shared_from_this();
+            bool ok = cljseq::kbd_capture_start(
+                {}, // empty = capture all keys; ivk filter is on the Clojure side
+                [self](uint8_t keycode, uint8_t mods, uint8_t evt_type) {
+                    self->push_kbd_event(keycode, mods, evt_type);
+                });
+            if (!ok)
+                std::fprintf(stderr,
+                    "[ipc] kbd_capture_start failed — keyboard input disabled\n");
+        }
+
         read_header();
     }
 
@@ -159,10 +176,11 @@ private:
     asio::io_context&        io_;
     cljseq::LinkBridge&      link_;
     int                      midi_in_port_;
+    bool                     enable_kbd_;
     std::array<uint8_t, kHeaderLen> header_buf_;
     std::vector<uint8_t>     payload_buf_;
 
-    // Serialise concurrent writes (Link callback, MIDI-in callback vs. read loop).
+    // Serialise concurrent writes (Link callback, MIDI-in callback, kbd callback vs. read loop).
     std::mutex               write_mutex_;
 
     // ---------------------------------------------------------------------------
@@ -383,6 +401,42 @@ private:
                                  ec.message().c_str());
             });
     }
+
+    // ---------------------------------------------------------------------------
+    // Outbound: push KbdEvent (0x21) to JVM
+    //
+    // Wire payload (3 bytes):
+    //   [uint8 keycode(1)][uint8 modifiers(1)][uint8 event_type(1)]
+    //
+    // Called from the CGEventTap callback thread — must not block.
+    // ---------------------------------------------------------------------------
+
+    void push_kbd_event(uint8_t keycode, uint8_t mods, uint8_t evt_type) {
+        static constexpr std::size_t kPayloadLen = 3;
+        static constexpr std::size_t kFrameLen   = 8 + kPayloadLen;
+
+        auto frame = std::make_shared<std::vector<uint8_t>>(kFrameLen, uint8_t{0});
+        uint8_t* p = frame->data();
+
+        // Header
+        write_le32(p, static_cast<uint32_t>(kPayloadLen));
+        p[4] = static_cast<uint8_t>(MsgType::KbdEvent);
+        // p[5..7] reserved, zeroed
+
+        // Payload
+        p[8]  = keycode;
+        p[9]  = mods;
+        p[10] = evt_type;
+
+        std::lock_guard<std::mutex> lk(write_mutex_);
+        auto self = shared_from_this();
+        asio::async_write(socket_, asio::buffer(*frame),
+            [self, frame](asio::error_code ec, std::size_t) {
+                if (ec)
+                    std::fprintf(stderr, "[ipc] kbd push write error: %s\n",
+                                 ec.message().c_str());
+            });
+    }
 };
 
 } // anonymous namespace
@@ -391,7 +445,8 @@ private:
 // ipc_serve — entry point
 // ---------------------------------------------------------------------------
 
-void ipc_serve(unsigned short port, cljseq::LinkBridge& link, int midi_in_port) {
+void ipc_serve(unsigned short port, cljseq::LinkBridge& link,
+               int midi_in_port, bool enable_kbd) {
     asio::io_context io;
     tcp::acceptor acceptor(io, tcp::endpoint(tcp::v4(), port));
     std::fprintf(stderr, "[ipc] listening on port %u\n", port);
@@ -401,7 +456,8 @@ void ipc_serve(unsigned short port, cljseq::LinkBridge& link, int midi_in_port) 
     acceptor.accept(socket);
     std::fprintf(stderr, "[ipc] JVM connected\n");
 
-    auto session = std::make_shared<IpcSession>(std::move(socket), io, link, midi_in_port);
+    auto session = std::make_shared<IpcSession>(
+        std::move(socket), io, link, midi_in_port, enable_kbd);
     session->start();
 
     io.run();

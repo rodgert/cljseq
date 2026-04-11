@@ -197,6 +197,15 @@
    :IVmaj7 [3 :maj7] :V7  [4 :dom7]   :VIm7  [5 :min7]
    :VIIø7  [6 :half-dim7]})
 
+(defn chord-for-numeral
+  "Return the [degree quality] vector for a Roman numeral keyword, or nil.
+
+  Example:
+    (chord-for-numeral :V7)  ; => [4 :dom7]
+    (chord-for-numeral :I)   ; => [0 :major]"
+  [rn]
+  (get roman-numerals rn))
+
 (defn progression
   "Return a seq of Chords from a seq of Roman numeral keywords.
 

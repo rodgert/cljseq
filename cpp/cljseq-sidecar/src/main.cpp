@@ -72,6 +72,14 @@ static int parse_midi_in_port(int argc, char* argv[]) {
     return -1;  // -1 = no MIDI input monitoring
 }
 
+static bool parse_kbd(int argc, char* argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--kbd") == 0)
+            return true;
+    }
+    return false;
+}
+
 int main(int argc, char* argv[]) {
     // --list-ports: print available MIDI ports to stdout and exit.
     // Must be checked before parse_port(), which exits on missing --port.
@@ -85,6 +93,7 @@ int main(int argc, char* argv[]) {
     unsigned short port         = parse_port(argc, argv);
     unsigned int   midi_port    = parse_midi_port(argc, argv);
     int            midi_in_port = parse_midi_in_port(argc, argv);
+    bool           enable_kbd   = parse_kbd(argc, argv);
 
     // 1. Select Link bridge based on build configuration.
     //    The sidecar's business logic is identical in both cases.
@@ -122,7 +131,7 @@ int main(int argc, char* argv[]) {
 
     // 6. Accept the JVM connection and run the bidirectional IPC event loop.
     //    (blocks until Shutdown message received)
-    ipc_serve(port, link, midi_in_port);
+    ipc_serve(port, link, midi_in_port, enable_kbd);
 
     // 7. Signal clock and scheduler to stop and wait for them to drain.
     //    Clock must stop before MIDI port closes so the final 0xFC can be sent.

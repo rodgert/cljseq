@@ -12,6 +12,7 @@ cmake_minimum_required(VERSION 3.20)
 add_executable(cljseq-sidecar
   src/main.cpp
   src/ipc.cpp
+  src/keyboard_capture.cpp
   src/midi_clock.cpp
   src/midi_dispatch.cpp
   src/midi_monitor.cpp
@@ -23,6 +24,13 @@ target_link_libraries(cljseq-sidecar
           asio
           rtmidi
 )
+
+# CGEventTap requires ApplicationServices.framework on macOS.
+if(APPLE)
+  target_link_libraries(cljseq-sidecar
+    PRIVATE "-framework ApplicationServices"
+  )
+endif()
 
 # When Link is enabled, link against cljseq-link (GPL-2.0-or-later).
 # The resulting binary is GPL-2.0-or-later; sidecar source remains LGPL.
