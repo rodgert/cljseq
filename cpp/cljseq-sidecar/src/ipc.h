@@ -17,5 +17,13 @@
 /// received MIDI message is pushed to the JVM as a 0x20 MidiIn frame:
 ///   payload (12 bytes): [int64 time_ns][uint8 status][uint8 b1][uint8 b2][uint8 reserved]
 ///
+/// When `enable_kbd` is true, a CGEventTap (macOS) is installed to capture global
+/// keyboard events.  Each key event is pushed to the JVM as a 0x21 KbdEvent frame:
+///   payload (3 bytes): [uint8 keycode][uint8 modifiers][uint8 event_type]
+///   event_type: 0=keydown, 1=keyup, 2=keyrepeat
+///   modifiers:  bit 0=shift, bit 1=ctrl, bit 2=option/alt, bit 3=command
+/// Requires one-time macOS Accessibility permission for the sidecar process.
+///
 /// `link` must outlive ipc_serve(). A NullLinkBridge may be passed safely.
-void ipc_serve(unsigned short port, cljseq::LinkBridge& link, int midi_in_port = -1);
+void ipc_serve(unsigned short port, cljseq::LinkBridge& link,
+               int midi_in_port = -1, bool enable_kbd = false);

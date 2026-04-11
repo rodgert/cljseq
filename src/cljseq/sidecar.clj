@@ -541,8 +541,9 @@
     (sidecar/start-sidecar! :binary \"/usr/local/bin/cljseq-sidecar\" :port 7777)
     (sidecar/start-sidecar! :midi-port 2)                     ; by index
     (sidecar/start-sidecar! :midi-port \"IAC\")                ; by name substring
-    (sidecar/start-sidecar! :midi-port \"Hydra\" :midi-in-port \"Hydra\") ; both by name"
-  [& {:keys [binary port midi-port midi-in-port]}]
+    (sidecar/start-sidecar! :midi-port \"Hydra\" :midi-in-port \"Hydra\") ; both by name
+    (sidecar/start-sidecar! :kbd? true)                       ; keyboard capture (macOS)"
+  [& {:keys [binary port midi-port midi-in-port kbd?]}]
   (when (:running? @sidecar-state)
     (throw (ex-info "Sidecar already running; call stop-sidecar! first" {})))
   (let [port         (long (or port (find-free-port)))
@@ -555,7 +556,8 @@
                        :else                  midi-in-port)
         cmd          (cond-> [binary "--port" (str port)]
                        midi-port    (conj "--midi-port"    (str midi-port))
-                       midi-in-port (conj "--midi-in-port" (str midi-in-port)))]
+                       midi-in-port (conj "--midi-in-port" (str midi-in-port))
+                       kbd?         (conj "--kbd"))]
     (let [pb   (doto (ProcessBuilder. ^java.util.List cmd)
                  ;; Inherit stdin and stdout; pipe stderr for capture+tee
                  (.redirectInput  ProcessBuilder$Redirect/INHERIT)

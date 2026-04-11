@@ -1,0 +1,284 @@
+;; SPDX-License-Identifier: EPL-2.0
+;;
+;; Torso Electronics T-1 — cljseq device map
+;;
+;; Source: Torso Electronics T-1 User Manual OS 2.0.1 (Synthdawg)
+;;         ~/Desktop/Synth Manuals/T-1 User Manual.pdf
+;;         Chapter 8: MIDI & WiFi Connectivity (pp.159–192)
+;;
+;; Confidence: High. All CC assignments, clock hierarchy, channel architecture,
+;;             and program change tables taken directly from the manual.
+;;
+;; Architecture overview:
+;;   - 16-track algorithmic euclidean sequencer + MIDI FX processor
+;;   - Hierarchy: 16 Banks → 16 Patterns per bank → 16 Tracks per pattern
+;;   - Each Track holds 16 Cycles (per-cycle parameter automation)
+;;   - Three track modes: Note (melody/rhythm), CC (control change sequences),
+;;     FX (transform incoming MIDI in real time; pitch menu becomes MIDI keyboard)
+;;   - Each track independently assigned to MIDI channel 1–16
+;;     Default: track N → channel N (track 1 = ch 1, track 2 = ch 2, etc.)
+;;   - Ableton Link peer over Wi-Fi (2.4GHz only); can also act as Wi-Fi hotspot
+;;
+;; cljseq role: :source (primarily)
+;;   T-1 generates MIDI Note On/Off and CC streams; cljseq.midi-in receives them.
+;;   T-1 also RECEIVES MIDI notes (Notes In = On by default) for FX track processing.
+;;   T-1 does NOT respond to incoming MIDI CC for its own parameter control.
+;;
+;; Travel rig usage: T-1 as Link clock peer + euclidean rhythm/melody source;
+;;   cljseq.link joins the Link session over shared Wi-Fi; midi-in routes T-1
+;;   note tracks to SC synths.
+
+{:device/id           :torso/t1
+ :device/name         "Torso Electronics T-1"
+ :device/manufacturer "Torso Electronics"
+ :device/type         :sequencer
+ :device/role         :source                ; T-1 sends to cljseq; also receives for FX
+ :device/connectivity [:usb-c-midi           ; USB-C, class-compliant, also powers device
+                        :trs-midi-in         ; 3.5mm Type A (5-pin DIN adapter included)
+                        :trs-midi-out        ; 3.5mm Type A
+                        :trs-midi-thru       ; 3.5mm Type A (configurable as 2nd MIDI Out)
+                        :cv-out              ; 4× CV output (3.5mm)
+                        :gate-out            ; 2× Gate output (3.5mm)
+                        :cv-in               ; 1× CV input (3.5mm)
+                        :sync-in             ; Analog clock sync in (3.5mm)
+                        :sync-out            ; Analog clock sync out (3.5mm)
+                        :ableton-link        ; Ableton Link over Wi-Fi (2.4GHz)
+                        :wifi-hotspot]       ; T-1 can act as its own Wi-Fi hotspot
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI channel architecture
+ ;; Default: track N → channel N (track 1 = ch 1 ... track 16 = ch 16).
+ ;; Each track channel is independently configurable via CHANNEL knob.
+ ;; Multiple channels can be assigned to a single track.
+ ;; -------------------------------------------------------------------------
+ :midi/channel        {:default :track-number   ; track N sends on channel N
+                       :range   [1 16]
+                       :per-track true
+                       :note "Default is track number = channel number. Use CHANNEL
+                              knob per track. Multiple channels can be selected per
+                              track. Route internally: CTRL + Turn (OUTPUT)."}
+
+ :midi/poly-mode      :multi-channel            ; 16 independent channels
+
+ ;; -------------------------------------------------------------------------
+ ;; Track modes — each of 16 tracks is user-configured as one of these types
+ ;; CTRL + [VBx] cycles through Note → CC → FX mode for the selected track.
+ ;; -------------------------------------------------------------------------
+ :device/track-modes
+ {:note {:description "Euclidean melody/rhythm sequencer; sends Note On/Off + velocity"
+         :color       :orange
+         :sends       [:note-on :note-off :velocity]
+         :view        :pulse-view               ; double-tap VBx to enter Pulse View
+         :params      [:steps :pulses :rotate :division :cycles
+                       :velocity :accent :groove :probability
+                       :sustain :timing :delay :repeats :offset :time :pace
+                       :pitch :harmony :scale :root :voicing :style :range :phrase
+                       :length :channel :random :rate]}
+
+  :cc  {:description "Sequences MIDI CC values; 14 knobs default to CC#70–83"
+        :color       :cyan
+        :sends       [:cc]
+        :default-cc-range [70 83]              ; see :midi/cc-knob-map for full table
+        :range       [0 127]
+        :view        :seq-view                 ; double-tap VBx to enter CC Seq View
+        :note "Default CC assignments are CC#70–83 on the 14 Shape/Groove/Tonal knobs.
+               These can be reassigned per track. Per-step CC editing available.
+               CC values stored in a track act as presets, transmitted on track load.
+               Random sequence modulation available per CC knob."}
+
+  :fx  {:description "Real-time MIDI transformation; pitch menu becomes live MIDI keyboard"
+        :color       :magenta
+        :receives    [:note-on :note-off]       ; T-1 MIDI In is processed by FX tracks
+        :sends       [:note-on :note-off :cc]   ; transformed MIDI out on track channel
+        :keyboard-layout
+        {:upper-row  [\C# \D# nil \F# \G# \A# nil]   ; black keys
+         :lower-row  [\C  \D  \E  \F  \G  \A  \B]    ; white keys — chromatic octave
+         :note "In FX track keyboard view the value buttons form a chromatic piano layout.
+                Useful for live note input; scale/root can be set to filter to key."}
+        :note "FX tracks monitor MIDI In on all channels. Incoming notes trigger the
+               track's euclidean engine or pass straight through. Pitch menu becomes
+               a live MIDI keyboard for the track's output channel."}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Pattern/track hierarchy
+ ;; -------------------------------------------------------------------------
+ :device/structure
+ {:banks    16
+  :patterns 16           ; per bank
+  :tracks   16           ; per pattern
+  :cycles   16           ; per track — per-cycle parameter automation snapshots
+  :steps    {:min 1 :max 64 :note "Step count determines cycle length"}
+  :division {:values [:free 1/48 1/32 1/24 1/16 1/12 1/8 1/6 1/4 1/3 1/2 1 2 4]
+             :note "Clock divider per track; :free = unquantized"}}
+
+ ;; -------------------------------------------------------------------------
+ ;; CC knob default assignments (§8.7)
+ ;; When a track is in CC mode, the 14 Shape/Groove/Tonal knobs send these CCs.
+ ;; Default range CC#70–83; each can be reassigned per track in CC Edit Mode.
+ ;; -------------------------------------------------------------------------
+ :midi/cc-knob-map
+ {:default-range [70 83]
+  :knobs
+  {70 {:knob :steps          :section :shape  :note "Euclidean step count"}
+   71 {:knob :pulses-rotate  :section :shape  :note "Euclidean pulses / rotate"}
+   72 {:knob :cycles         :section :shape  :note "Number of active cycles"}
+   73 {:knob :division       :section :shape  :note "Step clock divider"}
+   74 {:knob :velocity-prob  :section :groove :note "Base velocity / note probability"}
+   75 {:knob :sustain        :section :groove :note "Note gate / sustain length"}
+   76 {:knob :pitch-harmony  :section :tonal  :note "Pitch transposition / harmony"}
+   77 {:knob :repeats-offset :section :shape  :note "Note repeats / velocity ramp"}
+   78 {:knob :time-pace      :section :shape  :note "Repeat interval / acceleration"}
+   79 {:knob :voicing-style  :section :tonal  :note "Voicing amount / style template"}
+   80 {:knob :range-phrase   :section :tonal  :note "Pitch mod range / phrase shape"}
+   81 {:knob :accent-groove  :section :groove :note "Accent amount / groove profile"}
+   82 {:knob :timing-delay   :section :groove :note "Microtiming swing / track delay"}
+   83 {:knob :scale-root     :section :tonal  :note "Track scale / root note"}}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Sequencer parameters (per Note/CC track)
+ ;; -------------------------------------------------------------------------
+ :device/params
+ {:steps       {:range [1 64]   :cc 70 :note "Euclidean step count; determines cycle length"}
+  :pulses      {:range [1 64]   :cc 71 :note "Euclidean pulse count; number of active steps"}
+  :rotate      {:range [0 63]   :cc 71 :note "Rotate pulse positions (secondary of PULSES)"}
+  :division    {:range :see-structure :cc 73 :note "Clock divider per track"}
+  :cycles      {:range [1 16]   :cc 72 :note "Number of active cycles"}
+  :velocity    {:range [0 127]  :cc 74 :note "Base note velocity"}
+  :probability {:range [0 100]  :cc 74 :note "Note filter probability (secondary of VELOCITY)"}
+  :accent      {:range [0 127]  :cc 81 :note "Velocity variation amount (groove depth)"}
+  :groove      {:values [:agogo :timbales :congas :bongo :saw :triangle :sine :pulse :cv]
+                :cc 81 :note "Velocity groove profile (secondary of ACCENT)"}
+  :sustain     {:range [1/48 :inf] :cc 75 :note "Note gate length; infinite = legato"}
+  :timing      {:range [-50 50] :cc 82 :note "Microtiming swing offset"}
+  :delay       {:range [-64 64] :cc 82 :note "Track delay/advance offset (secondary of TIMING)"}
+  :repeats     {:range [0 15]   :cc 77 :note "Note repeats after each pulse"}
+  :offset      {:range [0 127]  :cc 77 :note "Velocity ramp for repeats (secondary of REPEATS)"}
+  :time        {:range [1/48 1] :cc 78 :note "Repeat time interval"}
+  :pace        {:range [-64 64] :cc 78 :note "Repeat acceleration (secondary of TIME)"}
+  :pitch       {:range [0 127]  :cc 76 :note "Base pitch / transposition"}
+  :harmony     {:range [-24 24] :cc 76 :note "Harmonic transposition (secondary of PITCH)"}
+  :scale       {:values [:chromatic :major :minor :dorian :phrygian :lydian
+                          :mixolydian :aeolian :locrian :pent-major :pent-minor
+                          :blues :whole-tone :diminished]
+                :cc 83 :note "Track scale"}
+  :root        {:range [0 11]   :cc 83 :note "Root note 0=C…11=B (secondary of SCALE)"}
+  :voicing     {:range [0 127]  :cc 79 :note "Pitch order / arpeggio amount"}
+  :style       {:values [:poly-fixed :poly-ramp :poly-climb
+                          :mono-fixed :mono-ramp :mono-climb]
+                :cc 79 :note "Voicing style template (secondary of VOICING)"}
+  :range       {:range [0 127]  :cc 80 :note "Pitch modulation range depth"}
+  :phrase      {:values [:cad1 :cad2 :cad3 :cad4 :saw :tri :sine :pulse :cv]
+                :cc 80 :note "Pitch modulation shape (secondary of RANGE)"}
+  :length      {:range [1 64]   :note "Pattern/track loop length in cycles"}
+  :random      {:range [0 127]  :note "Randomization variance amount"}
+  :rate        {:range [1/32 4] :note "Modulation rate (secondary of RANDOM)"}}
+
+ ;; -------------------------------------------------------------------------
+ ;; MIDI I/O defaults (from T-1 Config tool — MIDI I/O page)
+ ;; These apply to both USB and TRS connections independently.
+ ;; -------------------------------------------------------------------------
+ :midi/config-defaults
+ {:usb {:in  {:notes true  :clock false :start-stop false :prg-change false}
+        :out {:notes true  :clock true  :start-stop true  :prg-change false}}
+  :trs {:in  {:notes true  :clock false :start-stop false :prg-change false}
+        :out {:notes true  :clock true  :start-stop true  :prg-change false}}
+  :thru-mode :thru    ; default: MIDI Thru mirrors MIDI In; alt: :out (2nd MIDI Out)
+  :note "Notes In=On means T-1 MIDI In receives notes for FX track processing.
+         Clock In=Off means T-1 is the primary clock lead by default.
+         Enable Clock In when slaving T-1 to an external MIDI clock."}
+
+ ;; -------------------------------------------------------------------------
+ ;; Clock hierarchy (§8.16) — CRITICAL for travel rig setup
+ ;; Link is LOWEST priority. MIDI Clock overrides Link if both present.
+ ;; -------------------------------------------------------------------------
+ :midi/clock
+ {:hierarchy        [1 :analog-clock 2 :midi-clock 3 :ableton-link]
+  :ppqn             24
+  :send-default     true   ; Clock Out = On by default
+  :receive-default  false  ; Clock In = Off by default (T-1 is primary lead)
+  :note "Clock priority: 1=Analog Clock (highest), 2=MIDI Clock, 3=Ableton Link (lowest).
+         Tempo is disabled when an external MIDI clock is in control.
+         For travel rig: use Link (no cables); disable MIDI clock in/out if not needed."}
+
+ ;; -------------------------------------------------------------------------
+ ;; Ableton Link (§8.16)
+ ;; Wi-Fi only (2.4GHz). T-1 can join a network or create its own hotspot.
+ ;; Link is lower priority than MIDI clock — disable MIDI clock for pure Link sync.
+ ;; -------------------------------------------------------------------------
+ :ableton-link
+ {:transport         :wifi-only              ; 2.4GHz; no wired Link option
+  :sync              [:tempo :start-stop]    ; beat, phase, tempo + transport
+  :visual-cue        "PLAY button pulses ORANGE when Link session active"
+  :hotspot-capable   true                    ; T-1 can create its own Wi-Fi hotspot
+  :link-sync-setting "Link Synchronisation: On — auto-connects to Link peers on network"
+  :start-stop-sync   "Start/Stop Sync: On — T-1 transport follows Link start/stop"
+  :note "For travel rig: connect laptop and T-1 to same network (or T-1 hotspot).
+         cljseq.link/enable! joins automatically. Disable MIDI Clock Out if not
+         sending clock to other hardware (avoids clock hierarchy confusion)."}
+
+ ;; -------------------------------------------------------------------------
+ ;; Program change (§8.14) — T-1 sends PC outbound on pattern changes
+ ;; Banks 1-8 transmit on MIDI Ch 1; Banks 9-16 transmit on MIDI Ch 2.
+ ;; PC numbers 1-128 (16 patterns × 8 banks per channel).
+ ;; -------------------------------------------------------------------------
+ :midi/program-change
+ {:send    {:banks-1-8  {:channel 1 :pc-range [1 128]}
+            :banks-9-16 {:channel 2 :pc-range [1 128]}
+            :timing     "Issued 1/8th beat before actual pattern change"
+            :default    false  ; Prg.Change Out = Off by default; enable in Config}
+  :receive {:note "T-1 can receive PC to change its own patterns (Prg.Change In = Off default)"
+            :default false}}
+
+ ;; -------------------------------------------------------------------------
+ ;; CV / Gate I/O (configuration via Torso T-1 Config app)
+ ;; -------------------------------------------------------------------------
+ :cv-outputs
+ {:cv-1   {:type :assignable :note "Per-track CV assignment in T-1 Config app"}
+  :cv-2   {:type :assignable}
+  :cv-3   {:type :assignable}
+  :cv-4   {:type :assignable}
+  :gate-1 {:type :gate}
+  :gate-2 {:type :gate}
+  :cv-in  {:type :cv-input   :note "CV input for modulation or analog clock"}
+  :sync-in  {:type :analog-sync :note "Analog clock priority 1 (highest)"}
+  :sync-out {:type :analog-sync}}
+
+ ;; -------------------------------------------------------------------------
+ ;; cljseq binding hints
+ ;; Default track→channel: track 1=ch1, track 2=ch2, etc.
+ ;; -------------------------------------------------------------------------
+ :cljseq/bind-sources
+ {:notes-ch1  {:source :note-on  :channel 1  :yields :pitch-midi
+               :note "T-1 track 1 (default ch 1); redirect any track to ch 1 via CHANNEL knob"}
+  :notes-ch2  {:source :note-on  :channel 2  :yields :pitch-midi}
+  :notes-ch3  {:source :note-on  :channel 3  :yields :pitch-midi}
+  :notes-ch4  {:source :note-on  :channel 4  :yields :pitch-midi}
+  :notes-ch5  {:source :note-on  :channel 5  :yields :pitch-midi}
+  :notes-ch6  {:source :note-on  :channel 6  :yields :pitch-midi}
+  :notes-ch7  {:source :note-on  :channel 7  :yields :pitch-midi}
+  :notes-ch8  {:source :note-on  :channel 8  :yields :pitch-midi}
+  :velocity-ch1 {:source :note-on :channel 1 :yields :velocity-0-127}
+  :cc-70-ch1  {:source :cc-70  :channel 1  :yields :cc-0-127 :note "Steps (default CC#70)"}
+  :cc-74-ch1  {:source :cc-74  :channel 1  :yields :cc-0-127 :note "Velocity/Prob (CC#74)"}
+  :cc-75-ch1  {:source :cc-75  :channel 1  :yields :cc-0-127 :note "Sustain (CC#75)"}
+  :cc-83-ch1  {:source :cc-83  :channel 1  :yields :cc-0-127 :note "Scale/Root (CC#83)"}}
+
+ ;; -------------------------------------------------------------------------
+ ;; Travel rig setup notes
+ ;; -------------------------------------------------------------------------
+ :cljseq/travel-rig
+ {:role        "Primary clock lead (Link) + euclidean rhythm/melody source"
+  :link-setup  ["Connect T-1 to same Wi-Fi network as laptop (or use T-1 hotspot)"
+                "(cljseq.link/enable!) in REPL — auto-joins Link session"
+                "T-1 PLAY button pulses orange when session active"
+                "Disable MIDI Clock Out in T-1 Config if not driving other hardware"]
+  :midi-setup  ["USB-C → laptop Mac; T-1 appears as 'Torso Electronics T-1' in MIDI prefs"
+                "(defdevice :torso/t1 (load-device-map \"devices/torso-t1.edn\"))"
+                "(midi-in/open-input! :torso/t1) — uses :device/name for JVM MIDI match"]
+  :typical-use "T-1 tracks 1–4 → MIDI ch 1–4 → midi-in → play! on SC synths;
+                T-1 CC tracks → cc-74 (velocity/filter) on target device;
+                cljseq.ivk adds keyboard interval improv on top;
+                cljseq.journey / ambient provide macro arc and background texture"}
+
+ :device/map-source   "Torso Electronics T-1 User Manual OS 2.0.1 (Synthdawg), Chapter 8"
+ :device/map-version  "2026-04-11"}

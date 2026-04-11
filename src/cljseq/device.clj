@@ -212,7 +212,10 @@
        :midi/nrpn [{:nrpn 1 :path [:portamento] :bits 14}]})"
   [id device-map]
   (unregister-device! id)
-  (let [channel (int (clojure.core/get device-map :midi/channel 1))
+  ;; :midi/channel may be an integer (e.g. 1) or a map (e.g. T-1's per-track config).
+  ;; When it is a map, store 0 as a sentinel — actual channel comes from the message.
+  (let [ch-raw  (clojure.core/get device-map :midi/channel 1)
+        channel (if (integer? ch-raw) (int ch-raw) 0)
         role    (:device/role device-map)
         cc-list (:midi/cc device-map)]
     (when (= :target role)

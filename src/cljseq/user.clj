@@ -65,6 +65,8 @@
             [cljseq.osc        :as osc]
             [cljseq.remote     :as remote]
             [cljseq.transform  :as xf]
+            [cljseq.ivk        :as ivk]
+            [cljseq.midi-in    :as midi-in]
             [cljseq.voice      :as voice]))
 
 ;; ---------------------------------------------------------------------------
@@ -469,6 +471,10 @@
   Options:
     :midi-port    — MIDI output port: integer index or name substring (default 0)
     :midi-in-port — MIDI input port: integer index or name substring (default nil)
+    :kbd?         — when true, pass --kbd to the sidecar binary to enable
+                    global keyboard capture (CGEventTap, macOS; requires
+                    Accessibility permission).  After start-sidecar! returns,
+                    call start-kbd! to register the 0x21 KbdEvent handler.
 
   Use (list-midi-ports) to discover available ports.
 
@@ -476,9 +482,11 @@
     (start-sidecar!)
     (start-sidecar! :midi-port 1)
     (start-sidecar! :midi-port \"IAC\")
-    (start-sidecar! :midi-port \"Hydra\" :midi-in-port \"Hydra\")"
-  [& {:keys [midi-port midi-in-port] :or {midi-port 0}}]
-  (sidecar/start-sidecar! :midi-port midi-port :midi-in-port midi-in-port)
+    (start-sidecar! :midi-port \"Hydra\" :midi-in-port \"Hydra\")
+    (start-sidecar! :kbd? true)   ; keyboard rig — no MIDI hardware needed"
+  [& {:keys [midi-port midi-in-port kbd?] :or {midi-port 0}}]
+  (sidecar/start-sidecar! :midi-port midi-port :midi-in-port midi-in-port
+                           :kbd? kbd?)
   (println (str "Sidecar started on MIDI port " midi-port))
   nil)
 
@@ -490,6 +498,31 @@
 
 (def send-sysex! sidecar/send-sysex!)
 (def send-mts!   sidecar/send-mts!)
+
+;; ---------------------------------------------------------------------------
+;; Keyboard layout (cljseq.ivk)
+;; ---------------------------------------------------------------------------
+
+(def start-kbd!         ivk/start-kbd!)
+(def stop-kbd!          ivk/stop-kbd!)
+(def register-layout!   ivk/register-layout!)
+(def set-layout!        ivk/set-layout!)
+(def set-pitch!         ivk/set-pitch!)
+(def current-pitch      ivk/current-pitch)
+(def start-arp!         ivk/start-arp!)
+(def stop-arp!          ivk/stop-arp!)
+(def render-layout      ivk/render-layout)
+
+;; ---------------------------------------------------------------------------
+;; MIDI input (cljseq.midi-in)
+;; ---------------------------------------------------------------------------
+
+(def open-input!              midi-in/open-input!)
+(def close-input!             midi-in/close-input!)
+(def close-all-inputs!        midi-in/close-all-inputs!)
+(def open-inputs              midi-in/open-inputs)
+(def register-note-handler!   midi-in/register-note-handler!)
+(def unregister-note-handler! midi-in/unregister-note-handler!)
 
 ;; ---------------------------------------------------------------------------
 ;; Ableton Link (Phase 1 + Phase 2)
