@@ -1,5 +1,5 @@
 ; SPDX-License-Identifier: EPL-2.0
-(defproject cljseq "0.8.0"
+(defproject cljseq "0.9.0"
   :description "cljseq — music-theory-aware Clojure sequencer targeting MIDI and OSC"
   :url "https://github.com/rodgert/cljseq"
   :license {:name "EPL-2.0"
@@ -14,6 +14,7 @@
   :profiles {:uberjar {:aot :all
                        :jvm-opts ["-Dclojure.compiler.direct-linking=true"]}
              :dev {:dependencies []}}
+  :aliases {"mcp" ["run" "-m" "cljseq.mcp"]}
   :plugins [[lein-codox "0.10.8"]]
   :codox {:output-path "target/codox"
           :namespaces [cljseq.clock

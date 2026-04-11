@@ -1,6 +1,6 @@
 # cljseq User Manual
 
-Version 0.7.0 · April 2026
+Version 0.9.0 · April 2026
 
 ---
 
@@ -34,7 +34,13 @@ Version 0.7.0 · April 2026
 26. [SC Synthesis Showcase](#26-sc-synthesis-showcase)
 27. [Waveshaping and Spectral Bridge](#27-waveshaping-and-spectral-bridge)
 28. [DynKlank Physical Modeling](#28-dynklank-physical-modeling)
-29. [Reference: REPL Commands and Step Keys](#29-reference)
+29. [Composition from Hardware](#29-composition-from-hardware)
+30. [8-op FM Synthesis (Leviasynth)](#30-8-op-fm-synthesis-leviasynth)
+31. [OSC Push-Subscribe](#31-osc-push-subscribe)
+32. [nREPL Remote Eval](#32-nrepl-remote-eval)
+33. [Configuration Registry](#33-configuration-registry)
+34. [MCP Bridge (AI Compositional Collaborator)](#34-mcp-bridge)
+35. [Reference: REPL Commands and Step Keys](#35-reference)
 
 ---
 
@@ -489,6 +495,58 @@ Link-enabled software).
 ```
 
 Link requires the sidecar to be built with `-DCLJSEQ_ENABLE_LINK=ON`.
+
+### Transport control (Phase 2)
+
+`start-transport!` and `stop-transport!` commit a playing-state change to the
+Link session so every peer starts or stops together:
+
+```clojure
+;; All Link peers start playing simultaneously
+(link/start-transport!)
+
+;; All Link peers stop
+(link/stop-transport!)
+
+;; Query transport state
+(link/playing?)   ; => true / false / nil (not active)
+```
+
+`core/set-bpm!` propagates automatically to all Link peers when a session is
+active — no separate `link/set-bpm!` call is needed.
+
+### Transport-change hooks (Phase 2)
+
+Register a callback to react when *any* Link peer changes the transport state:
+
+```clojure
+;; Start all local loops when a Link peer hits play
+(link/on-transport-change! ::auto-start
+  (fn [playing?]
+    (if playing?
+      (do (deflive-loop :kick {} (play! {:pitch/midi 36 :dur/beats 1/4}) (sleep! 1))
+          (deflive-loop :bass {} (play! {:pitch/midi 43 :dur/beats 1/2}) (sleep! 2)))
+      (stop!))))
+
+;; Remove the hook
+(link/remove-transport-hook! ::auto-start)
+
+;; Inspect all registered hooks
+(link/transport-hooks)
+```
+
+Hooks fire synchronously on the sidecar reader thread — keep them fast; any
+exception is caught, printed, and swallowed so it cannot block the push path.
+
+### Quantum
+
+The quantum (phrase length in beats) determines phase alignment.  All peers
+with the same quantum are guaranteed to be in phase with each other.  The
+default is 4 beats; change it via the configuration registry:
+
+```clojure
+(config/set-config! :link/quantum 8)   ; 8-beat phrase alignment
+```
 
 ---
 
@@ -1536,6 +1594,47 @@ publishes a simplified primitive map at `[:ensemble :harmony-ctx]`:
 `peer/serial->scale` reconstructs the Scale record from these fields.
 `peer/ctx->serial` performs the reverse conversion (useful for testing).
 
+### Backend registry (Topology Layer 3)
+
+Each node advertises which synthesis backends it is running.  The registry is
+updated automatically when `connect-sc!` / `disconnect-sc!` is called; you can
+also register arbitrary backends manually:
+
+```clojure
+(require '[cljseq.peer :as peer])
+
+;; Register a backend (done automatically by connect-sc!)
+(peer/register-backend! :sc {:host "localhost" :sc-port 57110 :lang-port 57120})
+(peer/register-backend! :surge-xt {:host "localhost" :port 9000})
+
+;; Deregister
+(peer/deregister-backend! :surge-xt)
+
+;; Local active backends
+(peer/active-backends)
+;; => {:sc {:host "localhost" :sc-port 57110 :lang-port 57120}}
+
+;; Backends advertised by a discovered peer
+(peer/peer-backends :ubuntu)
+;; => {:sc {:host "192.168.1.10" :sc-port 57110 :lang-port 57120}}
+```
+
+The `:backends` map is included in the UDP discovery beacon so all peers can
+see each other's synthesis capabilities without polling.
+
+### Session profile
+
+Publish a rich profile for peer discovery — useful for UI panels or scripted
+multi-node sessions:
+
+```clojure
+(peer/publish-session-profile!
+  {:session/name   "main-rig"
+   :session/bpm    120
+   :session/loops  [:kick :bass :pad]})
+;; Stored at [:session :profile] in the ctrl tree — readable via HTTP
+```
+
 ---
 
 ## 21. Note Transformers
@@ -2460,7 +2559,490 @@ the `bind-spectral!` audio-reactive decay sculpting example.
 
 ---
 
-## 29. Reference
+## 29. Composition from Hardware
+
+`cljseq.composition` (renamed from `cljseq.midi-repair` in v0.8.0) captures a
+musical idea played on a hardware controller, cleans up timing and duplicate
+notes, and returns it as a plain Clojure sequence of step maps that you can
+play back, transform, and evolve using the full cljseq vocabulary.
+
+### Recording a phrase
+
+```clojure
+(require '[cljseq.composition :as comp])
+
+;; Capture MIDI input on channel 1 for 4 beats at 120 BPM
+(def raw (comp/record! :channel 1 :beats 4))
+
+;; raw is a seq of {:pitch/midi n :dur/beats d :start/beat b ...}
+```
+
+### Ingesting and cleaning up
+
+```clojure
+;; ingest! applies the full cleanup pipeline:
+;;   quantize timing → deduplicate overlaps → normalise velocities
+(def phrase (comp/ingest! raw :quantize 1/8 :dedup true))
+```
+
+### Playing it back
+
+```clojure
+;; One-shot playback
+(doseq [step phrase]
+  (play! step)
+  (sleep! (:dur/beats step)))
+
+;; In a live loop (loops automatically)
+(deflive-loop :motif {}
+  (doseq [step phrase]
+    (play! step)
+    (sleep! (:dur/beats step))))
+```
+
+### Transforming the phrase
+
+Because `ingest!` returns a plain Clojure sequence, every transformation in
+the standard library applies directly:
+
+```clojure
+;; Transpose up a fifth
+(def up5 (map #(update % :pitch/midi + 7) phrase))
+
+;; Reverse
+(def retrograde (reverse phrase))
+
+;; Apply a cljseq transformer
+(require '[cljseq.transform :as xf])
+(def echoed (xf/apply-transforms phrase [(xf/echo :repeats 2 :decay 0.5 :delay-beats 1/2)]))
+```
+
+---
+
+## 30. 8-op FM Synthesis (Leviasynth)
+
+`cljseq.fm` extends the existing 4-operator FM engine to 8 operators, adding
+per-operator waveforms, Through-Zero FM (TZFM) routing, and cross-operator
+feedback loops.  All operators are SuperCollider UGens — the Leviasynth
+abstraction compiles them to SC synth definitions via `cljseq.sc`.
+
+### Quick start
+
+```clojure
+(require '[cljseq.fm :as fm])
+(require '[cljseq.sc :as sc])
+
+;; Load a named 8-op preset
+(def synth (sc/sc-synth! (fm/build-synth :8op-brass) {:freq 220 :amp 0.4}))
+```
+
+### Preset library
+
+| Preset | Character |
+|--------|-----------|
+| `:8op-brass` | Bright brass; series operator chain with TZFM depth |
+| `:8op-bells` | Four carrier/modulator pairs with cross-feedback shimmer |
+| `:8op-evolving-pad` | Transient modulator + `SinOscFB` operator for slow morphing |
+| `:8op-dx7-pno` | DX7-inspired piano; percussive attack, soft decay |
+
+### Algorithm templates
+
+Templates describe the operator routing topology.  Pass one to `fm/build-synth`
+as the `:algorithm` key or use a preset that sets it automatically:
+
+| Template | Description |
+|----------|-------------|
+| `:8op-stack` | All 8 ops in series (op8 → op7 → … → op1 carrier) |
+| `:4-pairs` | Four independent C+M pairs in parallel |
+| `:2x4-stacks` | Two 4-op stacks in parallel |
+| `:8-carriers` | All 8 ops are carriers (additive synthesis) |
+| `:4mod-1` | Four modulators → one carrier + 3 free carriers |
+
+### Per-operator waveforms
+
+Each operator accepts a `:waveform` key:
+
+```clojure
+{:id 1 :freq-ratio 1.0 :amp 0.8 :waveform :saw}
+```
+
+| Waveform | SC UGen |
+|----------|---------|
+| `:sin` | `SinOsc.ar` (default) |
+| `:saw` | `Saw.ar` |
+| `:tri` | `LFTri.ar` |
+| `:pulse` | `Pulse.ar` |
+| `:sin-fb` | `SinOscFB.ar` — also accepts `:feedback 0.0–1.0` |
+
+### TZFM routing
+
+Add `{:tzfm? true}` to a routing entry to use Through-Zero FM, which keeps
+timbre pitch-invariant across the keyboard:
+
+```clojure
+{:id 1 :freq-ratio 1.0 :amp 1.0
+ :routing [{:to 1 :depth 0.5 :tzfm? true}]}  ; self TZFM
+```
+
+The shorthand `{mod-id target-id}` still works for standard FM routing.
+
+### Cross-feedback
+
+Cross-feedback generates `LocalIn.ar`/`LocalOut.ar` pairs in SuperCollider,
+enabling inter-operator feedback loops:
+
+```clojure
+(fm/build-synth
+  {:algorithm  :4-pairs
+   :operators  [...]
+   :cross-feedback [{:from 2 :to 1 :depth 0.3}
+                    {:from 4 :to 3 :depth 0.2}]})
+```
+
+---
+
+## 31. OSC push-subscribe
+
+The OSC push-subscribe mechanism lets external clients (TouchOSC, Max/MSP,
+custom GUIs, remote cljseq instances) receive live updates whenever a ctrl tree
+path changes — without polling.
+
+### Starting the OSC server
+
+```clojure
+(require '[cljseq.osc :as osc])
+
+(osc/start-osc-server! :port 57121)   ; default port
+(osc/osc-running?)                    ; => true
+```
+
+### Subscribing from Clojure
+
+```clojure
+;; Push filter/cutoff changes to TouchOSC at 192.168.1.50:9000
+(osc/subscribe! [:filter/cutoff] {:host "192.168.1.50" :port 9000})
+
+;; Subscribe multiple addresses to the same path
+(osc/subscribe! [:filter/cutoff] {:host "192.168.1.51" :port 9001})
+
+;; List subscribers on a path
+(osc/subscribers)
+;; => {[:filter/cutoff] #{{:host "192.168.1.50" :port 9000} ...}}
+
+;; Unsubscribe one
+(osc/unsubscribe! [:filter/cutoff] {:host "192.168.1.50" :port 9000})
+
+;; Unsubscribe all on a path
+(osc/unsubscribe-all! [:filter/cutoff])
+```
+
+When the last subscriber leaves, the internal `ctrl/watch!` watcher is
+removed automatically so there is no overhead for idle paths.
+
+### Wire routes (for external clients)
+
+Any OSC-capable device can subscribe without writing Clojure code by sending
+OSC messages to the cljseq control port:
+
+| Message | Arguments | Effect |
+|---------|-----------|--------|
+| `/sub`   | `ctrl-addr host port` | Subscribe `host:port` to `ctrl-addr` |
+| `/unsub` | `ctrl-addr host port` | Unsubscribe |
+| `/tree`  | `ctrl-addr`           | Push current value back to sender |
+
+`ctrl-addr` is the URL-encoded ctrl tree path:
+- `[:filter/cutoff]` → `/ctrl/filter%2Fcutoff`
+- `[:loops :bass]`   → `/ctrl/loops/bass`
+
+Example from TouchOSC (OSC send on connect):
+```
+/sub /ctrl/filter%2Fcutoff 192.168.1.50 9000
+```
+
+### Push message format
+
+When a subscribed path changes, cljseq sends an OSC message to each registered
+address:
+
+```
+/ctrl/filter%2Fcutoff  <value>
+```
+
+The value is coerced: integers become `int32`, floats become `float32`, strings
+stay strings, other values are serialised with `pr-str`.
+
+### Converting between ctrl paths and OSC addresses
+
+```clojure
+(osc/ctrl-path->osc-address [:filter/cutoff])
+;; => "/ctrl/filter%2Fcutoff"
+```
+
+---
+
+## 32. nREPL Remote Eval
+
+`cljseq.remote` provides a minimal nREPL TCP client for evaluating Clojure
+expressions on remote cljseq instances.  This is Topology Layer 3: once peers
+are discovered (§20) and their backends are known, you can script cross-node
+automation entirely from the REPL.
+
+`cljseq.bencode` (the underlying codec) is hand-rolled to keep the dependency
+list at just `org.clojure/clojure` and `org.clojure/data.json`.
+
+### Connecting to a peer
+
+```clojure
+(require '[cljseq.remote :as remote])
+
+;; Open a connection and clone an nREPL session
+(def conn (remote/connect! "192.168.1.10" 7888))
+
+;; Evaluate an expression — returns a map with :value :out :err
+(remote/remote-eval! conn "(+ 1 2)")
+;; => {:value "3" :out "" :err ""}
+
+;; Evaluate and pretty-print output
+(remote/remote-eval! conn "(start! :bpm 140)")
+
+;; Close
+(remote/disconnect! conn)
+```
+
+### `with-peer` macro
+
+`with-peer` opens a fresh connection, evaluates the body, and closes on exit:
+
+```clojure
+(remote/with-peer [conn "192.168.1.10" 7888]
+  (remote/remote-eval! conn "(link/enable!)")
+  (remote/remote-eval! conn "(set-bpm! 130)"))
+```
+
+### `eval-on-peer!` — one-shot shorthand
+
+When a peer has been discovered via `peer/start-discovery!`, `eval-on-peer!`
+looks up the peer's nREPL port from the beacon data and opens a fresh
+connection per call:
+
+```clojure
+;; Assuming :ubuntu was discovered with :nrepl-port 7888
+(remote/eval-on-peer! :ubuntu "(deflive-loop :pad {} (play! :C4) (sleep! 2))")
+```
+
+### Cross-node scripting example
+
+```clojure
+;; Coordinate a two-node jam from one REPL
+(remote/with-peer [mac "192.168.1.10" 7888]
+  (remote/with-peer [rpi "192.168.1.20" 7888]
+    (remote/remote-eval! mac "(set-bpm! 120)")
+    (remote/remote-eval! rpi "(set-bpm! 120)")
+    (remote/remote-eval! mac "(link/enable!)")
+    (remote/remote-eval! rpi "(link/enable!)")))
+```
+
+---
+
+## 33. Configuration Registry
+
+`cljseq.config` exposes all §25 tunable system parameters through a validated
+registry.  Parameters are seeded into the ctrl tree on `start!` so every value
+is immediately readable and writable via HTTP and OSC — no extra wiring needed.
+
+### Reading configuration
+
+```clojure
+(require '[cljseq.config :as config])
+
+(config/get-config :bpm)                       ; => 120
+(config/get-config :link/quantum)              ; => 4
+(config/get-config :ctrl/undo-stack-depth)     ; => 50
+(config/get-config :osc/control-port)          ; => 57121
+
+;; All parameters at once
+(config/all-configs)
+;; => {:bpm 120 :link/quantum 4 :osc/control-port 57121 ...}
+```
+
+### Writing configuration
+
+```clojure
+;; Change the Link quantum (takes effect on next loop start)
+(config/set-config! :link/quantum 8)
+
+;; Change BPM — equivalent to set-bpm!, with full side effects
+(config/set-config! :bpm 140)
+
+;; Validation is enforced — these throw ex-info
+(config/set-config! :bpm -1.0)          ; negative BPM
+(config/set-config! :link/quantum 0)    ; non-positive quantum
+```
+
+### HTTP access
+
+All parameters are accessible via the control-plane HTTP server (§12):
+
+```
+GET  /ctrl/config/bpm                       → {"value": 120}
+GET  /ctrl/config/link%2Fquantum            → {"value": 4}
+GET  /ctrl/config/ctrl%2Fundo-stack-depth   → {"value": 50}
+GET  /ctrl/config/sched-ahead-ms%2Fmidi-hardware → {"value": 100}
+```
+
+`set-bpm!` keeps `[:config :bpm]` in sync so the HTTP response always reflects
+the live tempo.
+
+### Parameter reference
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `:bpm` | `120` | Master tempo (beats per minute) |
+| `:link/quantum` | `4` | Ableton Link phrase length in beats |
+| `:ctrl/undo-stack-depth` | `50` | Maximum undo-stack entries |
+| `:lfo/update-rate-hz` | `100` | LFO continuous-parameter update rate |
+| `:osc/control-port` | `57121` | OSC control-plane server UDP port |
+| `:osc/data-port` | `57110` | OSC data-plane / sidecar passthrough port |
+| `:sched-ahead-ms/midi-hardware` | `100` | MIDI hardware schedule-ahead (ms) |
+| `:sched-ahead-ms/sc-osc` | `30` | SuperCollider OSC schedule-ahead (ms) |
+| `:sched-ahead-ms/vcv-rack` | `50` | VCV Rack schedule-ahead (ms) |
+| `:sched-ahead-ms/daw-midi` | `50` | DAW MIDI schedule-ahead (ms) |
+| `:sched-ahead-ms/link` | `0` | Link sync schedule-ahead (ms) |
+
+### Registry introspection
+
+```clojure
+(config/all-param-keys)
+;; => #{:bpm :link/quantum :osc/control-port ...}
+
+(config/param-info :bpm)
+;; => {:default 120 :type :float :doc "Master tempo in beats per minute." :validate #fn}
+```
+
+### Startup behaviour
+
+`core/start!` resets `:config` to registry defaults and clears the undo stack
+on every call, so sessions start in a clean, predictable state.  The `:bpm`
+argument overrides the `:bpm` default:
+
+```clojure
+(start! :bpm 110)   ; :config is {... :bpm 110 :link/quantum 4 ...}
+```
+
+---
+
+## 34. MCP Bridge
+
+`cljseq.mcp` is a standalone MCP (Model Context Protocol) server that exposes
+the running cljseq session as AI-legible tools.  Launch it alongside your REPL
+and Claude Code can participate in the session as a live compositional collaborator
+— reading harmony context, writing loops, ingesting recordings, and reasoning
+across the full synthesis stack.
+
+### Why cljseq is uniquely suited for MCP
+
+Most live-coding environments expose code to an AI; cljseq exposes *data*.  The
+ctrl tree, harmony context, score map, and SynthDef graph are all plain Clojure
+values.  An AI can read them, reason about them musically, and write back without
+any special serialisation layer.
+
+### Setup
+
+```bash
+# Start cljseq (lein repl or your usual entry point)
+lein repl
+
+# In a second terminal — start the MCP server
+lein mcp                              # connects to localhost:7888
+lein mcp --nrepl-host 192.168.1.10    # connect to remote node
+```
+
+Register with Claude Code (`.mcp.json` at the repo root, or `claude mcp add`):
+
+```json
+{
+  "mcpServers": {
+    "cljseq": {
+      "command": "lein",
+      "args": ["-C", "mcp"]
+    }
+  }
+}
+```
+
+### Tool reference
+
+#### Session control
+
+| Tool | Description |
+|------|-------------|
+| `evaluate` | Eval any Clojure on the running session |
+| `get-ctrl` | Read a ctrl tree path (EDN vector, e.g. `[:config :bpm]`) |
+| `set-ctrl` | Write a value to a ctrl tree path |
+| `get-harmony-ctx` | Current `*harmony-ctx*`: root, scale, tensions |
+| `get-spectral` | Spectral analysis state: centroid, flux, density |
+| `get-loops` | Running loop inventory with tick counts |
+| `define-loop` | Create or hot-swap a named live loop |
+| `stop-loop` | Stop a named loop |
+| `play-note` | Trigger a single note event |
+| `set-bpm` | Change master tempo (propagates to Link peers) |
+| `get-config` / `set-config` | §25 configuration registry |
+| `get-score` | Full ctrl tree snapshot as EDN |
+
+#### Composition pipeline
+
+The pipeline tools share a `composition` binding in the nREPL session.
+`ingest-midi` populates it; subsequent tools read and update it.
+
+| Tool | Description |
+|------|-------------|
+| `ingest-midi` | Full pipeline: parse → key/mode detect → voice separation → tension arc → outlier flag → resolution |
+| `show-corrections` | Display outlier note proposals from the last ingest |
+| `accept-corrections` | Apply corrections; rebind `composition` |
+| `play-score` | Play the current `composition` via the event engine |
+| `save-score` | Write `composition` to an EDN file (music area handoff) |
+
+```
+# Typical Claude workflow:
+ingest-midi path=/path/to/recording.mid
+→ shows: G ionian, 110 BPM, 32 bars, 0 corrections, peak tension bar 28
+
+show-corrections
+→ "No corrections proposed — recording stayed diatonic throughout"
+
+play-score
+→ plays back drone + pad + motifs
+
+save-score path=~/org/areas/music/shipwreck-piano.edn
+→ {:saved ".../shipwreck-piano.edn"}
+```
+
+#### Topology
+
+| Tool | Description |
+|------|-------------|
+| `list-peers` | Topology registry: all discovered nodes with backends |
+| `evaluate-on-peer` | Eval on any named node (e.g. `:ubuntu`) in the topology |
+
+`evaluate-on-peer` proxies through `cljseq.remote/eval-on-peer!` on the primary
+node, so the peer registry lookup happens in the running session rather than the
+MCP process.  Use `list-peers` first to discover available node IDs.
+
+### The `evaluate` escape hatch
+
+Every named tool is a thin wrapper around `evaluate`.  Anything not covered by
+a named tool is one `evaluate` call away.  The composition namespace, FM
+compiler, Spatial Field, Euclidean rhythms — all accessible directly:
+
+```
+evaluate code=(comp/print-corrections composition)
+evaluate code=(apply-trajectory! bass-node :coeff (buildup 8.0 {:from 0.95 :to 0.9998}))
+evaluate code=(compile-fm :sc (fm-algorithm :8op-stack))
+```
+
+---
+
+## 35. Reference
 
 ### REPL commands
 
