@@ -151,6 +151,28 @@ cljseq (Mac Mini)
 └── MixBus         — tracking DAW (Ubuntu, LAN peer)
 ```
 
+### Full studio + travel rig joined as peer
+
+The portable rig does not stay home when you are in the studio. It joins the
+topology as a peer via mDNS discovery. The FaderPort 8 becomes an additional
+surface node — more strips, a dedicated physical control position, a second
+operator surface for collaborative sessions:
+
+```
+cljseq (Mac Mini) ←→ cljseq (laptop, LAN peer)
+├── FaderPort 16        ├── FaderPort 8  — additional 8 strips
+├── FaderPort 1         └── ivk keyboard — second note input
+├── SSL UF8/UF1/UC1
+├── TouchOSC
+├── Bitwig
+└── MixBus
+```
+
+The FaderPort 16 + FP1 + FP8 together give 25 physical strips — 16 wide for
+the main session view, 1 focused, 8 additional for compositional parameters or
+a second operator. All three speak the same FaderPort native protocol. All three
+are peers in the same ctrl tree. Strip assignment is per-surface and independent.
+
 ### Travel / gig minimum
 
 ```
