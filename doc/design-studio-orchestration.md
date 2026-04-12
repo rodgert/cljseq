@@ -164,6 +164,35 @@ compositional vocabulary, the same orchestration logic, the same ctrl tree
 intelligence — in a carry-on bag. The studio adds execution power and physical
 surface area. The orchestration is identical.
 
+### The gig as composition session — full continuity
+
+A conventional gig produces audio: a recording of what happened. Returning to
+the studio means working *from* that recording — reconstructing moments, guessing
+at parameter positions, rebuilding structure from audio evidence.
+
+A cljseq gig produces the score. The journey arc that played out, every mutation
+the ostinato went through, the harmonic context at every bar, the ctrl tree state,
+the tension arc ridden by hand on the FaderPort 8 faders, the phase relationship
+the two voices had drifted to by the final bar — all of it is a Clojure value.
+
+When the studio opens the next morning:
+- The FaderPort 16 picks up where the FaderPort 8 left off — same assignments,
+  same positions, more faders
+- The journey conductor is paused at the bar where the set ended
+- The ostinato is in whatever mutation state it reached during performance
+- Bitwig and MixBus are now available as execution engines for material that
+  ran through SC synths at the gig
+- Elaborate, layer, refine — from the actual compositional state, not a reconstruction
+
+**Full fidelity** means compositional fidelity, not audio fidelity. Structure,
+arc, harmonic decisions, generative state — none of it is lost to the recording.
+It is all in the score.
+
+**Just more of it.** The studio does not change what the piece is. It provides
+more execution power, more surface area, more elaboration depth to develop what
+the gig discovered. The gig is the composition session. The studio is the
+production session. The cljseq score is the handoff between them, losslessly.
+
 ---
 
 ## Protocol adapters
