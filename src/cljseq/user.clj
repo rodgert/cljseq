@@ -67,7 +67,9 @@
             [cljseq.transform  :as xf]
             [cljseq.ivk        :as ivk]
             [cljseq.midi-in    :as midi-in]
-            [cljseq.voice      :as voice]))
+            [cljseq.voice      :as voice]
+            [cljseq.journey    :as journey]
+            [cljseq.berlin     :as berlin]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session lifecycle
@@ -556,6 +558,41 @@
 ;; ---------------------------------------------------------------------------
 ;; Handy theory shortcuts at the top level
 ;; ---------------------------------------------------------------------------
+
+;; ---------------------------------------------------------------------------
+;; Kosmische vocabulary — cljseq.journey + cljseq.berlin
+;; ---------------------------------------------------------------------------
+
+;; Journey conductor
+(def start-bar-counter!  journey/start-bar-counter!)
+(def stop-bar-counter!   journey/stop-bar-counter!)
+(def reset-bar-counter!  journey/reset-bar-counter!)
+(def current-bar         journey/current-bar)
+(def start-journey!      journey/start-journey!)
+(def stop-journey!       journey/stop-journey!)
+(def phase-pair          journey/phase-pair)
+(def humanise            journey/humanise)
+(def phaedra-arc         journey/phaedra-arc)
+
+;; Berlin School / Kosmische ostinato + performance tools
+(def ostinato            berlin/ostinato)
+(def next-step!          berlin/next-step!)
+(def reset-ostinato!     berlin/reset-ostinato!)
+(def freeze-ostinato!    berlin/freeze-ostinato!)
+(def thaw-ostinato!      berlin/thaw-ostinato!)
+(def deflect-ostinato!   berlin/deflect-ostinato!)
+(def crystallize!        berlin/crystallize!)
+(def dissolve!           berlin/dissolve!)
+(def set-mutation-trajectory! berlin/set-mutation-trajectory!)
+(def set-portamento!     berlin/set-portamento!)
+(defmacro with-portamento [channel time-ms & body]
+  `(berlin/with-portamento ~channel ~time-ms ~@body))
+(def filter-journey!     berlin/filter-journey!)
+(def phase-drift!        berlin/phase-drift!)
+(def clear-drift!        berlin/clear-drift!)
+(def tuning-morph!       berlin/tuning-morph!)
+(def tape-drift          berlin/tape-drift)
+(def tick-tape!          berlin/tick-tape!)
 
 (defn make-scale
   "Build a Scale record. Common modal shorthand.
