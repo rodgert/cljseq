@@ -477,6 +477,8 @@
                     global keyboard capture (CGEventTap, macOS; requires
                     Accessibility permission).  After start-sidecar! returns,
                     call start-kbd! to register the 0x21 KbdEvent handler.
+    :binary       — explicit path to the sidecar binary (default: searches build/).
+                    Needed when running from a git worktree that has no build/ dir.
 
   Use (list-midi-ports) to discover available ports.
 
@@ -485,10 +487,11 @@
     (start-sidecar! :midi-port 1)
     (start-sidecar! :midi-port \"IAC\")
     (start-sidecar! :midi-port \"Hydra\" :midi-in-port \"Hydra\")
-    (start-sidecar! :kbd? true)   ; keyboard rig — no MIDI hardware needed"
-  [& {:keys [midi-port midi-in-port kbd?] :or {midi-port 0}}]
-  (sidecar/start-sidecar! :midi-port midi-port :midi-in-port midi-in-port
-                           :kbd? kbd?)
+    (start-sidecar! :kbd? true)   ; keyboard rig — no MIDI hardware needed
+    (start-sidecar! :binary \"/path/to/cljseq-sidecar\")  ; worktree use"
+  [& {:keys [binary midi-port midi-in-port kbd?] :or {midi-port 0}}]
+  (sidecar/start-sidecar! :binary binary :midi-port midi-port
+                           :midi-in-port midi-in-port :kbd? kbd?)
   (println (str "Sidecar started on MIDI port " midi-port))
   nil)
 
