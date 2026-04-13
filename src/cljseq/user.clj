@@ -460,6 +460,10 @@
 ;; Sidecar shorthand
 ;; ---------------------------------------------------------------------------
 
+(def diag-on!            sidecar/diag-on!)
+(def diag-off!           sidecar/diag-off!)
+(def set-diag!           sidecar/set-diag!)
+
 (def list-midi-ports         sidecar/list-midi-ports)
 (def find-midi-port          sidecar/find-midi-port)
 (def send-cc!                sidecar/send-cc!)

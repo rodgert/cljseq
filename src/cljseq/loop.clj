@@ -173,6 +173,20 @@
      :scale (scala/load-scl \"pythagorean.scl\")}"
   nil)
 
+(def ^:dynamic *loop-name*
+  "Keyword name of the currently executing live loop, or nil outside a loop.
+
+  Bound per-thread by deflive-loop. Readable by any code called from within
+  a loop body — play!, berlin/next-step!, sidecar send functions, etc. — for
+  provenance in diagnostics and logging.
+
+  Example:
+    (deflive-loop :voice-a {}
+      (println *loop-name*)   ; => :voice-a
+      (play! ...)
+      (sleep! 1))"
+  nil)
+
 (def ^:dynamic *sleep-interrupted?*
   "Per-thread atom holding a boolean; when true, park-until-beat! exits early
   and resets the atom to false. nil outside a live-loop thread.
@@ -377,7 +391,8 @@
                                     cljseq.loop/*step-mod-ctx*  step-mod-ctx#
                                     cljseq.loop/*harmony-ctx*   harmony-ctx#
                                     cljseq.loop/*chord-ctx*     chord-ctx#
-                                    cljseq.loop/*tuning-ctx*    tuning-ctx#]
+                                    cljseq.loop/*tuning-ctx*    tuning-ctx#
+                                    cljseq.loop/*loop-name*     ~loop-name]
                             ~@body))
          restart-bar# (:restart-on-bar ~opts)
          sref#       (cljseq.loop/-system-ref)]

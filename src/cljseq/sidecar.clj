@@ -174,6 +174,54 @@
       (.flush out))))
 
 ;; ---------------------------------------------------------------------------
+;; IPC send diagnostics
+;; ---------------------------------------------------------------------------
+
+(def ^:private diag-level
+  "IPC diagnostic verbosity atom.
+  0 = off, 1 = NoteOn/NoteOff, 2 = all messages (CC, pitch-bend)."
+  (atom 0))
+
+(defn set-diag!
+  "Set IPC send diagnostic verbosity level.
+
+  0 — off (default)
+  1 — NoteOn/NoteOff: prints loop name, channel, note, velocity
+  2 — all IPC messages: also includes CC and pitch-bend
+
+  Example:
+    (set-diag! 1)   ; note on/off only
+    (set-diag! 2)   ; everything
+    (set-diag! 0)   ; off"
+  [level]
+  (reset! diag-level (long level)))
+
+(defn diag-on!
+  "Enable IPC send diagnostics at level 1 (NoteOn/NoteOff with provenance).
+  Use set-diag! for finer control."
+  []
+  (set-diag! 1))
+
+(defn diag-off!
+  "Disable IPC send diagnostics."
+  []
+  (set-diag! 0))
+
+(defn- diag-loop-name
+  "Return the current loop name from cljseq.loop/*loop-name* if bound,
+  or \"-\" when called outside a live loop. Uses resolve to avoid a
+  compile-time circular dependency on cljseq.loop."
+  []
+  (if-let [v (resolve 'cljseq.loop/*loop-name*)]
+    (or @v "-")
+    "-"))
+
+(defn- diag! [level msg]
+  (when (>= @diag-level level)
+    (binding [*out* *err*]
+      (println msg))))
+
+;; ---------------------------------------------------------------------------
 ;; Public send API
 ;; ---------------------------------------------------------------------------
 
@@ -185,16 +233,19 @@
   note     — MIDI note number 0–127
   velocity — 0–127"
   [time-ns channel note velocity]
+  (diag! 1 (str "[play] " (diag-loop-name) "  NoteOn  ch=" channel " note=" note " vel=" velocity))
   (send-frame! (make-frame MSG-NOTE-ON (note-payload time-ns channel note velocity))))
 
 (defn send-note-off!
   "Send a NoteOff event to the sidecar. Velocity is always 0."
   [time-ns channel note]
+  (diag! 1 (str "[play] " (diag-loop-name) "  NoteOff ch=" channel " note=" note))
   (send-frame! (make-frame MSG-NOTE-OFF (note-payload time-ns channel note 0))))
 
 (defn send-cc!
   "Send a Control Change event to the sidecar."
   [time-ns channel cc-num value]
+  (diag! 2 (str "[play] " (diag-loop-name) "  CC      ch=" channel " cc=" cc-num " val=" value))
   (send-frame! (make-frame MSG-CC (cc-payload time-ns channel cc-num value))))
 
 (defn send-pitch-bend!
@@ -207,6 +258,7 @@
   Wire payload: [int64 time-ns][uint8 channel][uint8 lsb][uint8 msb][uint8 reserved]
   The C++ sidecar encodes this as a standard MIDI pitch-bend message (0xEn lsb msb)."
   [time-ns channel value-14bit]
+  (diag! 2 (str "[play] " (diag-loop-name) "  PBend   ch=" channel " val=" value-14bit))
   (send-frame! (make-frame MSG-PITCH-BEND
                            (pitch-bend-payload time-ns channel value-14bit))))
 
@@ -219,6 +271,7 @@
 
   Reuses the CC payload layout (same byte structure, different message type)."
   [time-ns channel pressure]
+  (diag! 2 (str "[play] " (diag-loop-name) "  ChanPrs ch=" channel " val=" pressure))
   (send-frame! (make-frame MSG-CHAN-PRESSURE (cc-payload time-ns channel 0 pressure))))
 
 (defn send-sysex!
