@@ -22,9 +22,13 @@
 ;;   D2=38  E2=40  F2=41  G2=43  A2=45  C3=48  D3=50
 ;;   D3=50  F3=53  G3=55  A3=57  C4=60  D4=62
 
-(require '[cljseq.user  :refer :all]
-         '[cljseq.journey :as journey]
-         '[cljseq.berlin  :as berlin])
+;; cljseq.core is the default REPL ns and already owns play!, sleep!,
+;; deflive-loop, stop-loop!, set-bpm!, now, etc.
+;; Only pull in what core doesn't have:
+(require '[cljseq.journey :as journey]
+         '[cljseq.berlin  :as berlin]
+         '[cljseq.user    :refer [session! start-sidecar! stop-sidecar!
+                                  make-scale trajectory]])
 
 ;; ============================================================
 ;; 0. SESSION BOOT
@@ -117,7 +121,7 @@
 
 ;; Voice A: step every 3 beats, full 12-beat cycle
 (deflive-loop :voice-a {:channel 1 :restart-on-bar true}
-  (with-portamento 1 80
+  (berlin/with-portamento 1 80
     (play! (berlin/next-step! ost-a)))
   (sleep! 3))
 
@@ -125,7 +129,7 @@
 ;; Uses a simple phase-index to alternate the sleep durations.
 (let [step-sleeps (atom (cycle [5 6 6]))]
   (deflive-loop :voice-b {:channel 2 :restart-on-bar true}
-    (play! (humanise (berlin/next-step! ost-b)
+    (play! (journey/humanise (berlin/next-step! ost-b)
                      {:timing-variance-ms 8 :velocity-variance 6}))
     (sleep! (first (swap! step-sleeps rest)))))
 
