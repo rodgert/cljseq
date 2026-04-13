@@ -463,6 +463,8 @@
 (def diag-on!            sidecar/diag-on!)
 (def diag-off!           sidecar/diag-off!)
 (def set-diag!           sidecar/set-diag!)
+(def sidecar-verbose!    sidecar/sidecar-verbose!)
+(def sidecar-quiet!      sidecar/sidecar-quiet!)
 
 (def list-midi-ports         sidecar/list-midi-ports)
 (def find-midi-port          sidecar/find-midi-port)

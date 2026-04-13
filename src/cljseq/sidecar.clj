@@ -49,9 +49,29 @@
   []
   (boolean (:out @sidecar-state)))
 
+(def ^:private stderr-print?
+  "When true, sidecar stderr lines are printed to *err* as they arrive.
+  Toggle with sidecar-verbose! and sidecar-quiet!. Default false — the
+  C++ sidecar emits one line per scheduled event which floods the REPL
+  during live sessions."
+  (atom false))
+
+(defn sidecar-verbose!
+  "Print sidecar C++ stderr lines to *err* as they arrive.
+  Useful for debugging IPC/MIDI dispatch issues."
+  []
+  (reset! stderr-print? true))
+
+(defn sidecar-quiet!
+  "Suppress sidecar C++ stderr output (default).
+  Lines are still captured in sidecar-state for await-dispatch."
+  []
+  (reset! stderr-print? false))
+
 (defn- capture-stderr!
-  "Start a daemon thread that reads proc's stderr, prints each line to *err*,
-   and appends it to :stderr-lines in sidecar-state."
+  "Start a daemon thread that reads proc's stderr, appends each line to
+  :stderr-lines in sidecar-state, and prints it to *err* only when
+  stderr-print? is true."
   [^Process proc]
   (let [t (Thread.
             (fn []
@@ -59,9 +79,10 @@
                 (let [rdr (BufferedReader. (InputStreamReader. (.getErrorStream proc)))]
                   (loop []
                     (when-let [line (.readLine rdr)]
-                      (binding [*out* *err*]
-                        (println line))
                       (swap! sidecar-state update :stderr-lines conj line)
+                      (when @stderr-print?
+                        (binding [*out* *err*]
+                          (println line)))
                       (recur))))
                 (catch Exception _))))]
     (.setDaemon t true)
