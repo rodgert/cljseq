@@ -552,6 +552,10 @@
     :dur-ms     — note duration in milliseconds (default 500)
     any other key matching a synth arg is passed through.
 
+  The release time is computed as an absolute wall-clock epoch before
+  the OSC send, so thread-scheduling jitter does not shorten or lengthen
+  the sounding duration.
+
   Returns node-id.
 
   Example:
@@ -564,10 +568,15 @@
                        (when midi (* 440.0 (Math/pow 2.0 (/ (- midi 69) 12.0)))))
         args       (-> (dissoc event :synth :dur-ms :pitch/midi)
                        (cond-> freq (assoc :freq freq)))
+        ;; Capture release target before sc-synth! so the duration is relative
+        ;; to when we schedule the note-on, not when the daemon thread starts.
+        off-at-ms  (+ (System/currentTimeMillis) (long dur-ms))
         node-id    (sc-synth! synth-name args)]
     (doto (Thread. (fn []
                      (try
-                       (Thread/sleep (long dur-ms))
+                       (let [sleep-ms (- off-at-ms (System/currentTimeMillis))]
+                         (when (pos? sleep-ms)
+                           (Thread/sleep sleep-ms)))
                        (free-synth! node-id)
                        (catch Exception _))))
       (.setDaemon true)
