@@ -214,9 +214,12 @@
     (keyword? node)
     (sc-arg-name node)
 
-    ;; Numeric literal
+    ;; Numeric literal — emit integers as integers (SC 3.13+ requires integer
+    ;; numChannels for In.ar / LocalIn etc.), floats as floats.
     (number? node)
-    (str (double node))
+    (if (integer? node)
+      (str (long node))
+      (str (double node)))
 
     ;; Vector: UGen call
     (vector? node)
