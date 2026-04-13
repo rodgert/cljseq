@@ -10,6 +10,84 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.10.0] — 2026-04-11
+
+### Added
+
+#### Keyboard input framework (`cljseq.ivk`)
+
+- **`cljseq.ivk` namespace** — extensible computer-keyboard control surface for
+  live performance; the laptop keyboard becomes a real-time note/harmony input
+  device without any additional hardware
+- **Layout registry** — layouts are pure Clojure data maps (`{char action-map}`);
+  `register-layout!` adds to the global registry; `set-layout!` switches live;
+  `handle-action!` is an open multimethod — extend with `defmethod` for new
+  action types without touching ivk core
+- **Five built-in layouts:**
+  - `:interval` — Samchillian/Misha-style diatonic interval steps; home row
+    steps up/down by scale degree; lower row jumps by larger intervals; bracket
+    keys shift octave
+  - `:chromatic` — piano-style chromatic layout; home row = white keys, top row
+    = black keys; familiar to keyboard players
+  - `:scale` — absolute diatonic scale degree triggers; each key plays a fixed
+    scale degree regardless of :current-pitch
+  - `:ndlr` — NDLR-inspired chord surface; left hand (asdf) selects chord
+    functions (I/II/IV/V/vi/vii); right hand (hjkl;) plays chord tones over the
+    active chord; bracket key cycles chord extension depth (:triad/:seventh/:ninth)
+  - `:harmonic` — TheoryBoard-inspired home row split; left hand (asdf) = harmonic
+    context (I/IV/V/vi); right hand (hjkl;) = melody (chord tones + upper octave);
+    number row = absolute scale root pivot pads (1=C..7=B, 8=♭, 9=♯)
+- **Arp mode** — any layout supports arp playback; `start-arp!` / `stop-arp!`
+  cycle queued notes at current Link tempo; `:arp-rate` default 1/4 beat
+- **`:toggle-voiced-mode`** — when voiced mode is on, chord-function key presses
+  also play the root note of the new chord (silent chord switch vs. voiced transition)
+- **`:octave-offset`** on `:play-chord-tone` — reach upper octave chord tones
+  without shifting :current-pitch; `:octave-offset 1` adds one octave to the note
+- **`:set-scale-root`** — pivot to a new scale root by MIDI pitch class; preserves
+  the interval pattern (mode); resets `:chord-fn` to :I; number row uses this
+- **`:transpose-scale`** — shift scale root by semitones; 8=♭ (−1) and 9=♯ (+1)
+  in the `:harmonic` layout
+- **`:cc-delta` / `:pitch-bend-delta`** — modulation actions that update
+  `:modulation` state and send CC/bend immediately via sidecar; supports static
+  values or phasor functions for automated sweeps
+- **`render-layout`** — renders any layout as a two-row ASCII keyboard cheatsheet
+  (key labels + action labels); works on any registered keyword or inline layout map;
+  exported as `(render-layout :harmonic)` from `cljseq.user`
+- **Sidecar integration** — keyboard events arrive as `0x21 KbdEvent` frames from
+  the C++ sidecar (macOS `CGEventTap`); `start-kbd!` registers the push handler
+  and optionally restarts the sidecar with `--kbd` flag
+
+#### MIDI input (`cljseq.midi-in`)
+
+- **`cljseq.midi-in` namespace** — JVM MIDI input via `javax.sound.midi`;
+  independent of the C++ sidecar; opens any available MIDI input port by index
+  or name substring
+- **`open-input!` / `close-input!` / `close-all-inputs!`** — lifecycle for MIDI
+  input connections; multiple ports can be open simultaneously
+- **`register-note-handler!` / `unregister-note-handler!`** — register callbacks
+  for NoteOn/NoteOff events; handlers can filter by source port, channel, and
+  pitch range; multiple handlers per port; thread-safe
+- **T-1 PassThru pattern** — `register-note-handler!` with `:passthru? true` sets
+  `ivk/set-pitch!` from incoming T-1 notes; the keyboard layout then navigates
+  intervals relative to the T-1's last played note; enables T-1 + laptop keyboard
+  as a unified performance instrument
+- **`torso-t1.edn` device map** — complete NRPN and CC map for the Torso T-1;
+  includes all sequencer parameters, euclidean rhythm controls, and MIDI output
+  configuration; usable standalone or via T-1 PassThru pattern
+
+#### Q32 — `:restart-on-bar` for `deflive-loop`
+
+- **`:restart-on-bar` loop option** — snaps a new loop's start beat to a beat
+  boundary; parks the loop body until the boundary arrives; works with or without
+  Ableton Link active (parks unconditionally when set)
+  - `true` — snap to next system quantum boundary (default: 4 beats, reads
+    `:config :link/quantum`)
+  - `<N>` — snap to next N-beat boundary (e.g. `{:restart-on-bar 2}` for 2-beat
+    grid; `{:restart-on-bar 8}` for 2-bar grid)
+  - `nil` / absent — default Link behaviour; no boundary snap
+
+---
+
 ## [0.9.1] — 2026-04-10
 
 ### Changed

@@ -203,19 +203,48 @@
     (clock/epoch-ms->beat (System/currentTimeMillis) tl)
     0.0))
 
+(defn- system-quantum
+  "Return the configured Link quantum (default 4)."
+  ^double []
+  (double (or (when-let [s @system-ref]
+                (clojure.core/get-in @s [:config :link/quantum]))
+              4)))
+
 (defn -start-beat
   "Return the beat at which a new live-loop should begin.
   When Link is active, snaps to the next quantum boundary (default 4 beats)
   so the loop joins the session in phase (§15.4).
   When Link is inactive, returns the current beat immediately."
   ^double []
-  (let [current (-current-beat)
-        quantum (or (when-let [s @system-ref]
-                      (clojure.core/get-in @s [:config :link/quantum]))
-                    4)]
+  (let [current (-current-beat)]
     (if (link/active?)
-      (link/next-quantum-beat current quantum)
+      (link/next-quantum-beat current (system-quantum))
       current)))
+
+(defn -start-beat-for-period
+  "Return the beat at which a new live-loop with `:restart-on-bar` should begin.
+
+  `period-opt` — the value of `:restart-on-bar` from opts:
+    nil/false   — default: quantum boundary when Link active, else current beat
+    true        — next system-quantum boundary (equivalent to default Link snap)
+    <number>    — next multiple of that many beats (e.g. 2 for every 2 beats)
+
+  Always returns a beat in the future when period is non-nil/non-false, so the
+  caller can park unconditionally regardless of whether Link is active.
+
+  Public facade for deflive-loop macro."
+  ^double [period-opt]
+  (let [current (-current-beat)
+        q       (system-quantum)
+        period  (cond
+                  (nil? period-opt)   nil
+                  (true? period-opt)  q
+                  :else               (double period-opt))]
+    (if period
+      (link/next-quantum-beat current period)
+      (if (link/active?)
+        (link/next-quantum-beat current q)
+        current))))
 
 (defn- park-until-beat!
   "Park the current thread until `target-beat` on the effective timeline (Q60).
@@ -293,7 +322,18 @@
   "Define a named live loop that runs continuously.
 
   `loop-name` — keyword identifying the loop (e.g. :hello).
-  `opts`      — options map (reserved; pass {} for now).
+  `opts`      — options map. Supported keys:
+    :synth       — synth context map (channel, velocity defaults)
+    :timing      — ITemporalValue timing modulator
+    :mod         — ctrl-path → ITemporalValue mod routing map
+    :step-mods   — step-key → ITemporalValue per-step mod map
+    :harmony     — Scale record for scale-relative pitch functions
+    :chord       — Chord record for chord-relative pattern indices
+    :tuning      — microtonal tuning map {:scale ... :kbm ...}
+    :restart-on-bar — snap loop start to a beat boundary (Q32):
+                      true  = next system-quantum boundary (default 4 beats)
+                      <num> = next multiple of N beats (e.g. 2 for half-bar)
+                      nil   = Link-quantum snap if Link active, else immediate
   `body`      — forms to execute each iteration.
 
   The loop is registered in the system state at [:loops loop-name].
@@ -307,6 +347,16 @@
     (deflive-loop :kick {}
       (play! {:pitch/midi 36 :dur/beats 1/4})
       (sleep! 1))
+
+    ;; Snap to next 4-beat bar boundary before starting
+    (deflive-loop :kick {:restart-on-bar true}
+      (play! {:pitch/midi 36 :dur/beats 1/4})
+      (sleep! 1))
+
+    ;; Snap to next 2-beat boundary (half-bar)
+    (deflive-loop :hi-hat {:restart-on-bar 2}
+      (play! {:pitch/midi 42 :dur/beats 1/8})
+      (sleep! 1/2))
 
     ;; Hot-swap: re-evaluate to change what plays
     (deflive-loop :kick {}
@@ -329,6 +379,7 @@
                                     cljseq.loop/*chord-ctx*     chord-ctx#
                                     cljseq.loop/*tuning-ctx*    tuning-ctx#]
                             ~@body))
+         restart-bar# (:restart-on-bar ~opts)
          sref#       (cljseq.loop/-system-ref)]
      ;; Clear a stale entry so re-evaluation starts a fresh thread instead of
      ;; silently hot-swapping into a loop that will never pick up the new fn.
@@ -362,12 +413,12 @@
                  :thread             nil})
          (let [t# (Thread.
                    (fn []
-                     (let [start-beat# (cljseq.loop/-start-beat)]
+                     (let [start-beat# (cljseq.loop/-start-beat-for-period restart-bar#)]
                        (binding [cljseq.loop/*virtual-time*       start-beat#
                                  cljseq.loop/*sleep-interrupted?* sleep-interrupted?#]
-                         ;; When Link is active, park until the quantum boundary
-                         ;; so the loop enters the session in phase (§15.4).
-                         (when (cljseq.link/active?)
+                         ;; When Link is active or :restart-on-bar is set, park until
+                         ;; the target boundary so the loop enters in phase (§15.4).
+                         (when (or (cljseq.link/active?) restart-bar#)
                            (cljseq.loop/-park-until-beat! start-beat#))
                          (loop []
                            (when @running?#
