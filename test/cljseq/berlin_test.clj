@@ -1,8 +1,9 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.berlin-test
   (:require [clojure.test :refer [deftest is are testing]]
-            [cljseq.berlin     :as berlin]
-            [cljseq.trajectory :as traj]))
+            [cljseq.berlin          :as berlin]
+            [cljseq.temporal-buffer :as tbuf]
+            [cljseq.trajectory      :as traj]))
 
 ;; ---------------------------------------------------------------------------
 ;; Helpers
@@ -241,3 +242,55 @@
         (let [step (berlin/next-step! ost)]
           (when-let [cents (:pitch/bend-cents step)]
             (is (<= -8.0 cents 8.0) "bend cents within max-drift bounds")))))))
+
+;; ---------------------------------------------------------------------------
+;; frippertronics! / sos-send!
+;; ---------------------------------------------------------------------------
+
+(deftest frippertronics-buffer
+  (testing "frippertronics! returns the buffer name keyword"
+    (let [result (berlin/frippertronics! :test-frippert-a {})]
+      (is (= :test-frippert-a result))
+      (tbuf/stop! :test-frippert-a)))
+
+  (testing "frippertronics! creates buffer with expected config"
+    (berlin/frippertronics! :test-frippert-b {})
+    (let [info (tbuf/temporal-buffer-info :test-frippert-b)]
+      (is (some? info) "buffer is registered")
+      (is (= :z6 (:active-zone info)) "default zone is :z6")
+      (is (= :tape (:color info)) "default color is :tape")
+      (let [fb (:feedback info)]
+        (is (= 0.75 (:amount fb)) "default feedback amount is 0.75")
+        (is (= 12 (:max-generation fb)) "default max-generation is 12")
+        (is (= 8 (:velocity-floor fb)) "default velocity-floor is 8")))
+    (tbuf/stop! :test-frippert-b))
+
+  (testing "frippertronics! accepts zone and feedback overrides"
+    (berlin/frippertronics! :test-frippert-c {:zone :z5 :feedback 0.90 :color :dark})
+    (let [info (tbuf/temporal-buffer-info :test-frippert-c)]
+      (is (= :z5 (:active-zone info)) "zone override applied")
+      (is (= :dark (:color info)) "color override applied")
+      (is (= 0.90 (:amount (:feedback info))) "feedback override applied"))
+    (tbuf/stop! :test-frippert-c))
+
+  (testing "frippertronics! with no opts uses all defaults"
+    (berlin/frippertronics! :test-frippert-d)
+    (let [info (tbuf/temporal-buffer-info :test-frippert-d)]
+      (is (= :z6 (:active-zone info)) "default zone"))
+    (tbuf/stop! :test-frippert-d)))
+
+(deftest sos-send
+  (testing "sos-send! returns the step unchanged"
+    (berlin/frippertronics! :test-sos-send {})
+    (let [step {:pitch/midi 60 :dur/beats 1/4 :mod/velocity 80}
+          result (berlin/sos-send! :test-sos-send step)]
+      (is (= step result) "step returned unchanged"))
+    (tbuf/stop! :test-sos-send))
+
+  (testing "sos-send! adds event to the buffer"
+    (berlin/frippertronics! :test-sos-count {})
+    (let [step {:pitch/midi 64 :dur/beats 1/4 :mod/velocity 70}]
+      (berlin/sos-send! :test-sos-count step)
+      (let [info (tbuf/temporal-buffer-info :test-sos-count)]
+        (is (pos? (:event-count info)) "event was written to buffer")))
+    (tbuf/stop! :test-sos-count)))

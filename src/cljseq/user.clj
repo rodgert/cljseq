@@ -68,8 +68,9 @@
             [cljseq.ivk        :as ivk]
             [cljseq.midi-in    :as midi-in]
             [cljseq.voice      :as voice]
-            [cljseq.journey    :as journey]
-            [cljseq.berlin     :as berlin]))
+            [cljseq.journey         :as journey]
+            [cljseq.berlin          :as berlin]
+            [cljseq.temporal-buffer :as tbuf]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session lifecycle
@@ -602,6 +603,25 @@
 (def tuning-morph!       berlin/tuning-morph!)
 (def tape-drift          berlin/tape-drift)
 (def tick-tape!          berlin/tick-tape!)
+(def frippertronics!     berlin/frippertronics!)
+(def sos-send!           berlin/sos-send!)
+
+;; Temporal buffer — direct access for Hold, Flip, Color, Feedback, zone switching
+(def deftemporal-buffer       tbuf/deftemporal-buffer)
+(def deftemporal-buffer-preset tbuf/deftemporal-buffer-preset)
+(def temporal-buffer-send!    tbuf/temporal-buffer-send!)
+(def temporal-buffer-zone!    tbuf/temporal-buffer-zone!)
+(def temporal-buffer-hold!    tbuf/temporal-buffer-hold!)
+(def temporal-buffer-flip!    tbuf/temporal-buffer-flip!)
+(def temporal-buffer-rate!    tbuf/temporal-buffer-rate!)
+(def temporal-buffer-color!   tbuf/temporal-buffer-color!)
+(def temporal-buffer-feedback! tbuf/temporal-buffer-feedback!)
+(def temporal-buffer-halo!    tbuf/temporal-buffer-halo!)
+(def temporal-buffer-info     tbuf/temporal-buffer-info)
+(def temporal-buffer-set!     tbuf/temporal-buffer-set!)
+(def stop-temporal-buffer!    tbuf/stop!)
+(def color-presets            tbuf/color-presets)
+(def buffer-presets           tbuf/presets)
 
 (defn make-scale
   "Build a Scale record. Common modal shorthand.

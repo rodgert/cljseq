@@ -40,13 +40,14 @@
 
     ;; Slow filter journey over 64 bars
     (berlin/filter-journey! [:filter :cutoff] 74 1 0 127 64 :breathe)"
-  (:require [cljseq.clock      :as clock]
-            [cljseq.ctrl       :as ctrl]
-            [cljseq.loop       :as loop-ns]
-            [cljseq.random     :as random]
-            [cljseq.scala      :as scala]
-            [cljseq.sidecar    :as sidecar]
-            [cljseq.trajectory :as traj]))
+  (:require [cljseq.clock           :as clock]
+            [cljseq.ctrl            :as ctrl]
+            [cljseq.loop            :as loop-ns]
+            [cljseq.random          :as random]
+            [cljseq.scala           :as scala]
+            [cljseq.sidecar         :as sidecar]
+            [cljseq.temporal-buffer :as tbuf]
+            [cljseq.trajectory      :as traj]))
 
 ;; ---------------------------------------------------------------------------
 ;; Ostinato — slowly mutating repeating sequencer pattern
@@ -535,3 +536,94 @@
     (if (zero? (double drift-cents))
       step
       (assoc step :pitch/bend-cents drift-cents))))
+
+;; ---------------------------------------------------------------------------
+;; Frippertronics / SOS — Sound on Sound accumulation via temporal buffer
+;; ---------------------------------------------------------------------------
+;;
+;; Maps the Fripp/Eno tape loop system to cljseq.temporal-buffer:
+;;
+;;   Tape loop length    → temporal buffer zone depth (z6 = 64 beats ≈ 35s at 100 BPM)
+;;   Per-pass decay      → :tape Color (vel × 0.95, duration × 0.98, ±10¢ flutter)
+;;   Loop accumulation   → high feedback with generation tracking
+;;   Natural tail decay  → velocity-floor drops quiet events automatically
+;;   Overdub input       → temporal-buffer-send! from a live loop
+;;
+;; Composition pattern:
+;;
+;;   (def sos (berlin/frippertronics! :sos {}))
+;;
+;;   ;; Layer 1 — sparse low motif, tape drift
+;;   (def ost-a (berlin/tape-drift my-ost 8))
+;;   (deflive-loop :layer-a {}
+;;     (play! (berlin/sos-send! sos (berlin/tick-tape! ost-a)))
+;;     (sleep! 1/4))
+;;
+;;   ;; After :z6 depth (64 beats), layer-a begins accumulating in the buffer.
+;;   ;; Add layer 2 on top; earlier layers fade via :tape Color per generation.
+;;   (def ost-b (berlin/ostinato higher-pattern {:mutation-rate 0.08}))
+;;   (deflive-loop :layer-b {}
+;;     (play! (berlin/sos-send! sos (berlin/next-step! ost-b)))
+;;     (sleep! 1/8))
+;;
+;;   ;; Freeze input and sculpt the frozen content:
+;;   (tbuf/temporal-buffer-hold! sos true)
+;;   (tbuf/temporal-buffer-color! sos :dark)   ; tails get darker each pass
+
+(defn frippertronics!
+  "Create a Frippertronics-style SOS (Sound on Sound) accumulation buffer.
+
+  Configures a temporal buffer for tape-loop accumulation modelled after the
+  Fripp/Eno tape loop technique: new material feeds in, earlier passes fade
+  through per-generation Color transformation, and the buffer sustains
+  independently at high feedback.
+
+  `buf-name` — keyword name for the buffer (e.g. :sos, :looper)
+  `opts`:
+    :zone           — zone keyword for loop depth (default :z6, 64 beats)
+    :feedback       — re-injection probability [0.0–1.0] (default 0.75)
+    :max-generation — maximum pass count before events are dropped (default 12)
+    :velocity-floor — velocity below which events are discarded (default 8)
+    :color          — Color preset for per-pass transform (default :tape)
+                      :tape — vel×0.95, dur×0.98, ±10¢ flutter (analog character)
+                      :dark — vel×0.90, dur×1.15, −5¢ sag (darker, slower fade)
+                      :warm — vel×0.93, dur×1.05 (warm, decaying tail)
+    :tape-scale     — Doppler cents-per-rate-unit (default 80.0; subtle)
+
+  Returns `buf-name`. Feed events with `sos-send!` or `temporal-buffer-send!`.
+
+  Example:
+    (def sos (berlin/frippertronics! :sos {}))
+    (deflive-loop :sos-feed {}
+      (play! (berlin/sos-send! sos (berlin/tick-tape! drifting-ost)))
+      (sleep! 1/8))"
+  ([buf-name] (frippertronics! buf-name {}))
+  ([buf-name {:keys [zone feedback max-generation velocity-floor color tape-scale]
+              :or   {zone            :z6
+                     feedback        0.75
+                     max-generation  12
+                     velocity-floor  8
+                     color           :tape
+                     tape-scale      80.0}}]
+   (tbuf/deftemporal-buffer buf-name
+     {:active-zone zone
+      :tape-scale  tape-scale
+      :color       color
+      :feedback    {:amount         feedback
+                    :max-generation max-generation
+                    :velocity-floor velocity-floor}})))
+
+(defn sos-send!
+  "Feed a note event into a Frippertronics buffer and return it for play!.
+
+  Writes `step` into `buf-name` (via temporal-buffer-send!) and returns `step`
+  unchanged. Intended for the common pattern of simultaneously sounding the
+  note and accumulating it in the SOS buffer:
+
+    (play! (berlin/sos-send! sos (berlin/next-step! ost)))
+
+  Has no effect when the buffer is in Hold mode (input is frozen).
+  Returns `step`."
+  [buf-name step]
+  (tbuf/temporal-buffer-send! buf-name step)
+  step)
