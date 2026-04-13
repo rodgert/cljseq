@@ -40,7 +40,17 @@
 
 ;; Connect MIDI output. Adjust port index for your setup.
 ;; (list-midi-ports) to see available ports.
-(start-sidecar! :midi-port 0)
+;;
+;; Note: worktrees don't have their own build/ dir. Locate the binary from
+;; the main checkout by walking up from this file's git worktree root.
+(def ^:private sidecar-bin
+  (let [main-root (-> (clojure.java.shell/sh "git" "rev-parse" "--git-common-dir")
+                      :out clojure.string/trim
+                      (clojure.java.io/file "..")
+                      .getCanonicalPath)]
+    (str main-root "/build/cpp/cljseq-sidecar/cljseq-sidecar")))
+
+(start-sidecar! :midi-port 0 :binary sidecar-bin)
 
 ;; ============================================================
 ;; 1. VERIFY LOGIC (safe to run without audio)
