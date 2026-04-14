@@ -258,6 +258,18 @@
   (testing ":reverb-bus synth is registered"
     (is (some? (synth/get-synth :reverb-bus)))))
 
+(deftest reverb-bus-stereo-synth-registered-test
+  (testing ":reverb-bus-stereo synth is registered at patch namespace load"
+    (is (some? (synth/get-synth :reverb-bus-stereo)))))
+
+(deftest reverb-bus-stereo-uses-freeverb2-test
+  (testing ":reverb-bus-stereo SCLang uses FreeVerb2.ar with L/R split"
+    (let [s (synth/compile-synth :sc :reverb-bus-stereo)]
+      (is (string? s))
+      (is (clojure.string/includes? s "FreeVerb2.ar"))
+      (is (clojure.string/includes? s "sig[0]"))
+      (is (clojure.string/includes? s "sig[1]")))))
+
 ;; ---------------------------------------------------------------------------
 ;; :granular-cloud patch registered
 ;; ---------------------------------------------------------------------------
