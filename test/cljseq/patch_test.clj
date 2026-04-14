@@ -258,6 +258,7 @@
     (reset! @#'sc/sent-synthdefs #{})
     (let [{:keys [calls osc-fn]} (capture-osc)]
       (with-redefs [sc/sc-connected?   (constantly true)
+                    sc/sc-sync!         (fn [& _] :synced)
                     osc/osc-send!       osc-fn]
         (let [inst (sc/instantiate-patch! :reverb-chain)]
           (is (contains? (:buses inst) :dry))
@@ -269,6 +270,7 @@
     (reset! @#'sc/sent-synthdefs #{})
     (let [{:keys [calls osc-fn]} (capture-osc)]
       (with-redefs [sc/sc-connected? (constantly true)
+                    sc/sc-sync!      (fn [& _] :synced)
                     osc/osc-send!     osc-fn]
         (sc/instantiate-patch! :reverb-chain))
       (let [snew-calls (filter #(= "/s_new" (nth % 2)) @calls)]
@@ -280,6 +282,7 @@
     (reset! @#'sc/sent-synthdefs #{})
     (let [{:keys [calls osc-fn]} (capture-osc)]
       (with-redefs [sc/sc-connected? (constantly true)
+                    sc/sc-sync!      (fn [& _] :synced)
                     osc/osc-send!     osc-fn]
         (sc/instantiate-patch! :reverb-chain))
       ;; Find the /s_new calls and check that bus index 8.0 appears (not the keyword :dry)
@@ -292,6 +295,7 @@
     (reset! @#'sc/bus-alloc {:audio-next 8 :control-next 0 :named {}})
     (reset! @#'sc/sent-synthdefs #{})
     (with-redefs [sc/sc-connected? (constantly true)
+                  sc/sc-sync!      (fn [& _] :synced)
                   osc/osc-send!     (fn [& _])]
       (let [inst (sc/instantiate-patch! :reverb-chain)]
         (is (= :reverb-chain (:patch-name inst)))
@@ -386,8 +390,8 @@
       (is (clojure.string/includes? s "Out.ar")))))
 
 (deftest reverb-bus-compiles-sc-test
-  (testing ":reverb-bus compiles to valid SC with In.ar(in_bus, ...)"
+  (testing ":reverb-bus compiles to valid SC with In.ar(in_bus, ...) and FreeVerb2"
     (let [s (sc/synthdef-str :reverb-bus)]
       (is (clojure.string/includes? s "in_bus"))
       (is (clojure.string/includes? s "In.ar"))
-      (is (clojure.string/includes? s "FreeVerb.ar")))))
+      (is (clojure.string/includes? s "FreeVerb2.ar")))))
