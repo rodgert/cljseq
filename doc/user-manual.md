@@ -42,7 +42,8 @@ Version 0.9.0 · April 2026
 34. [MCP Bridge (AI Compositional Collaborator)](#34-mcp-bridge)
 35. [Keyboard Performance (`cljseq.ivk`)](#35-keyboard-performance-cljseqivk)
 36. [MIDI Input (`cljseq.midi-in`)](#36-midi-input-cljseqmidi-in)
-37. [Reference: REPL Commands and Step Keys](#37-reference)
+37. [Process Supervisor (`cljseq.supervisor`)](#37-process-supervisor-cljseqsupervisor)
+38. [Reference: REPL Commands and Step Keys](#38-reference)
 
 ---
 
@@ -3270,7 +3271,192 @@ The `resources/devices/torso-t1.edn` device map covers all T-1 MIDI parameters:
 
 ---
 
-## 37. Reference
+## 37. Process Supervisor (`cljseq.supervisor`)
+
+The supervisor is a lightweight Erlang-style watchdog that monitors external
+services (SC server, sidecar process) and live loop threads, emitting lifecycle
+events on state changes, optionally auto-restarting failed services, and
+restoring last-known state after a recovery.
+
+### Quick start
+
+```clojure
+(require '[cljseq.supervisor :as supervisor])
+
+;; Register the SC server: health check + synthdef restore on reconnect.
+;; No auto-reconnect by default — SC params may have changed after a crash.
+(supervisor/register-sc!)
+
+;; Register the sidecar: health check + auto-restart using saved start opts.
+(supervisor/register-sidecar!)
+
+;; Start the watchdog (one bar scan period at current BPM, loop monitoring on).
+(supervisor/start-watchdog!)
+
+;; React to SC going down — pause an arc, alert the performer, etc.
+(supervisor/on-event! :sc :down ::my-handler
+  (fn [payload] (println "SC went down at" (:at payload))))
+
+;; Remove the handler when done.
+(supervisor/off-event! :sc :down ::my-handler)
+
+;; Stop the watchdog.
+(supervisor/stop-watchdog!)
+```
+
+### Service registration
+
+`register!` accepts three optional hook functions:
+
+| Option | Called when | Notes |
+|--------|-------------|-------|
+| `:check-fn` | Every watchdog tick | Return truthy = healthy |
+| `:restart-fn` | Service goes `:down` | Should attempt reconnect; may throw |
+| `:restore-fn` | After successful recovery | Re-send state (synthdefs, etc.) |
+
+```clojure
+(supervisor/register! :my-synth
+  :check-fn    #(synth/connected?)
+  :restart-fn  #(synth/reconnect!)
+  :restore-fn  #(synth/reload-patches!))
+
+(supervisor/deregister! :my-synth)
+```
+
+The two built-in registrations handle the common case:
+
+```clojure
+;; SC: health=sc-connected?, restore=resend-sent-synthdefs!
+;; Pass :restart-fn if you want auto-reconnect.
+(supervisor/register-sc!)
+(supervisor/register-sc! :restart-fn #(sc/connect-sc!))
+
+;; Sidecar: health=sidecar/connected?, restart=restart-sidecar! (auto)
+(supervisor/register-sidecar!)
+```
+
+### Status queries
+
+```clojure
+(supervisor/service-status :sc)      ; => :up | :down | :unknown
+(supervisor/all-statuses)            ; => {:sc :up, :sidecar :down}
+(supervisor/any-down? [:sc :sidecar]) ; => truthy if either is :down
+(supervisor/running?)                ; => true if watchdog is active
+```
+
+### Watchdog options
+
+```clojure
+;; Fixed 5-second interval, no loop monitoring:
+(supervisor/start-watchdog! :interval-ms 5000 :monitor-loops? false)
+
+;; BPM-derived: scan every 2 bars of 3/4 (reads core/get-beats-per-bar by default):
+(supervisor/start-watchdog! :bars 2 :beats-per-bar 3)
+
+;; Default: one bar at current BPM, beats-per-bar from core state, loops monitored.
+(supervisor/start-watchdog!)
+```
+
+When `:interval-ms` is omitted the watchdog sleep is recomputed each tick as
+`bars × beats-per-bar × (60 000 / bpm)`, so a live `set-bpm!` is automatically
+reflected. The minimum sleep is 100 ms regardless of BPM.
+
+### BPM-derived scan period
+
+The scan interval is musically proportional when you leave `:interval-ms` unset:
+
+| BPM | 1 bar (4/4) | 1 bar (3/4) |
+|-----|-------------|-------------|
+| 120 | 2 000 ms    | 1 500 ms    |
+| 100 | 2 400 ms    | 1 800 ms    |
+|  72 | 3 333 ms    | 2 500 ms    |
+|  60 | 4 000 ms    | 3 000 ms    |
+
+### Pause/resume integration with deflive-loop
+
+Loops can declare service dependencies via `:pause-on-down`. When a dependency
+is `:down`, the loop sleeps one `:resume-on-bar` period (default 4 beats) and
+retries — maintaining virtual-time continuity without playing into silence. On
+recovery the loop re-enters at the next `:resume-on-bar` beat boundary.
+
+```clojure
+;; Pause :voice-a while SC is down; resume on 4-beat boundary (default).
+(deflive-loop :voice-a {:pause-on-down [:sc]}
+  (play! {:synth :sine :pitch/midi 60 :dur/beats 1})
+  (sleep! 4))
+
+;; Resume on 8-beat (2-bar) boundary for larger loops:
+(deflive-loop :voice-b {:pause-on-down [:sc :sidecar] :resume-on-bar 8}
+  (play! (berlin/next-step! ost-b))
+  (sleep! 5))
+```
+
+The pause-check is wired in by `start-watchdog!` and unwired by `stop-watchdog!`.
+Before the watchdog starts, `:pause-on-down` has no effect (loops run normally).
+
+### Event bus
+
+```clojure
+;; Register: (on-event! service event-type handler-key handler-fn)
+(supervisor/on-event! :sc :down ::alert
+  (fn [{:keys [service at]}]
+    (println service "went down at" at)))
+
+(supervisor/on-event! :sc :up ::restore-arc
+  (fn [{:keys [restarted]}]
+    (when restarted (println "SC auto-restarted"))))
+
+(supervisor/on-event! :sc :restore-failed ::log-fail
+  (fn [{:keys [error]}] (println "Restore failed:" error)))
+
+;; Deregister by key:
+(supervisor/off-event! :sc :down ::alert)
+```
+
+Handler exceptions are caught and logged — one failing handler never suppresses
+the others. The event payload always includes `:service` and `:at` (epoch ms).
+`:up` events from auto-restart include `:restarted true`.
+
+### restart-loop!
+
+`restart-loop!` in `cljseq.loop` restarts a dead loop thread aligned to a beat
+boundary without requiring a full `deflive-loop` re-evaluation:
+
+```clojure
+;; Restart :voice-a at the next 4-beat boundary (default):
+(loop-ns/restart-loop! :voice-a)
+
+;; Restart at the next 8-beat boundary:
+(loop-ns/restart-loop! :voice-a :align-beats 8)
+```
+
+`restart-loop!` is a no-op (returns nil) if the loop thread is still alive.
+The supervisor's loop-monitoring can call this automatically if you wire it via
+an `on-event!` handler on `:loops :down`.
+
+### Global beats-per-bar
+
+The system-wide beats-per-bar setting lives in `core/system-state` alongside BPM:
+
+```clojure
+;; Set at boot:
+(start! :bpm 100 :beats-per-bar 3)   ; 3/4 time
+
+;; Change live:
+(set-beats-per-bar! 5)               ; 5/4
+(get-beats-per-bar)                  ; => 5
+
+;; Automatically picked up by:
+;;   (journey/start-bar-counter!)    — no-arg arity reads core value
+;;   (supervisor/start-watchdog!)    — :beats-per-bar reads core value each tick
+```
+
+Pass `:beats-per-bar` explicitly to either function to override for that instance
+without changing the global setting.
+
+---
+
+## 38. Reference
 
 ### REPL commands
 

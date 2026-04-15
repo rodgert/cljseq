@@ -47,7 +47,7 @@
          :undo-stack  []
          :checkpoints {}
          :loops       {}
-         :config      {:bpm 120}
+         :config      {:bpm 120 :beats-per-bar 4}
          :timeline    nil}))
 
 ;; ---------------------------------------------------------------------------
@@ -58,6 +58,18 @@
   "Return current BPM."
   []
   (get-in @system-state [:config :bpm]))
+
+(defn get-beats-per-bar
+  "Return the current beats-per-bar setting (default 4)."
+  []
+  (get-in @system-state [:config :beats-per-bar] 4))
+
+(defn set-beats-per-bar!
+  "Set the global beats-per-bar value (e.g. 3 for waltz time, 6 for compound).
+  Used as the default by journey/start-bar-counter! and supervisor/start-watchdog!."
+  [n]
+  (swap! system-state assoc-in [:config :beats-per-bar] n)
+  nil)
 
 (defn get-timeline
   "Return the current timeline map for beat↔epoch-ms conversion.
@@ -110,16 +122,18 @@
   "Boot the cljseq system.
 
   Options:
-    :bpm  — initial BPM (default 120)
+    :bpm           — initial BPM (default 120)
+    :beats-per-bar — beats per bar (default 4; use 3 for waltz, 6 for compound)
 
   Registers the system-state atom with cljseq.loop and initialises the
   master timeline anchored at the current wall-clock instant / beat 0."
-  [& {:keys [bpm] :or {bpm 120}}]
+  [& {:keys [bpm beats-per-bar] :or {bpm 120 beats-per-bar 4}}]
   (let [now-ms (System/currentTimeMillis)]
     (swap! system-state
            (fn [s]
              (-> s
-                 (assoc :config (assoc (config/default-config) :bpm bpm))
+                 (assoc :config (assoc (config/default-config) :bpm bpm
+                                                               :beats-per-bar beats-per-bar))
                  (assoc :timeline {:bpm            bpm
                                    :beat0-epoch-ms now-ms
                                    :beat0-beat     0.0})
