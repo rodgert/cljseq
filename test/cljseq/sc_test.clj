@@ -313,12 +313,16 @@
     ;; When the release daemon thread fails (e.g., SC server has dropped the
     ;; node ID), the exception must be caught and not re-thrown.  sc-play!
     ;; should return the node-id regardless of what happens during release.
-    (reset! @#'sc/sent-synthdefs #{})
+    ;;
+    ;; Pre-populate sent-synthdefs so sc-synth! skips the send+sync step
+    ;; (added by fix/sc-robustness).  That makes call #1 the /s_new note-on
+    ;; and call #2 the free-synth! release — matching the test's intent.
+    (reset! @#'sc/sent-synthdefs #{:sine})
     (swap! @#'sc/sc-state assoc :connected true)
     (try
       (let [call-count (atom 0)
             node-id    (atom nil)]
-        ;; First osc-send! call: sc-synth! note-on — succeeds.
+        ;; First osc-send! call: sc-synth! /s_new note-on — succeeds.
         ;; Subsequent osc-send! calls: free-synth! release — throws.
         (with-redefs [cljseq.osc/osc-send! (fn [& _]
                                               (when (> (swap! call-count inc) 1)
@@ -336,7 +340,8 @@
 
 (deftest sc-play-release-failure-does-not-affect-caller-thread-test
   (testing "a release daemon exception does not kill or interrupt the calling thread"
-    (reset! @#'sc/sent-synthdefs #{})
+    ;; Pre-populate sent-synthdefs so the first osc-send! is the /s_new note-on.
+    (reset! @#'sc/sent-synthdefs #{:sine})
     (swap! @#'sc/sc-state assoc :connected true)
     (try
       (let [caller-interrupted? (atom false)]
@@ -344,8 +349,8 @@
                                               (throw (ex-info "simulated total OSC failure" {})))]
           (try
             (sc/sc-play! {:synth :sine :freq 440.0 :dur-ms 1})
-            ;; sc-synth! itself will throw here (first call fails) — that is expected
-            ;; and correct: if we can't even send the note-on, sc-play! should throw.
+            ;; sc-synth! throws because /s_new itself failed — that is expected
+            ;; and correct: if we can't send the note-on, sc-play! should throw.
             (catch Exception _)))
         ;; After the throw, the calling thread must still be alive and uninterrupted
         (is (not @caller-interrupted?) "caller thread not interrupted")
