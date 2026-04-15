@@ -77,7 +77,7 @@
          :control-next 0
          :named        {}}))
 
-(declare sc-connected? send-synthdef!)
+(declare sc-connected? sc-host lang-port send-synthdef!)
 
 (defn connect-sc!
   "Configure the SC connection parameters.
@@ -112,6 +112,42 @@
   (println "[sc] disconnected")
   nil)
 
+(defn sc-sync!
+  "Block until scsynth has processed all pending commands (SynthDef compilations etc).
+
+  Sends `s.sync` to sclang via /cmd, which waits for scsynth to acknowledge all
+  outstanding async work, then sends /sc-ready back to the cljseq OSC server.
+  Returns :synced on success, throws ex-info on timeout.
+
+  Options:
+    :timeout-ms — max wait in milliseconds (default 8000)
+
+  The cljseq OSC server must be running (start-osc-server! called) for the
+  /sc-ready reply to arrive. sc-sync! starts the server automatically if needed,
+  on the configured OSC control port (default 57121).
+
+  Example:
+    (sc/ensure-synthdef! :blade)
+    (sc/sc-sync!)           ; wait for scsynth to compile the def
+    (sc/sc-synth! :blade {:freq 440})"
+  [& {:keys [timeout-ms] :or {timeout-ms 8000}}]
+  (when-not (sc-connected?)
+    (throw (ex-info "sc-sync!: not connected" {})))
+  (let [ctrl-port (or (osc/osc-port) 57121)
+        _         (when-not (osc/osc-running?)
+                    (osc/start-osc-server! :port ctrl-port))
+        p         (promise)
+        _         (osc/register-handler! "/sc-ready" (fn [_] (deliver p :synced)))
+        cmd       (str "fork { s.sync; OSCMessage('/sc-ready')"
+                       ".sendTo(NetAddr(\"127.0.0.1\", " ctrl-port ")); };")]
+    (osc/osc-send! (sc-host) (lang-port) "/cmd" cmd)
+    (let [result (deref p timeout-ms :timeout)]
+      (if (= result :timeout)
+        (do (osc/register-handler! "/sc-ready" (fn [_] nil)) ; clear stale handler
+            (throw (ex-info "sc-sync!: timed out waiting for scsynth"
+                            {:timeout-ms timeout-ms})))
+        result))))
+
 (defn ensure-synthdef!
   "Send a named SynthDef to sclang if it has not already been sent this session.
   No-op when SC is not connected or the def is already resident.
@@ -125,6 +161,28 @@
   (when (and (sc-connected?) (not (contains? @sent-synthdefs synth-name)))
     (send-synthdef! synth-name)
     (swap! sent-synthdefs conj synth-name))
+  nil)
+
+(defn ensure-synthdefs!
+  "Send a batch of SynthDefs to sclang, then sync once.
+
+  Sends all defs not yet resident, then calls sc-sync! to wait for scsynth to
+  compile them all before returning. Safe to call multiple times — already-sent
+  defs are skipped.
+
+  Options:
+    :timeout-ms — passed to sc-sync! (default 8000)
+
+  Example:
+    (sc/ensure-synthdefs! [:blade :prophet :dark-ambience])
+    ;; all three are now compiled and ready for sc-synth!"
+  [synth-names & {:keys [timeout-ms] :or {timeout-ms 8000}}]
+  (let [to-send (remove #(contains? @sent-synthdefs %) synth-names)]
+    (when (and (sc-connected?) (seq to-send))
+      (doseq [n to-send]
+        (send-synthdef! n)
+        (swap! sent-synthdefs conj n))
+      (sc-sync! :timeout-ms timeout-ms)))
   nil)
 
 (defn sc-connected?
@@ -416,6 +474,10 @@
   The node is created at the tail of the default group (group 1).
   It will free itself when its envelope completes (doneAction: 2).
 
+  If the SynthDef has not been sent to sclang this session, sc-synth! sends it
+  and calls sc-sync! automatically before firing /s_new. This makes sc-synth!
+  safe to call without prior ensure-synthdef! / ensure-synthdefs!.
+
   Example:
     (sc/sc-synth! :blade {:freq 440 :amp 0.6 :attack 0.1})
     ;=> 1001"
@@ -425,6 +487,11 @@
   (let [synth    (synth/get-synth synth-name)
         _        (when-not synth
                    (throw (ex-info "sc-synth!: synth not found" {:name synth-name})))
+        ;; Auto-send + sync if def not yet resident in scsynth
+        _        (when-not (contains? @sent-synthdefs synth-name)
+                   (send-synthdef! synth-name)
+                   (swap! sent-synthdefs conj synth-name)
+                   (sc-sync!))
         node-id  (next-node!)
         defaults (:args synth)
         merged   (merge defaults args-map)
@@ -707,9 +774,12 @@
 (defn instantiate-patch!
   "Instantiate a registered patch on the SC server.
 
-  Allocates audio/control buses, sends SynthDefs as needed, and starts each
-  node in declaration order. Returns a patch instance map for use with
-  `set-patch-param!` and `free-patch!`.
+  Allocates audio/control buses, sends all SynthDefs, syncs with scsynth, then
+  starts each node in declaration order. Returns a patch instance map for use
+  with `set-patch-param!` and `free-patch!`.
+
+  If instantiation fails partway through, any already-created nodes are freed
+  automatically before the exception propagates (no zombie nodes).
 
   Example:
     (sc/connect-sc!)
@@ -726,18 +796,32 @@
                                               :or   {channels 1 rate :audio}}]]
                                  [bus-key (:idx (sc-bus! bus-key channels rate))])
                                (:buses compiled)))
-        ;; Instantiate nodes in order; collect node-id → sc-node-id
-        node-ids    (into {}
-                          (map (fn [{:keys [id synth args]}]
-                                 (ensure-synthdef! synth)
-                                 (let [resolved (resolve-bus-args args bus-indices)
-                                       node-id  (sc-synth! synth resolved)]
-                                   [id node-id]))
-                               (:nodes compiled)))]
-    {:patch-name (:patch-name compiled)
-     :buses      bus-indices
-     :nodes      node-ids
-     :params     (:params compiled)}))
+        synth-names (mapv :synth (:nodes compiled))]
+    ;; Send all defs and sync once before creating any nodes.
+    ;; This eliminates the race condition where /s_new fires before scsynth
+    ;; has compiled the SynthDef sent via sclang /cmd.
+    (ensure-synthdefs! synth-names)
+    ;; Instantiate nodes in order, cleaning up on failure.
+    (let [allocated (atom [])]
+      (try
+        (let [node-ids (into {}
+                             (map (fn [{:keys [id synth args]}]
+                                    (let [resolved (resolve-bus-args args bus-indices)
+                                          node-id  (sc-synth! synth resolved)]
+                                      (swap! allocated conj node-id)
+                                      [id node-id]))
+                                  (:nodes compiled)))]
+          {:patch-name (:patch-name compiled)
+           :buses      bus-indices
+           :nodes      node-ids
+           :params     (:params compiled)})
+        (catch Exception e
+          ;; Free any nodes we managed to create before the failure
+          (when (seq @allocated)
+            (println (str "[sc] instantiate-patch! failed — freeing " (count @allocated) " allocated nodes"))
+            (doseq [nid @allocated]
+              (try (kill-synth! nid) (catch Exception _ nil))))
+          (throw e))))))
 
 (defn set-patch-param!
   "Update a named parameter on a running patch instance.

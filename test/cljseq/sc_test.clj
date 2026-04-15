@@ -1,11 +1,12 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.sc-test
   "Tests for cljseq.sc — sclang code generation and compile-synth :sc backend."
-  (:require [clojure.test  :refer [deftest is testing]]
+  (:require [clojure.test   :refer [deftest is testing]]
+            [clojure.set    :as set]
             [clojure.string :as str]
-            [cljseq.synth  :as synth]
-            [cljseq.core   :as core]
-            [cljseq.sc     :as sc]))
+            [cljseq.synth   :as synth]
+            [cljseq.core    :as core]
+            [cljseq.sc      :as sc]))
 
 ;; ---------------------------------------------------------------------------
 ;; synthdef-str — code generation
@@ -169,6 +170,79 @@
         (sc/ensure-synthdef! :sine))  ; second call — no-op
       (is (contains? @@#'sc/sent-synthdefs :sine)
           "sent-synthdefs should record the sent name")
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)
+        (reset! @#'sc/sent-synthdefs #{})))))
+
+;; ---------------------------------------------------------------------------
+;; sc-sync! — OSC handshake
+;; ---------------------------------------------------------------------------
+
+(deftest sc-sync-throws-when-disconnected-test
+  (testing "sc-sync! throws when SC is not connected"
+    (is (thrown? clojure.lang.ExceptionInfo (sc/sc-sync!)))))
+
+(deftest sc-sync-delivers-synced-test
+  (testing "sc-sync! returns :synced when /sc-ready arrives before timeout"
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (let [osc-sends (atom [])
+            result    (atom nil)]
+        (with-redefs [cljseq.osc/osc-running?        (constantly true)
+                      cljseq.osc/osc-port             (constantly 57121)
+                      cljseq.osc/osc-send!            (fn [& args] (swap! osc-sends conj args))
+                      cljseq.osc/register-handler!    (fn [addr f] (f []) nil)]
+          (reset! result (sc/sc-sync! :timeout-ms 2000)))
+        (is (= :synced @result) "sc-sync! should return :synced")
+        (is (some #(and (= (nth % 2) "/cmd")
+                        (clojure.string/includes? (nth % 3) "s.sync"))
+                  @osc-sends)
+            "should send s.sync to sclang via /cmd"))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)))))
+
+(deftest sc-sync-times-out-test
+  (testing "sc-sync! throws on timeout when no /sc-ready arrives"
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (with-redefs [cljseq.osc/osc-running?      (constantly true)
+                    cljseq.osc/osc-port           (constantly 57121)
+                    cljseq.osc/osc-send!          (fn [& _])
+                    cljseq.osc/register-handler!  (fn [_ _])] ; never fires
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"timed out"
+                              (sc/sc-sync! :timeout-ms 100))))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)))))
+
+;; ---------------------------------------------------------------------------
+;; ensure-synthdefs! — batch send + sync
+;; ---------------------------------------------------------------------------
+
+(deftest ensure-synthdefs-sends-all-unsent-test
+  (testing "ensure-synthdefs! sends all defs not yet in sent-synthdefs"
+    (reset! @#'sc/sent-synthdefs #{:sine})  ; :sine already sent
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (let [sent (atom [])]
+        (with-redefs [cljseq.sc/send-synthdef! (fn [n] (swap! sent conj n))
+                      cljseq.sc/sc-sync!       (fn [& _] :synced)]
+          (sc/ensure-synthdefs! [:sine :blade :prophet])))
+      ;; :sine already in sent-synthdefs — only :blade and :prophet should be sent
+      (is (= #{:blade :prophet} (set/difference @@#'sc/sent-synthdefs #{:sine})))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)
+        (reset! @#'sc/sent-synthdefs #{})))))
+
+(deftest ensure-synthdefs-no-op-when-all-sent-test
+  (testing "ensure-synthdefs! is a no-op when all defs already sent"
+    (reset! @#'sc/sent-synthdefs #{:sine :blade})
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (let [sync-called (atom false)]
+        (with-redefs [cljseq.sc/send-synthdef! (fn [_] (throw (ex-info "should not send" {})))
+                      cljseq.sc/sc-sync!       (fn [& _] (reset! sync-called true) :synced)]
+          (sc/ensure-synthdefs! [:sine :blade]))
+        (is (false? @sync-called) "sc-sync! should not be called when nothing to send"))
       (finally
         (swap! @#'sc/sc-state assoc :connected false)
         (reset! @#'sc/sent-synthdefs #{})))))
