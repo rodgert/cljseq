@@ -34,13 +34,14 @@
 ;; cljseq.core is the default REPL ns and already owns play!, sleep!,
 ;; deflive-loop, stop-loop!, set-bpm!, now, etc.
 ;; Only pull in what core doesn't have:
-(require '[cljseq.journey :as journey]
-         '[cljseq.berlin  :as berlin]
-         '[cljseq.sc      :as sc]
-         '[cljseq.user    :refer [session! start-sidecar! stop-sidecar!
-                                  make-scale trajectory]]
-         '[cljseq.berlin  :refer [frippertronics! sos-send!
-                                  temporal-buffer-hold! temporal-buffer-color!]])
+(require '[cljseq.journey         :as journey]
+         '[cljseq.berlin          :as berlin]
+         '[cljseq.sc              :as sc]
+         '[cljseq.temporal-buffer :as tbuf]
+         '[cljseq.user            :refer [session! start-sidecar! stop-sidecar!
+                                          make-scale trajectory]]
+         '[cljseq.berlin          :refer [frippertronics! sos-send!]]
+         '[cljseq.temporal-buffer :refer [temporal-buffer-hold! temporal-buffer-color!]])
 
 ;; ============================================================
 ;; 0A. SESSION BOOT — clock

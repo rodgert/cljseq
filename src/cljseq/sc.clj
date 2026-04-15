@@ -138,8 +138,8 @@
                     (osc/start-osc-server! :port ctrl-port))
         p         (promise)
         _         (osc/register-handler! "/sc-ready" (fn [_] (deliver p :synced)))
-        cmd       (str "fork { s.sync; OSCMessage('/sc-ready')"
-                       ".sendTo(NetAddr(\"127.0.0.1\", " ctrl-port ")); };")]
+        cmd       (str "fork { s.sync; NetAddr(\"127.0.0.1\", " ctrl-port
+                       ").sendMsg('/sc-ready'); };")]
     (osc/osc-send! (sc-host) (lang-port) "/cmd" cmd)
     (let [result (deref p timeout-ms :timeout)]
       (if (= result :timeout)
