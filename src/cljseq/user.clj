@@ -70,7 +70,8 @@
             [cljseq.voice      :as voice]
             [cljseq.journey         :as journey]
             [cljseq.berlin          :as berlin]
-            [cljseq.temporal-buffer :as tbuf]))
+            [cljseq.temporal-buffer :as tbuf]
+            [cljseq.supervisor      :as supervisor]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session lifecycle
@@ -108,6 +109,8 @@
 (def stop!                core/stop!)
 (def set-bpm!             core/set-bpm!)
 (def get-bpm              core/get-bpm)
+(def set-beats-per-bar!   core/set-beats-per-bar!)
+(def get-beats-per-bar    core/get-beats-per-bar)
 (def play!                core/play!)
 (def sleep!               core/sleep!)
 (def sync!                core/sync!)
@@ -622,6 +625,19 @@
 (def stop-temporal-buffer!    tbuf/stop!)
 (def color-presets            tbuf/color-presets)
 (def buffer-presets           tbuf/presets)
+
+;; Supervisor — service health, events, watchdog
+(def register-service!      supervisor/register!)
+(def deregister-service!    supervisor/deregister!)
+(def register-sc!           supervisor/register-sc!)
+(def register-sidecar!      supervisor/register-sidecar!)
+(def start-watchdog!        supervisor/start-watchdog!)
+(def stop-watchdog!         supervisor/stop-watchdog!)
+(def service-status         supervisor/service-status)
+(def all-service-statuses   supervisor/all-statuses)
+(def on-supervisor-event!   supervisor/on-event!)
+(def off-supervisor-event!  supervisor/off-event!)
+(def restart-loop!          loop-ns/restart-loop!)
 
 (defn make-scale
   "Build a Scale record. Common modal shorthand.

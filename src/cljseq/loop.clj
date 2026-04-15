@@ -208,6 +208,21 @@
   []
   *virtual-time*)
 
+;; ---------------------------------------------------------------------------
+;; Supervisor integration — pause-check hook
+;; ---------------------------------------------------------------------------
+
+;; Atom holding (fn [service-names]) → truthy if loop should pause.
+;; Nil by default. Wired in by cljseq.supervisor/start-watchdog! so that
+;; deflive-loop :pause-on-down opts work without a circular dependency.
+(defonce -pause-check-fn (atom nil))
+
+(defn -register-pause-check!
+  "Internal: register or deregister the supervisor's pause predicate.
+  Pass nil to disable. Called by cljseq.supervisor."
+  [f]
+  (reset! -pause-check-fn f))
+
 (defn -current-beat
   "Return the current beat position from the effective timeline (Link or local).
   Used by deflive-loop to initialise *virtual-time* on thread start.
@@ -384,6 +399,8 @@
          harmony-ctx#   (:harmony ~opts)
          chord-ctx#     (:chord ~opts)
          tuning-ctx#    (:tuning ~opts)
+         pause-deps#    (:pause-on-down ~opts)  ; seq of service keywords, or nil
+         resume-bar#    (or (:resume-on-bar ~opts) 4) ; bar-snap period on recovery
          loop-fn#       (fn []
                           (binding [cljseq.loop/*synth-ctx*     synth-ctx#
                                     cljseq.loop/*timing-ctx*    timing-ctx#
@@ -393,20 +410,33 @@
                                     cljseq.loop/*chord-ctx*     chord-ctx#
                                     cljseq.loop/*tuning-ctx*    tuning-ctx#
                                     cljseq.loop/*loop-name*     ~loop-name]
-                            ~@body))
+                            (if (and pause-deps#
+                                     (when-let [chk# @cljseq.loop/-pause-check-fn]
+                                       (chk# pause-deps#)))
+                              ;; A dependency is down: sleep one bar-length and retry.
+                              ;; When the service recovers the loop will re-enter at
+                              ;; the next resume-bar# boundary naturally.
+                              (cljseq.loop/sleep! resume-bar#)
+                              (do ~@body))))
          restart-bar# (:restart-on-bar ~opts)
          sref#       (cljseq.loop/-system-ref)]
      ;; Clear a stale entry so re-evaluation starts a fresh thread instead of
      ;; silently hot-swapping into a loop that will never pick up the new fn.
      ;; Two cases that produce stale entries:
      ;;   (a) loop was stopped: running? = false
-     ;;   (b) loop body threw and killed the thread: running? still true but
-     ;;       the thread is no longer alive
-     (when-let [entry# (get-in @@sref# [:loops ~loop-name])]
-       (when (or (not @(:running? entry#))
-                 (when-let [t# ^Thread (:thread entry#)]
-                   (not (.isAlive t#))))
-         (swap! @sref# update :loops dissoc ~loop-name)))
+     ;;   (b) loop body threw a Throwable and killed the thread: running? still
+     ;;       true but the thread is no longer alive
+     ;; The check and the discard happen inside a single swap! so no concurrent
+     ;; deflive-loop call can observe a partially-cleared state.
+     (swap! @sref# update :loops
+            (fn [loops#]
+              (if-let [entry# (get loops# ~loop-name)]
+                (if (or (not @(:running? entry#))
+                        (when-let [t# ^Thread (:thread entry#)]
+                          (not (.isAlive t#))))
+                  (dissoc loops# ~loop-name)
+                  loops#)
+                loops#)))
      (if (get-in @@sref# [:loops ~loop-name])
        ;; Hot-swap: loop is running — update fn, interrupt any current sleep!
        ;; so the thread wakes immediately and picks up the new fn.
@@ -441,11 +471,14 @@
                                               [:loops ~loop-name :fn])]
                                (try
                                  (f#)
-                                 (catch Exception e#
-                                   (println (str "[cljseq] loop "
-                                                 (name ~loop-name)
-                                                 " error: "
-                                                 (.getMessage e#)))))
+                                 (catch Throwable e#
+                                   (binding [*out* *err*]
+                                     (println (str "[cljseq] loop "
+                                                   (name ~loop-name)
+                                                   " error ("
+                                                   (.getSimpleName (class e#))
+                                                   "): "
+                                                   (.getMessage e#))))))
                                (swap! @sref#
                                       update-in [:loops ~loop-name :tick-count]
                                       inc))
@@ -496,3 +529,66 @@
     (doseq [[lname _] (:loops @s)]
       (stop-loop! lname)))
   nil)
+
+(defn restart-loop!
+  "Restart a named loop whose thread has died, aligning re-entry to the next
+  `align-beats` boundary (default 4). This uses the last-known fn from the
+  loop's state entry — the musical content resumes exactly where it was.
+
+  The bar-snap is the same mechanism as :restart-on-bar: the new thread parks
+  until the next beat boundary before executing its first iteration, so the
+  loop re-enters at a musically sensible point rather than mid-phrase.
+
+  Returns loop-name if restarted, nil if the loop is alive or not found.
+
+  Called by cljseq.supervisor when auto-restart is enabled for a loop, but
+  also useful from the REPL: (restart-loop! :voice-a)."
+  [loop-name & {:keys [align-beats] :or {align-beats 4}}]
+  ;; Use system-ref directly (the outer atom) to mirror the deflive-loop macro.
+  ;; @system-ref  → inner system atom (or nil if not started)
+  ;; @@system-ref → state map
+  (when @system-ref
+    (let [entry (get-in @@system-ref [:loops loop-name])]
+      (when (and entry
+                 @(:running? entry)
+                 (when-let [t ^Thread (:thread entry)]
+                   (not (.isAlive t))))
+        (let [saved-fn           (:fn entry)
+              running?#          (atom true)
+              sleep-interrupted? (atom false)
+              start-beat         (-start-beat-for-period align-beats)]
+          (swap! @system-ref assoc-in [:loops loop-name]
+                 {:fn                 saved-fn
+                  :tick-count         0
+                  :running?           running?#
+                  :sleep-interrupted? sleep-interrupted?
+                  :thread             nil})
+          (let [t (Thread.
+                   (fn []
+                     (binding [*virtual-time*       start-beat
+                               *sleep-interrupted?* sleep-interrupted?]
+                       (-park-until-beat! start-beat)
+                       (loop []
+                         (when @running?#
+                           (let [f (get-in @@system-ref [:loops loop-name :fn])]
+                             (try (f)
+                                  (catch Throwable e
+                                    (binding [*out* *err*]
+                                      (println (str "[cljseq] loop " (name loop-name)
+                                                    " error (restarted) ("
+                                                    (.getSimpleName (class e)) "): "
+                                                    (.getMessage e))))))
+                             (swap! @system-ref
+                                    update-in [:loops loop-name :tick-count] inc))
+                           (recur)))
+                       (swap! @system-ref update :loops
+                              (fn [loops]
+                                (if (identical? running?#
+                                                (get-in loops [loop-name :running?]))
+                                  (dissoc loops loop-name)
+                                  loops))))))]
+            (.setDaemon t true)
+            (.setName t (str "cljseq-loop-" (name loop-name)))
+            (swap! @system-ref assoc-in [:loops loop-name :thread] t)
+            (.start t)
+            loop-name))))))

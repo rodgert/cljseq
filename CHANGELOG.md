@@ -10,6 +10,105 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.11.0] — 2026-04-14
+
+### Added
+
+#### Process supervisor (`cljseq.supervisor`)
+
+- **`cljseq.supervisor` namespace** — Erlang-style background watchdog that
+  monitors registered services (SC server, sidecar, live loop threads), emits
+  lifecycle events, optionally auto-restarts failed services, and restores
+  last-known state after recovery
+- **Event bus** — `on-event!` / `off-event!` register per-(service, event-type)
+  handlers identified by a user-chosen key; `emit!` fires all registered
+  handlers, swallowing individual handler exceptions so one bad handler can't
+  suppress others
+  - `:up` — service transitioned from `:down`/`:unknown` to `:up`
+  - `:down` — service transitioned from `:up`/`:unknown` to `:down`
+  - `:restore-failed` — restore-fn threw after a recovery
+- **Service registry** — `register!` / `deregister!` with three optional hooks:
+  `:check-fn` (health probe), `:restart-fn` (reconnect attempt), `:restore-fn`
+  (state reload after recovery); `service-status` / `all-statuses` / `any-down?`
+  for status queries
+- **Built-in registrations** — `register-sc!` (health=`sc-connected?`,
+  restore=`resend-sent-synthdefs!`, optional `:restart-fn`) and
+  `register-sidecar!` (health=`sidecar/connected?`,
+  restart=`restart-sidecar!`) wire up the two primary external processes with
+  a single call
+- **Watchdog thread** — `start-watchdog!` / `stop-watchdog!` control a named
+  daemon thread (`cljseq-supervisor-watchdog`) that runs health checks and,
+  optionally, dead loop-thread detection on each tick
+- **BPM-derived scan interval** — when `:interval-ms` is not provided the
+  watchdog sleeps one bar's worth of ms at the current BPM, re-derived each
+  tick so a live `set-bpm!` is automatically reflected; `:bars` (default 1)
+  and `:beats-per-bar` (default reads `core/get-beats-per-bar`) control the
+  period; e.g. dropping to 72 BPM for doom territory slows the watchdog to
+  match without any intervention
+- **Loop pause/resume integration** — `deflive-loop` accepts `:pause-on-down`
+  (list of service names) and `:resume-on-bar` (beat boundary, default 4);
+  when a dependency is `:down` the loop sleeps one `:resume-on-bar` period and
+  retries, maintaining virtual-time continuity without playing into silence; on
+  recovery the loop re-enters at the next beat boundary automatically
+- **29 tests, 34 assertions** in `cljseq.supervisor-test`
+
+#### Global beats-per-bar (`core/system-state`)
+
+- **`:beats-per-bar` in `core/system-state :config`** — global time-signature
+  numerator stored alongside `:bpm`; defaults to `4`
+- **`get-beats-per-bar` / `set-beats-per-bar!`** — accessors exported from
+  `cljseq.user`; `set-beats-per-bar! 3` switches to waltz time globally
+- **`start!` `:beats-per-bar` option** — `(start! :bpm 100 :beats-per-bar 3)`
+  sets both clock and meter at boot; pattern for future meter-aware namespaces
+- **`journey/start-bar-counter!` default** — the no-arg arity now reads
+  `core/get-beats-per-bar` instead of hardcoding 4, so `set-beats-per-bar!`
+  automatically propagates to new bar counters
+- **`supervisor/start-watchdog!` default** — `:beats-per-bar` reads
+  `core/get-beats-per-bar` on each tick when not explicitly overridden
+
+#### Bombproof loop error recovery
+
+- **`catch Throwable` in `deflive-loop`** — loop body exceptions now catch
+  `Throwable` (not just `Exception`), covering `AssertionError`,
+  `OutOfMemoryError`, and other JVM errors; class name is included in the
+  stderr log so errors are diagnosable without killing the loop
+- **Atomic stale-entry check** — the dead-thread cleanup at loop exit is now a
+  single `swap!` that checks and removes the stale entry atomically, preventing
+  a race where two exits could double-remove the same entry
+- **`restart-loop!`** — restarts a dead loop thread aligned to the next N-beat
+  bar boundary (`:align-beats`, default 4); safe to call on a live loop (returns
+  nil); uses the same `-park-until-beat!` / `-start-beat-for-period`
+  infrastructure as `deflive-loop`
+
+#### SC and sidecar reliability
+
+- **`sc-play!` stuck-note containment** — the release-daemon thread now catches
+  and logs `free-synth!` failures (e.g. node already freed by SC server) to
+  stderr instead of swallowing them silently; the caller thread is never
+  interrupted
+- **`resend-sent-synthdefs!`** — clears the sent-synthdefs cache and re-sends
+  all previously loaded synthdefs to sclang; called automatically by
+  `register-sc!` as the restore-fn so synthdefs survive an SC server restart
+- **`restart-sidecar!`** — restarts the sidecar process using the opts from the
+  last `start-sidecar!` call (saved in sidecar state as `:last-start-opts`);
+  called automatically by `register-sidecar!` as the restart-fn
+
+### Changed
+
+- **`start!`** — accepts `:beats-per-bar` alongside `:bpm`; both are stored in
+  `:config` and readable via `get-beats-per-bar`
+- **`journey/start-bar-counter!`** — no-arg arity reads `core/get-beats-per-bar`
+  (was hardcoded to 4); explicit-arity form still accepts a positional override
+
+### Sessions
+
+- **`sessions/rubycon-core.clj`** — Kosmische polyrhythmic session extended with
+  a fourth S42 drone voice (SC-only; `drone-ramp!` fade helper), full
+  four-movement arc wiring (`begin-emergence!` through `end-silence!`),
+  Frippertronics SOS buffer section, and REPL variation palette
+
+---
+
 ## [0.10.0] — 2026-04-11
 
 ### Added

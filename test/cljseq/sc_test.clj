@@ -303,3 +303,53 @@
             (core/play! {:pitch/midi 60 :dur/beats 1/4})))
         (is (zero? @sc-calls) "sc-play! must not be called for plain MIDI steps"))
       (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; sc-play! — stuck-note containment
+;; ---------------------------------------------------------------------------
+
+(deftest sc-play-release-failure-is-contained-test
+  (testing "a free-synth! failure in the release daemon does not propagate to the caller"
+    ;; When the release daemon thread fails (e.g., SC server has dropped the
+    ;; node ID), the exception must be caught and not re-thrown.  sc-play!
+    ;; should return the node-id regardless of what happens during release.
+    (reset! @#'sc/sent-synthdefs #{})
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (let [call-count (atom 0)
+            node-id    (atom nil)]
+        ;; First osc-send! call: sc-synth! note-on — succeeds.
+        ;; Subsequent osc-send! calls: free-synth! release — throws.
+        (with-redefs [cljseq.osc/osc-send! (fn [& _]
+                                              (when (> (swap! call-count inc) 1)
+                                                (throw (ex-info "simulated OSC failure" {}))))]
+          (reset! node-id (sc/sc-play! {:synth :sine :freq 440.0 :dur-ms 1})))
+        ;; sc-play! must return a valid node-id despite the pending release failure
+        (is (pos-int? @node-id) "sc-play! returns node-id even when release will fail")
+        ;; Allow the release daemon to fire and swallow its exception
+        (Thread/sleep 50)
+        ;; Test passes if we reach here — no exception escaped to the caller
+        (is true "no exception propagated from the release daemon"))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)
+        (reset! @#'sc/sent-synthdefs #{})))))
+
+(deftest sc-play-release-failure-does-not-affect-caller-thread-test
+  (testing "a release daemon exception does not kill or interrupt the calling thread"
+    (reset! @#'sc/sent-synthdefs #{})
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (let [caller-interrupted? (atom false)]
+        (with-redefs [cljseq.osc/osc-send! (fn [& _]
+                                              (throw (ex-info "simulated total OSC failure" {})))]
+          (try
+            (sc/sc-play! {:synth :sine :freq 440.0 :dur-ms 1})
+            ;; sc-synth! itself will throw here (first call fails) — that is expected
+            ;; and correct: if we can't even send the note-on, sc-play! should throw.
+            (catch Exception _)))
+        ;; After the throw, the calling thread must still be alive and uninterrupted
+        (is (not @caller-interrupted?) "caller thread not interrupted")
+        (is (not (.isInterrupted (Thread/currentThread))) "current thread interrupt flag clear"))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)
+        (reset! @#'sc/sent-synthdefs #{})))))

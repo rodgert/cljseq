@@ -38,9 +38,9 @@
          '[cljseq.berlin  :as berlin]
          '[cljseq.sc      :as sc]
          '[cljseq.user    :refer [session! start-sidecar! stop-sidecar!
-                                  frippertronics! sos-send!
-                                  temporal-buffer-hold! temporal-buffer-color!
-                                  make-scale trajectory]])
+                                  make-scale trajectory]]
+         '[cljseq.berlin  :refer [frippertronics! sos-send!
+                                  temporal-buffer-hold! temporal-buffer-color!]])
 
 ;; ============================================================
 ;; 0A. SESSION BOOT — clock
@@ -196,7 +196,33 @@
   (merge {:synth :pretty-bell :amp 0.22 :attack 0.04 :release 4.0} step))
 
 ;; ============================================================
-;; 4. BAR COUNTER — the shared timeline
+;; 4. S42 DRONE — Solar42-inspired SC voice (4th voice, below the mix)
+;;
+;; Requires sclang running: (sc/connect-sc!) then evaluate this block.
+;; verb-node is the master volume control for the entire drone chain.
+;; drone-ramp! (defined in section 7) fades it in/out over the arc.
+;;
+;; Setup procedure:
+;;   1. Pre-send synthdefs + sync
+;;   2. instantiate-patch! :s42
+;;   3. Kill mono verb, spawn stereo reverb-bus-stereo
+;;   4. bind verb-node — this is the master amp for the drone
+;; ============================================================
+
+(comment
+  ;; Run this block once after (sc/connect-sc!):
+  (doseq [s [:s42-drone-voice :s42-vco-voice :s42-papa-voice :s42-filter :reverb-bus-stereo]]
+    (sc/ensure-synthdef! s))
+  (Thread/sleep 3000)  ; wait for scsynth to load defs
+  (def s42 (sc/instantiate-patch! :s42))
+  (sc/kill-synth! (get-in s42 [:nodes :verb]))
+  (def verb-node (sc/sc-synth! :reverb-bus-stereo
+                   {:in-bus (get-in s42 [:buses :filtered-mix])
+                    :out 0 :room 0.5 :mix 0.33 :damp 0.5 :amp 0.0}))
+  (def s42 (assoc-in s42 [:nodes :verb] verb-node)))
+
+;; ============================================================
+;; 5. BAR COUNTER — the shared timeline
 ;; ============================================================
 
 (journey/start-bar-counter!)
@@ -205,7 +231,7 @@
 ;; (Thread/sleep 2000) (journey/current-bar)  ; should be > 0
 
 ;; ============================================================
-;; 5. VOICE LOOPS — fire A and B, start phase-locked
+;; 6. VOICE LOOPS — fire A and B, start phase-locked
 ;;
 ;; :restart-on-bar true snaps both loops to the next bar boundary
 ;; before entering, so voice-a and voice-b start from beat 0 together.
@@ -263,7 +289,7 @@
 ;; ============================================================
 
 ;; ============================================================
-;; 6. FILTER JOURNEY — open the filter over 64 bars
+;; 7. FILTER JOURNEY — open the filter over 64 bars
 ;;
 ;; Start this immediately after the loops are running.
 ;; The filter opening IS Movement 2 (Crystallisation).
@@ -274,18 +300,38 @@
 ;; (berlin/filter-journey! [:filter-b :cutoff] 74 2 8 75 64 :smooth-step)
 
 ;; ============================================================
-;; 7. JOURNEY CONDUCTOR — the four-movement arc
+;; 8. JOURNEY CONDUCTOR — the four-movement arc
 ;;
 ;; Wire real functions to the phaedra-arc scaffold.
 ;; Each transition fires exactly once at the bar position shown.
 ;; The conductor is additive — fire it after the loops are running.
 ;; ============================================================
 
+;; Ramp the s42 reverb master amp from `from` to `to` over `beats` beats.
+;; Uses `verb-node` (bound after instantiate-patch! + stereo reverb setup).
+(defn drone-ramp! [from to beats]
+  (let [bpm      (get-bpm)
+        ms-total (* beats (/ 60000.0 bpm))
+        steps    40
+        step-ms  (/ ms-total steps)
+        delta    (/ (- to from) steps)]
+    (future
+      (loop [i 0 v from]
+        (when (<= i steps)
+          (cljseq.sc/set-param! verb-node :amp v)
+          (Thread/sleep (long step-ms))
+          (recur (inc i) (+ v delta)))))
+    {:from from :to to :beats beats}))
+
 (defn begin-emergence! []
   ;; Loops already running. Start filter journeys here.
   (berlin/filter-journey! [:filter-a :cutoff] 74 1 5 90 64 :breathe)
   (berlin/filter-journey! [:filter-b :cutoff] 74 2 8 75 64 :smooth-step)
-  (println "[journey] Movement 1: Emergence — filter opening over 64 bars"))
+  ;; Drone builds from silence to full presence over 320 beats (~5 min)
+  (when (bound? #'verb-node)
+    (cljseq.sc/set-param! verb-node :amp 0.0)
+    (drone-ramp! 0.0 0.18 320))
+  (println "[journey] Movement 1: Emergence — filter opening + drone rising over 64 bars"))
 
 (defn enter-crystallise! []
   ;; Increase mutation: pattern starts finding itself
@@ -315,7 +361,10 @@
   ;; Close the filter over 80 bars.
   (berlin/filter-journey! [:filter-a :cutoff] 74 1 90 5 80 :smooth-step)
   (berlin/filter-journey! [:filter-b :cutoff] 74 2 75 8 80 :smooth-step)
-  (println "[journey] Movement 4: Dissolution — patterns fragmenting"))
+  ;; Fade drone back to silence over 80 bars
+  (when (bound? #'verb-node)
+    (drone-ramp! 0.18 0.0 320))
+  (println "[journey] Movement 4: Dissolution — patterns fragmenting, drone fading"))
 
 (defn end-silence! []
   (stop-loop! :voice-a)
@@ -336,7 +385,7 @@
     {:on-end #(println "[journey] Arc complete")}))
 
 ;; ============================================================
-;; 8. THIRD VOICE — ToB counter-register introduction
+;; 9. THIRD VOICE — ToB counter-register introduction
 ;;
 ;; Voice C is the "Tyranny of Beauty" counter-register: lighter, higher,
 ;; melodic, lyrical. It runs a 13-beat cycle (prime against both 12 and 17),
@@ -409,7 +458,7 @@
   (journey/phase-pair 17 13))   ; LCM 221, 2.21 min
 
 ;; ============================================================
-;; 9. FRIPPERTRONICS — Sound on Sound accumulation (optional arc)
+;; 10. FRIPPERTRONICS — Sound on Sound accumulation (optional arc)
 ;;
 ;; Route voice C through a temporal buffer with high feedback and
 ;; tape-style Color. Earlier passes fade while new material accumulates.
@@ -464,7 +513,7 @@
   )
 
 ;; ============================================================
-;; 10. VARIATIONS — use at the REPL during Movement 3
+;; 11. VARIATIONS — use at the REPL during Movement 3
 ;; ============================================================
 
 ;; Crystallize voice-a toward a specific target pattern:
@@ -500,7 +549,7 @@
     (swap! ost-c assoc :scale d-lydian)))
 
 ;; ============================================================
-;; 11. TEARDOWN
+;; 12. TEARDOWN
 ;; ============================================================
 
 (comment

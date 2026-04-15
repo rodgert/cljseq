@@ -40,7 +40,8 @@
     (journey/phase-pair 12 17)
     ;; => {:lcm 204 :alignment-beats [204 408 612 816 1020]
     ;;     :drift-rate 0.0294 :at-bpm {:bpm 100 :minutes 2.04}}"
-  (:require [cljseq.loop :as loop-ns]))
+  (:require [cljseq.core :as core]
+            [cljseq.loop :as loop-ns]))
 
 ;; ---------------------------------------------------------------------------
 ;; 1. Global bar counter
@@ -63,12 +64,15 @@
   query. Reset the count with reset-bar-counter! without stopping; stop with
   stop-bar-counter!.
 
-  `beats-per-bar` — number of beats per bar (default 4; use 3 for waltz time)
+  `beats-per-bar` — number of beats per bar.  When omitted, defaults to the
+  value set via (core/set-beats-per-bar!) or the :beats-per-bar arg to
+  (core/start!), which itself defaults to 4.  Pass explicitly to override for
+  this counter only (e.g. 3 for waltz time) without changing the global setting.
 
   Example:
-    (journey/start-bar-counter!)       ; 4/4
-    (journey/start-bar-counter! 3)     ; 3/4"
-  ([] (start-bar-counter! 4))
+    (journey/start-bar-counter!)       ; uses core/get-beats-per-bar (default 4)
+    (journey/start-bar-counter! 3)     ; 3/4 for this counter only"
+  ([] (start-bar-counter! (core/get-beats-per-bar)))
   ([beats-per-bar]
    (swap! bar-counter assoc :running true :bar 0)
    (loop-ns/deflive-loop :journey/bar-counter {}

@@ -1,12 +1,11 @@
 {
   "mcpServers": {
     "cljseq": {
-      "type": "stdio",
-      "command": "bash",
-      "args": [
-        "-c",
-        "export JAVA_HOME=/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home && lein mcp --nrepl-port 7888"
-      ]
+      "command": "/opt/homebrew/bin/lein",
+      "args": ["mcp", "--nrepl-port", "7888"],
+      "env": {
+        "JAVA_HOME": "/opt/homebrew/opt/openjdk/libexec/openjdk.jdk/Contents/Home"
+      }
     }
   }
 }

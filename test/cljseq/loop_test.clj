@@ -318,8 +318,9 @@
 (deftest loop-restarts-after-crash-test
   (testing "deflive-loop detects a dead thread and starts a fresh one"
     ;; Simulate a crashed loop by creating an entry with a dead thread
-    ;; and running?=true (exactly what happens when the body throws before
-    ;; the try-catch was in place, or with an Error that bypasses Exception).
+    ;; and running?=true (exactly what happens when the body throws an Error
+    ;; that bypasses Exception).  The stale-check now runs inside a single
+    ;; swap! so no concurrent deflive-loop can observe torn state.
     (let [v        (atom :initial)
           dead-t   (doto (Thread. (fn [])) (.start))
           running? (atom true)
@@ -339,6 +340,48 @@
       (Thread/sleep 30)
       (is (= :fresh @v) "fresh loop body ran after dead thread detected")
       (loop/stop-loop! :test-crash-loop))))
+
+(deftest loop-survives-throwable-error-test
+  (testing "a body Throwable (Error subclass) is caught and the loop continues"
+    ;; Prior to the catch-Throwable fix, an AssertionError would escape the
+    ;; try-catch, kill the thread silently, and leave running?=true —
+    ;; the loop would go dark with no feedback.
+    (let [counter (atom 0)
+          throw?  (atom true)]
+      (loop/deflive-loop :test-throwable-loop {}
+        (swap! counter inc)
+        (when @throw?
+          (throw (AssertionError. "deliberate throwable")))
+        (loop/sleep! 1))
+      ;; Let it throw for a few iterations, then disable the throw
+      (Thread/sleep 30)
+      (reset! throw? false)
+      (let [count-at-disable @counter]
+        (Thread/sleep 30)
+        (is (> @counter count-at-disable)
+            "loop kept running after AssertionError"))
+      (loop/stop-loop! :test-throwable-loop))))
+
+(deftest loop-stale-check-atomic-with-stopped-loop-test
+  (testing "stale-check inside swap! is consistent: stopped loop starts fresh, not hot-swap"
+    ;; The stale check (running?=false) and entry removal now happen in a single
+    ;; swap!, so a concurrent deflive-loop cannot see a partially-cleared state.
+    ;; Behaviorally: stopping a loop and re-evaluating with the same name must
+    ;; always produce a fresh thread, never a hot-swap into the stopped entry.
+    (let [which (atom :none)]
+      (loop/deflive-loop :test-atomic-stale {}
+        (reset! which :first)
+        (loop/sleep! 1))
+      (Thread/sleep 20)
+      (loop/stop-loop! :test-atomic-stale)
+      (Thread/sleep 20)  ; let thread exit and self-clean
+      ;; At this point running?=false. Re-evaluating must start fresh.
+      (loop/deflive-loop :test-atomic-stale {}
+        (reset! which :second)
+        (loop/sleep! 1000))
+      (Thread/sleep 30)
+      (is (= :second @which) "re-evaluation after stop started a fresh loop")
+      (loop/stop-loop! :test-atomic-stale))))
 
 ;; ---------------------------------------------------------------------------
 ;; -start-beat-for-period (Q32)

@@ -428,6 +428,20 @@
   (doseq [name (synth/synth-names)]
     (send-synthdef! name)))
 
+(defn resend-sent-synthdefs!
+  "Re-send all synthdefs that were previously loaded in this session.
+  Call after reconnecting to a crashed/restarted SC server to restore
+  the synth registry. Clears the sent-synthdefs cache first so
+  ensure-synthdef! treats each def as unsent.
+
+  Returns the set of def names that were re-sent."
+  []
+  (let [defs @sent-synthdefs]
+    (reset! sent-synthdefs #{})
+    (doseq [def-name defs]
+      (ensure-synthdef! def-name))
+    defs))
+
 (defn send-fm-synthdef!
   "Compile a registered FM algorithm to SC and send it to the sclang interpreter.
 
@@ -578,7 +592,11 @@
                          (when (pos? sleep-ms)
                            (Thread/sleep sleep-ms)))
                        (free-synth! node-id)
-                       (catch Exception _))))
+                       (catch Exception e
+                         (binding [*out* *err*]
+                           (println (str "[sc] stuck note: free-synth! failed for node "
+                                         node-id " (" (.getSimpleName (class e)) "): "
+                                         (.getMessage e))))))))
       (.setDaemon true)
       (.start))
     node-id))

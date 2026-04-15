@@ -638,7 +638,11 @@
                  (.redirectOutput ProcessBuilder$Redirect/INHERIT))
           proc (.start pb)]
       (swap! sidecar-state assoc :process proc :port port :running? true
-                                 :stderr-lines [])
+                                 :stderr-lines []
+                                 :last-start-opts {:binary       binary
+                                                   :midi-port    midi-port
+                                                   :midi-in-port midi-in-port
+                                                   :kbd?         kbd?})
       (capture-stderr! proc)
       (connect-with-retry! port)
       (monitor-process! proc port)
@@ -657,3 +661,17 @@
   (swap! sidecar-state assoc :running? false :socket nil :out nil :in nil :process nil :port nil)
   (println "[cljseq.sidecar] stopped")
   nil)
+
+(defn restart-sidecar!
+  "Stop the sidecar and restart it using the same options supplied to the last
+  `start-sidecar!` call. Waits 500ms between stop and start to allow the
+  process to exit cleanly.
+
+  Used by cljseq.supervisor for automatic sidecar recovery, but also callable
+  from the REPL: (restart-sidecar!)"
+  []
+  (when-let [opts (:last-start-opts @sidecar-state)]
+    (try (stop-sidecar!) (catch Exception _))
+    (Thread/sleep 500)
+    (apply start-sidecar!
+           (mapcat identity (filter (comp some? val) opts)))))
