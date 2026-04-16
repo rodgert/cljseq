@@ -1,8 +1,15 @@
 ; SPDX-License-Identifier: EPL-2.0
 ;;
-;; rubycon-core.clj — Kosmische session: Rubycon polyrhythmic core
+;; rubycon-core.clj — Kosmische session: polyrhythmic Berlin School core
 ;;
-;; Aesthetic: Phaedra/Rubycon sequencer grammar inflected with Sabbath's
+;; This is an original compositional session file inspired by the sequencer
+;; grammar of 1970s Berlin School electronic music (Tangerine Dream, Klaus
+;; Schulze, et al.). It is NOT a reproduction of any specific work. The
+;; musical techniques used — phase drift, drone layering, filter arcs, modal
+;; harmony — are part of a common practice; no claim of connection to any
+;; specific album or artist is intended or implied.
+;;
+;; Aesthetic: Berlin School sequencer grammar inflected with Sabbath's
 ;; Phrygian weight and Sunn O)))'s tectonic patience. D Dorian is the stable
 ;; territory; Phrygian dominant provides the dark inflection.
 ;;
@@ -47,7 +54,7 @@
 ;; 0A. SESSION BOOT — clock
 ;; ============================================================
 
-;; Start clock at 100 BPM — TD canonical Phaedra/Rubycon tempo.
+;; Start clock at 100 BPM — canonical Berlin School sequencer tempo.
 ;; Drop to 72 for Zeit/Irrlicht territory (heavy, pre-sequencer doom).
 (session! :bpm 100)
 
@@ -119,7 +126,7 @@
 ;; Phrygian dominant inflection introduced in Movement 3 (see below).
 ;; ============================================================
 
-(def rubycon-scale (make-scale :D 2 :dorian))
+(def session-scale (make-scale :D 2 :dorian))
 
 ;; ============================================================
 ;; 3. OSTINATI — three voices, incommensurate lengths
@@ -150,7 +157,7 @@
      {:pitch/midi 43 :dur/beats 2.5 :mod/velocity 72}   ; G2 — fourth
      {:pitch/midi 41 :dur/beats 2.5 :mod/velocity 68}   ; F2 — minor third
      {:pitch/midi 40 :dur/beats 2.5 :mod/velocity 75}]  ; E2 — second (Dorian colour)
-    {:scale rubycon-scale :mutation-rate 0.08 :drift :random}))
+    {:scale session-scale :mutation-rate 0.08 :drift :random}))
 
 ;; SC synth overlay for voice A — merge :synth into each step for standalone play.
 ;; Set this before the voice-a loop if using SC path:
@@ -168,7 +175,7 @@
     [{:pitch/midi 50 :dur/beats 4.0 :mod/velocity 65}   ; D3 — octave root
      {:pitch/midi 53 :dur/beats 5.0 :mod/velocity 58}   ; F3 — minor third
      {:pitch/midi 55 :dur/beats 5.0 :mod/velocity 62}]  ; G3 — fifth
-    {:scale rubycon-scale :mutation-rate 0.06 :drift :random}))
+    {:scale session-scale :mutation-rate 0.06 :drift :random}))
 
 (defn- add-sc-voice-b [step]
   (merge {:synth :dark-ambience :amp 0.28 :cutoff 48 :res 0.82 :attack 1.5 :release 5.0} step))
@@ -190,7 +197,7 @@
      {:pitch/midi 67 :dur/beats 2.5 :mod/velocity 48}   ; G4 — fifth
      {:pitch/midi 69 :dur/beats 2.5 :mod/velocity 52}   ; A4 — sixth
      {:pitch/midi 64 :dur/beats 2.5 :mod/velocity 45}]  ; E4 — second
-    {:scale rubycon-scale :mutation-rate 0.04 :drift :up}))
+    {:scale session-scale :mutation-rate 0.04 :drift :up}))
 
 ;; SC synth overlay for voice C — :pretty-bell, low amplitude, long release
 (defn- add-sc-voice-c [step]
@@ -249,32 +256,38 @@
 ;; with (add-sc-voice-a (berlin/next-step! ost-a)) and remove :channel opts.
 
 ;; Voice A: step every 3 beats, full 12-beat cycle
-(deflive-loop :voice-a {:channel 1 :restart-on-bar true}
-  (berlin/with-portamento 1 80
-    (play! (berlin/next-step! ost-a)))
-  (sleep! 3))
+;; Wrapped in a named fn so fire-arc! can restart it after end-silence!.
+(defn start-voice-a! []
+  (deflive-loop :voice-a {:channel 1 :restart-on-bar true}
+    (berlin/with-portamento 1 80
+      (play! (berlin/next-step! ost-a)))
+    (sleep! 3)))
 
 ;; SC path (uncomment to use instead of hardware):
 (comment
-  (deflive-loop :voice-a {:restart-on-bar true}
-    (play! (add-sc-voice-a (berlin/next-step! ost-a)))
-    (sleep! 3)))
+  (defn start-voice-a! []
+    (deflive-loop :voice-a {:restart-on-bar true}
+      (play! (add-sc-voice-a (berlin/next-step! ost-a)))
+      (sleep! 3))))
 
 ;; Voice B: step at 5 / 6 / 6 beat spacing, full 17-beat cycle
 ;; Unequal spacing gives an irregular, breathing feel.
-(let [step-sleeps (atom (cycle [5 6 6]))]
+;; step-sleeps-b is module-level so the cycle position survives across restarts.
+(def step-sleeps-b (atom (cycle [5 6 6])))
+
+(defn start-voice-b! []
   (deflive-loop :voice-b {:channel 2 :restart-on-bar true}
     (play! (journey/humanise (berlin/next-step! ost-b)
                              {:timing-variance-ms 8 :velocity-variance 6}))
-    (sleep! (first (swap! step-sleeps rest)))))
+    (sleep! (first (swap! step-sleeps-b rest)))))
 
 ;; SC path (uncomment to use instead of hardware):
 (comment
-  (let [step-sleeps (atom (cycle [5 6 6]))]
+  (defn start-voice-b! []
     (deflive-loop :voice-b {:restart-on-bar true}
       (play! (journey/humanise (add-sc-voice-b (berlin/next-step! ost-b))
                                {:timing-variance-ms 8 :velocity-variance 6}))
-      (sleep! (first (swap! step-sleeps rest))))))
+      (sleep! (first (swap! step-sleeps-b rest))))))
 
 ;; ============================================================
 ;; WHAT TO LISTEN FOR — first five minutes
@@ -282,7 +295,7 @@
 ;; 0:00 — Both voices start together on D2/D3. Filter closed.
 ;; 0:30 — First separation: voice-b has shifted by ~5 beats relative to A.
 ;; 1:00 — Mid-drift: the two voices are maximally out of phase.
-;;         This is the "Rubycon middle" — spacious, unsettling.
+;;         This is the "wide middle" — spacious, unsettling.
 ;; 2:04 — Re-alignment. Both voices land on a downbeat together.
 ;;         May feel like a structural event even though nothing changed.
 ;; 2:04+ — Second phase cycle begins. Mutation has now altered some pitches
@@ -310,19 +323,9 @@
 
 ;; Ramp the s42 reverb master amp from `from` to `to` over `beats` beats.
 ;; Uses `verb-node` (bound after instantiate-patch! + stereo reverb setup).
+;; Returns a cancel fn (from sc/ramp-param!) in case the arc needs early exit.
 (defn drone-ramp! [from to beats]
-  (let [bpm      (get-bpm)
-        ms-total (* beats (/ 60000.0 bpm))
-        steps    40
-        step-ms  (/ ms-total steps)
-        delta    (/ (- to from) steps)]
-    (future
-      (loop [i 0 v from]
-        (when (<= i steps)
-          (cljseq.sc/set-param! verb-node :amp v)
-          (Thread/sleep (long step-ms))
-          (recur (inc i) (+ v delta)))))
-    {:from from :to to :beats beats}))
+  (cljseq.sc/ramp-param! verb-node :amp from to beats))
 
 (defn begin-emergence! []
   ;; Loops already running. Start filter journeys here.
@@ -375,8 +378,12 @@
   (println "[journey] Silence"))
 
 ;; Wire the arc and fire the conductor.
-;; Call this after the loops are running and you are ready to begin the full arc.
+;; Safe to call after end-silence! — restarts voice-a and voice-b before
+;; firing the conductor. Voice-c is intentionally excluded; it is introduced
+;; later by introduce-voice-c! during Development.
 (defn fire-arc! []
+  (start-voice-a!)
+  (start-voice-b!)
   (journey/start-journey!
     [[0   begin-emergence!]
      [48  enter-crystallise!]
@@ -402,20 +409,23 @@
 ;; ============================================================
 
 ;; Voice C loop — 13-beat cycle (4 + 3 + 3 + 3 beats)
-;; Start AFTER introduce-voice-c! is called.
-(let [step-sleeps (atom (cycle [4 3 3 3]))]
+;; Called by introduce-voice-c! — NOT auto-started at load time.
+;; step-sleeps-c is module-level so the cycle position survives restarts.
+(def step-sleeps-c (atom (cycle [4 3 3 3])))
+
+(defn start-voice-c! []
   (deflive-loop :voice-c {:channel 3}
     (play! (journey/humanise (berlin/next-step! ost-c)
                              {:timing-variance-ms 5 :velocity-variance 4}))
-    (sleep! (first (swap! step-sleeps rest)))))
+    (sleep! (first (swap! step-sleeps-c rest)))))
 
 ;; SC path (uncomment to use instead of hardware):
 (comment
-  (let [step-sleeps (atom (cycle [4 3 3 3]))]
+  (defn start-voice-c! []
     (deflive-loop :voice-c {}
       (play! (journey/humanise (add-sc-voice-c (berlin/next-step! ost-c))
                                {:timing-variance-ms 5 :velocity-variance 4}))
-      (sleep! (first (swap! step-sleeps rest))))))
+      (sleep! (first (swap! step-sleeps-c rest))))))
 
 (defn introduce-voice-c!
   "Begin voice C crystallization — fades in over ~48 bars.
@@ -433,7 +443,7 @@
   (berlin/set-mutation-trajectory! ost-c
     (trajectory :from 0.0 :to 0.12 :beats 48 :curve :smooth-step)
     48)
-  ;; Start the loop (if not already running — deflive-loop is idempotent)
+  (start-voice-c!)
   (println "[voice-c] Crystallizing in — 13-beat counter-register entering"))
 
 (defn dissolve-voice-c!

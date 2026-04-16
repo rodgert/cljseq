@@ -10,6 +10,63 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.12.0] — 2026-04-15
+
+### Added
+
+#### SC process management (`cljseq.sc`)
+
+- **`start-sc!`** — launches sclang as a managed subprocess and waits for
+  the `/sc-lang-ready` OSC boot gate before calling `connect-sc!`. Stores the
+  `java.lang.Process`, binary path, and script path in sc-state for later
+  restart. Throws on timeout (default 30 s) and destroys the process cleanly.
+- **`stop-sc!`** — `destroyForcibly` on the stored process, then
+  `disconnect-sc!`. Safe to call when no managed process exists.
+- **`sc-restart!`** — full recovery sequence: snapshots `@sent-synthdefs`
+  before stopping (both `stop-sc!` and `connect-sc!` clear the set), then
+  stop → start → re-send all defs. Throws if `start-sc!` was never called
+  (binary unknown). Primary use: audio device reconnect or sclang crash during
+  a live set, without leaving the REPL.
+- **`^:dynamic *process-launcher*`** — test injection point for the sclang
+  subprocess; override with `binding` to unit-test without real sclang.
+- **`supervisor/register-sc!`** now defaults `:restart-fn` to `sc/sc-restart!`
+  instead of nil — the watchdog calls `sc-restart!` automatically when the
+  health check fails, eliminating the need for manual terminal intervention.
+- **`sc-headless.scd`** — sends `NetAddr("127.0.0.1", 57121).sendMsg('/sc-lang-ready')`
+  after scsynth boots and the `/cmd` handler is active; required by `start-sc!`.
+
+#### `sc/ramp-param!`
+
+- **`ramp-param!`** — linearly ramps a live SC node parameter from `from` to
+  `to` over `beats` beats. Uses a future loop sized to the current BPM
+  (~40 ms per step by default). More reliable for long, gradual ramps than
+  `apply-trajectory!`; returns a zero-argument cancel function for early exit.
+  Options: `:steps` (default 40), `:bpm` override.
+
+### Fixed
+
+#### Session arc restart (`sessions/rubycon-core.clj`)
+
+- **`fire-arc!`** — now calls `start-voice-a!` and `start-voice-b!` before
+  firing the conductor, so the `end-silence!` → `fire-arc!` cycle works
+  correctly. Previously `fire-arc!` re-fired the conductor but left the voice
+  loops stopped, producing silence.
+- Voice A and B loops wrapped in named `start-voice-X!` functions;
+  `step-sleeps` atoms promoted to module-level `def`s so the cycle position
+  survives across restarts.
+- Voice C loop (`start-voice-c!`) is no longer auto-started at file load time;
+  it is now called explicitly by `introduce-voice-c!`.
+- `drone-ramp!` now delegates to `sc/ramp-param!` and returns its cancel fn.
+
+### Changed
+
+- **`sessions/rubycon-core.clj`** — added explicit "inspired by Berlin School"
+  disclaimer to file header; removed specific album-title references from
+  comments and variable names (`rubycon-scale` → `session-scale`) to maintain
+  clear artistic distance.
+
+---
+
 ## [0.11.0] — 2026-04-14
 
 ### Added
@@ -102,8 +159,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Sessions
 
-- **`sessions/rubycon-core.clj`** — Kosmische polyrhythmic session extended with
-  a fourth S42 drone voice (SC-only; `drone-ramp!` fade helper), full
+- **`sessions/rubycon-core.clj`** — Berlin School polyrhythmic session extended
+  with a fourth S42 drone voice (SC-only; `drone-ramp!` fade helper), full
   four-movement arc wiring (`begin-emergence!` through `end-silence!`),
   Frippertronics SOS buffer section, and REPL variation palette
 

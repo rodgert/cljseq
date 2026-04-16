@@ -59,11 +59,15 @@
 ;; ---------------------------------------------------------------------------
 
 (defonce ^:private sc-state
-  (atom {:host      "127.0.0.1"
-         :sc-port   57110    ; scsynth
-         :lang-port 57120    ; sclang
-         :connected false
-         :next-node (atom 1000)}))
+  (atom {:host           "127.0.0.1"
+         :sc-port        57110    ; scsynth
+         :lang-port      57120    ; sclang
+         :connected      false
+         :next-node      (atom 1000)
+         ;; Process management — populated by start-sc!, cleared by stop-sc!
+         :sc-process     nil      ; java.lang.Process holding the sclang subprocess
+         :sclang-binary  nil      ; path to the sclang binary used at last start
+         :sclang-script  nil}))   ; path to the .scd script used at last start
 
 ;; Track which SynthDefs have been sent to sclang in this session.
 ;; Reset on connect/disconnect so a fresh SC server gets all defs re-sent.
@@ -77,7 +81,7 @@
          :control-next 0
          :named        {}}))
 
-(declare sc-connected? sc-host lang-port send-synthdef!)
+(declare sc-connected? sc-host lang-port send-synthdef! ensure-synthdef! resend-sent-synthdefs!)
 
 (defn connect-sc!
   "Configure the SC connection parameters.
@@ -111,6 +115,119 @@
   (peer/deregister-backend! :sc)
   (println "[sc] disconnected")
   nil)
+
+;; ---------------------------------------------------------------------------
+;; SC process management — start-sc!, stop-sc!, sc-restart!
+;; ---------------------------------------------------------------------------
+
+(def ^:dynamic *process-launcher*
+  "Launch a sclang subprocess. Called by start-sc! with [binary script].
+  Returns a java.lang.Process.
+  Override in tests to inject a fake process without touching real sclang:
+    (binding [sc/*process-launcher* (fn [_ _] my-mock-process)] ...)"
+  (fn [binary script]
+    (-> (ProcessBuilder. ^java.util.List [binary script])
+        (.redirectErrorStream false)
+        .start)))
+
+(defn start-sc!
+  "Launch sclang as a managed subprocess and wait for it to be ready.
+
+  sc-headless.scd sends an OSC /sc-lang-ready message once scsynth has booted
+  and the /cmd handler is active. start-sc! registers a one-shot handler for
+  that message before launching the process, then blocks until it arrives (or
+  times out).
+
+  On success: stores the Process and startup params in sc-state, calls
+  connect-sc!, and returns the java.lang.Process.
+  On timeout: destroys the process and throws ex-info.
+
+  Options:
+    :binary     — path to the sclang binary (required on first call;
+                  reused automatically by sc-restart!)
+    :script     — path to the .scd boot script
+                  (default \"script/sc-headless.scd\")
+    :timeout-ms — ms to wait for /sc-lang-ready (default 30000)
+
+  Example:
+    (sc/start-sc! :binary \"/opt/homebrew/.../sclang\"
+                  :script  \"script/sc-headless.scd\")"
+  [& {:keys [binary script timeout-ms]
+      :or   {script "script/sc-headless.scd" timeout-ms 30000}}]
+  (when-not binary
+    (throw (ex-info "start-sc!: :binary is required" {})))
+  (let [ctrl-port (or (osc/osc-port) 57121)
+        _         (when-not (osc/osc-running?)
+                    (osc/start-osc-server! :port ctrl-port))
+        p         (promise)
+        _         (osc/register-handler! "/sc-lang-ready" (fn [_] (deliver p :ready)))
+        proc      (*process-launcher* binary script)]
+    (swap! sc-state assoc
+           :sc-process    proc
+           :sclang-binary binary
+           :sclang-script script)
+    (let [result (deref p timeout-ms :timeout)]
+      (if (= result :timeout)
+        (do (osc/register-handler! "/sc-lang-ready" (fn [_] nil)) ; clear stale handler
+            (.destroyForcibly proc)
+            (swap! sc-state assoc :sc-process nil)
+            (throw (ex-info "start-sc!: timed out waiting for sclang to boot"
+                            {:timeout-ms timeout-ms :binary binary :script script})))
+        (do (connect-sc!)
+            (println (str "[sc] sclang process started (" binary ")"))
+            proc)))))
+
+(defn stop-sc!
+  "Kill the managed sclang subprocess (if running) and disconnect.
+
+  Safe to call when no process is running — logs a warning and returns nil.
+  After stop-sc!, sc-restart! or start-sc! is required to resume SC use."
+  []
+  (let [proc (:sc-process @sc-state)]
+    (if proc
+      (do (.destroyForcibly ^java.lang.Process proc)
+          (swap! sc-state assoc :sc-process nil)
+          (disconnect-sc!)
+          (println "[sc] sclang process stopped")
+          nil)
+      (do (println "[sc] stop-sc!: no managed process running")
+          nil))))
+
+(defn sc-restart!
+  "Kill the managed sclang subprocess, relaunch it, and restore all SynthDefs.
+
+  Sequence:
+    1. stop-sc!          — destroys the process, marks SC disconnected
+    2. start-sc!         — relaunches with stored :sclang-binary / :sclang-script,
+                           waits for /sc-lang-ready, calls connect-sc!
+    3. resend-sent-synthdefs! — re-sends every SynthDef that was loaded before
+                                the restart so the audio graph can be rebuilt
+
+  Throws if no managed process was previously started via start-sc! (no stored
+  binary/script). Use start-sc! explicitly for the first launch.
+
+  Options:
+    :timeout-ms — passed to start-sc! (default 30000)
+
+  Example:
+    ;; Audio device reconnected after a USB hiccup:
+    (sc/sc-restart!)"
+  [& {:keys [timeout-ms] :or {timeout-ms 30000}}]
+  (let [{:keys [sclang-binary sclang-script]} @sc-state]
+    (when-not sclang-binary
+      (throw (ex-info "sc-restart!: no previous start-sc! call — binary unknown"
+                      {})))
+    ;; Snapshot def names before stop-sc! and connect-sc! both clear sent-synthdefs.
+    (let [defs-to-restore @sent-synthdefs]
+      (stop-sc!)
+      (start-sc! :binary     sclang-binary
+                 :script     sclang-script
+                 :timeout-ms timeout-ms)
+      ;; Re-send each def; ensure-synthdef! will send any not yet in sent-synthdefs.
+      (doseq [def-name defs-to-restore]
+        (ensure-synthdef! def-name))
+      (println (str "[sc] restarted — " (count defs-to-restore) " SynthDef(s) restored"))
+      nil)))
 
 (defn sc-sync!
   "Block until scsynth has processed all pending commands (SynthDef compilations etc).
@@ -623,6 +740,47 @@
   (core/apply-trajectory!
     (fn [v] (when (sc-connected?) (set-param! node-id param v)))
     traj))
+
+;; ---------------------------------------------------------------------------
+;; ramp-param! — linear parameter ramp over N beats
+;; ---------------------------------------------------------------------------
+
+(defn ramp-param!
+  "Linearly ramp a running SC node parameter from `from` to `to` over `beats` beats.
+
+  Divides the ramp into fine-grained steps sized to the current BPM (typically
+  ~40ms per step, ensuring smooth motion even at slow tempos). More reliable
+  than apply-trajectory! for long, gradual ramps because it uses a simple
+  future loop rather than a 50ms wall-clock poll.
+
+  Returns a zero-argument cancel function. Call it to halt the ramp early:
+    (def stop! (sc/ramp-param! verb-node :amp 0.0 0.18 320))
+    (stop!)   ; abort mid-ramp
+
+  Options:
+    :steps — number of interpolation steps (default 40)
+    :bpm   — BPM override; defaults to core/get-bpm at call time
+
+  Example:
+    ;; Fade drone amp in over 320 beats (~5 min at 100 BPM):
+    (sc/ramp-param! verb-node :amp 0.0 0.18 320)
+
+    ;; Close filter over 80 bars (with early-exit handle):
+    (def cancel! (sc/ramp-param! filter-node :cutoff 4000 200 80))"
+  [node-id param from to beats & {:keys [steps bpm] :or {steps 40}}]
+  (let [bpm-val  (double (or bpm (core/get-bpm)))
+        ms-total (* (double beats) (/ 60000.0 bpm-val))
+        step-ms  (long (/ ms-total steps))
+        delta    (/ (- (double to) (double from)) steps)
+        cancelled (atom false)]
+    (future
+      (loop [i 0 v (double from)]
+        (when (and (not @cancelled) (<= i steps))
+          (when (sc-connected?)
+            (set-param! node-id param v))
+          (Thread/sleep step-ms)
+          (recur (inc i) (+ v delta)))))
+    (fn [] (reset! cancelled true))))
 
 ;; ---------------------------------------------------------------------------
 ;; Spectral bridge — ctrl-tree → live SC node parameter

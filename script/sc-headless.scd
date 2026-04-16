@@ -9,6 +9,11 @@ s.waitForBoot({
         code.interpret;
     }, '/cmd');
 
+    // Notify cljseq that the /cmd handler is active and scsynth is booted.
+    // start-sc! registers a /sc-lang-ready handler before launching this script
+    // and blocks on it — this message is the boot gate.
+    NetAddr("127.0.0.1", 57121).sendMsg('/sc-lang-ready');
+
     "[sc-headless] scsynth booted, /cmd handler active — audio @ %:%".format(
         s.addr.hostname, s.addr.port
     ).postln;
