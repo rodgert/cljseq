@@ -71,6 +71,7 @@
             [cljseq.journey         :as journey]
             [cljseq.berlin          :as berlin]
             [cljseq.temporal-buffer :as tbuf]
+            [cljseq.ctrl            :as ctrl-ns]
             [cljseq.supervisor      :as supervisor]))
 
 ;; ---------------------------------------------------------------------------
@@ -441,13 +442,18 @@
 (def unbind-spectral!  sc/unbind-spectral!)
 
 ;; ---------------------------------------------------------------------------
-;; HTTP control server
+;; HTTP control server + WebSocket broadcast
 ;; ---------------------------------------------------------------------------
 
 (def start-server!    server/start-server!)
 (def stop-server!     server/stop-server!)
 (def server-port      server/server-port)
 (def server-running?  server/server-running?)
+
+;; Global ctrl-tree watchers — fire on every set!/send! regardless of path.
+;; Primary use: server-side WebSocket broadcast, but open to any subscriber.
+(def watch-global!    ctrl-ns/watch-global!)
+(def unwatch-global!  ctrl-ns/unwatch-global!)
 
 ;; ---------------------------------------------------------------------------
 ;; OSC receive + push-subscribe (§17 Phase 2/3)

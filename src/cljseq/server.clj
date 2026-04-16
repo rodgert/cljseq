@@ -1,11 +1,10 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.server
-  "Control-plane HTTP server (§17 Phase 1).
+  "Control-plane HTTP server (§17 Phase 1) with WebSocket push (v0.13.0).
 
   Exposes the ctrl tree over a minimal JSON REST API so external tools,
   DAW scripts, and web UIs can inspect and drive the sequencer state.
-  Uses Java's built-in com.sun.net.httpserver.HttpServer — no external HTTP
-  dependency required.
+  Uses http-kit — Ring-compatible, WebSocket-native.
 
   ## Routes
 
@@ -15,6 +14,8 @@
     GET  /ctrl                 — dump all ctrl-tree nodes as a JSON array
     GET  /ctrl/<p0>/<p1>/...   — read node at path [kw(p0) kw(p1) ...]
     PUT  /ctrl/<p0>/<p1>/...   — write node value; body {\"value\":...}
+    GET  /ws                   — WebSocket upgrade; receives ctrl-tree change
+                                 broadcasts as JSON {\"path\":[...] \"value\":...}
 
   ## Path encoding
 
@@ -24,6 +25,15 @@
 
     /ctrl/filter%2Fcutoff  →  [:filter/cutoff]
     /ctrl/loops/bass       →  [:loops :bass]
+
+  ## WebSocket protocol
+
+  On connect, the browser receives live ctrl-tree change broadcasts:
+    {\"path\":[\"filter\",\"cutoff\"] \"value\":0.7}
+
+  The browser may also send inbound ctrl writes:
+    {\"path\":[\"filter\",\"cutoff\"] \"value\":0.7}
+  These are applied via ctrl/set! (logical write only, no MIDI dispatch).
 
   ## Note on value types
 
@@ -37,20 +47,21 @@
 
     (server/start-server! :port 7177)
     (server/stop-server!)"
-  (:require [clojure.string    :as str]
+  (:require [org.httpkit.server :as hk]
+            [clojure.string    :as str]
             [clojure.data.json :as json]
             [cljseq.ctrl       :as ctrl]
             [cljseq.core       :as core])
-  (:import  [com.sun.net.httpserver HttpServer HttpHandler]
-            [java.net InetSocketAddress URLDecoder]
-            [java.nio.charset StandardCharsets]
-            [java.util.concurrent Executors]))
+  (:import  [java.net URLDecoder]))
 
 ;; ---------------------------------------------------------------------------
 ;; Private state
 ;; ---------------------------------------------------------------------------
 
 (defonce ^:private server-atom (atom nil))
+
+;; Set of open WebSocket channels — http-kit channels are thread-safe.
+(defonce ^:private ws-channels (atom #{}))
 
 (declare stop-server!)
 
@@ -80,28 +91,13 @@
     :else           (pr-str v)))
 
 ;; ---------------------------------------------------------------------------
-;; Low-level HTTP helpers
+;; Ring response helpers
 ;; ---------------------------------------------------------------------------
 
-(defn- respond!
-  "Write a JSON response to `exchange` with the given HTTP `status` and `body-map`."
-  [exchange status body-map]
-  (let [body-str (json/write-str (->json-safe body-map))
-        body     (.getBytes body-str StandardCharsets/UTF_8)]
-    (doto (.getResponseHeaders exchange)
-      (.set "Content-Type" "application/json; charset=utf-8"))
-    (.sendResponseHeaders exchange status (count body))
-    (with-open [os (.getResponseBody exchange)]
-      (.write os body))))
-
-(defn- read-body
-  "Read the full request body of `exchange` as a UTF-8 string."
-  [exchange]
-  (with-open [r (java.io.BufferedReader.
-                  (java.io.InputStreamReader.
-                    (.getRequestBody exchange)
-                    StandardCharsets/UTF_8))]
-    (str/join "\n" (line-seq r))))
+(defn- respond [status body-map]
+  {:status  status
+   :headers {"Content-Type" "application/json; charset=utf-8"}
+   :body    (json/write-str (->json-safe body-map))})
 
 ;; ---------------------------------------------------------------------------
 ;; Keyword serialisation
@@ -128,36 +124,66 @@
             segments))))
 
 ;; ---------------------------------------------------------------------------
-;; Request dispatcher
+;; WebSocket broadcast
 ;; ---------------------------------------------------------------------------
 
-(defn- dispatch
-  "Ring-style dispatch: read the method + path from `exchange`, handle, respond."
-  [exchange]
-  (let [method (str (.getRequestMethod exchange))
-        uri    (str (.getRequestURI exchange))
+(defn- broadcast-ctrl!
+  "Send a ctrl-tree change to all connected WebSocket clients.
+  Path segments are encoded via kw->str (consistent with the HTTP API):
+    [:loops :bass] → [\"loops\" \"bass\"]
+    [:filter/cutoff] → [\"filter/cutoff\"]"
+  [path value]
+  (let [msg (json/write-str {"path"  (mapv kw->str path)
+                             "value" (->json-safe value)})]
+    (doseq [ch @ws-channels]
+      (hk/send! ch msg))))
+
+(defn- handle-ws [req]
+  (hk/as-channel req
+    {:on-open    (fn [ch]
+                   (swap! ws-channels conj ch))
+     :on-close   (fn [ch _status]
+                   (swap! ws-channels disj ch))
+     :on-receive (fn [_ch msg]
+                   (try
+                     (when-let [{:strs [path value]} (json/read-str msg)]
+                       (when (sequential? path)
+                         (ctrl/set! (mapv keyword path) value)))
+                     (catch Exception _ nil)))}))
+
+;; ---------------------------------------------------------------------------
+;; Ring handler
+;; ---------------------------------------------------------------------------
+
+(defn- handler [req]
+  (let [method (:request-method req)
+        uri    (:uri req)
         path   (first (str/split uri #"\?"))]
     (try
       (cond
+        ;; ---- WebSocket upgrade ----
+        (= "/ws" path)
+        (handle-ws req)
+
         ;; ---- GET /ping ----
-        (and (= "GET" method) (= "/ping" path))
-        (respond! exchange 200 {"ok" true})
+        (and (= :get method) (= "/ping" path))
+        (respond 200 {"ok" true})
 
         ;; ---- GET /bpm ----
-        (and (= "GET" method) (= "/bpm" path))
-        (respond! exchange 200 {"bpm" (core/get-bpm)})
+        (and (= :get method) (= "/bpm" path))
+        (respond 200 {"bpm" (core/get-bpm)})
 
         ;; ---- PUT /bpm ----
-        (and (= "PUT" method) (= "/bpm" path))
-        (let [data (json/read-str (read-body exchange))]
+        (and (= :put method) (= "/bpm" path))
+        (let [data (json/read-str (slurp (:body req)))]
           (if-let [bpm (clojure.core/get data "bpm")]
             (do (core/set-bpm! (double bpm))
-                (respond! exchange 200 {"ok" true}))
-            (respond! exchange 400 {"error" "missing bpm field"})))
+                (respond 200 {"ok" true}))
+            (respond 400 {"error" "missing bpm field"})))
 
         ;; ---- GET /ctrl (full dump) ----
-        (and (= "GET" method) (or (= "/ctrl" path) (= "/ctrl/" path)))
-        (respond! exchange 200
+        (and (= :get method) (or (= "/ctrl" path) (= "/ctrl/" path)))
+        (respond 200
           (mapv (fn [{:keys [path value type]}]
                   {"path"  (mapv kw->str path)
                    "value" (->json-safe value)
@@ -165,68 +191,65 @@
                 (ctrl/all-nodes)))
 
         ;; ---- GET /ctrl/<path> ----
-        (and (= "GET" method) (str/starts-with? path "/ctrl/"))
+        (and (= :get method) (str/starts-with? path "/ctrl/"))
         (let [ctrl-path (parse-ctrl-path path)]
           (if (nil? ctrl-path)
-            (respond! exchange 400 {"error" "empty ctrl path"})
+            (respond 400 {"error" "empty ctrl path"})
             (let [node (ctrl/node-info ctrl-path)]
               (if (nil? node)
-                (respond! exchange 404 {"error" "not found"})
-                (respond! exchange 200
+                (respond 404 {"error" "not found"})
+                (respond 200
                   {"path"  (mapv kw->str ctrl-path)
                    "value" (->json-safe (:value node))
                    "type"  (kw->str (:type node))})))))
 
         ;; ---- PUT /ctrl/<path> ----
-        (and (= "PUT" method) (str/starts-with? path "/ctrl/"))
+        (and (= :put method) (str/starts-with? path "/ctrl/"))
         (let [ctrl-path (parse-ctrl-path path)]
           (if (nil? ctrl-path)
-            (respond! exchange 400 {"error" "empty ctrl path"})
-            (let [data (json/read-str (read-body exchange))]
+            (respond 400 {"error" "empty ctrl path"})
+            (let [data (json/read-str (slurp (:body req)))]
               (if (contains? data "value")
                 (do (ctrl/set! ctrl-path (clojure.core/get data "value"))
-                    (respond! exchange 200 {"ok" true}))
-                (respond! exchange 400 {"error" "missing value field"})))))
+                    (respond 200 {"ok" true}))
+                (respond 400 {"error" "missing value field"})))))
 
         :else
-        (respond! exchange 404 {"error" "route not found"}))
+        (respond 404 {"error" "route not found"}))
       (catch Exception e
-        (try (respond! exchange 500 {"error" (.getMessage e)})
-             (catch Exception _ nil))))))
+        (respond 500 {"error" (.getMessage e)})))))
 
 ;; ---------------------------------------------------------------------------
 ;; Public API
 ;; ---------------------------------------------------------------------------
 
 (defn start-server!
-  "Start the control-plane HTTP server.
+  "Start the control-plane HTTP server with WebSocket broadcast.
 
   Options:
     :port — TCP port to listen on (default 7177)
 
   Idempotent: any previously running server is stopped first.
+  Registers a global ctrl-tree watcher that broadcasts every change to all
+  connected WebSocket clients.
 
   Example:
     (server/start-server! :port 7177)"
   [& {:keys [port] :or {port 7177}}]
   (when @server-atom
     (stop-server!))
-  (let [srv (HttpServer/create (InetSocketAddress. (int port)) 0)]
-    (.createContext srv "/"
-      (reify HttpHandler
-        (handle [_ exchange]
-          (dispatch exchange))))
-    (.setExecutor srv (Executors/newFixedThreadPool 4))
-    (.start srv)
-    (reset! server-atom {:server srv :port port})
+  (let [stop-fn (hk/run-server #'handler {:port port})]
+    (ctrl/watch-global! ::ws-broadcast broadcast-ctrl!)
+    (reset! server-atom {:server stop-fn :port port})
     (println (str "[server] started on port " port))
     nil))
 
 (defn stop-server!
   "Stop the control-plane HTTP server if running."
   []
-  (when-let [{:keys [^HttpServer server]} @server-atom]
-    (.stop server 0)
+  (when-let [{:keys [server]} @server-atom]
+    (ctrl/unwatch-global! ::ws-broadcast)
+    (server :timeout 100)
     (reset! server-atom nil)
     (println "[server] stopped"))
   nil)

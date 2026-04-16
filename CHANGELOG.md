@@ -10,6 +10,45 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.13.0] — 2026-04-15
+
+### Added
+
+#### WebSocket ctrl-tree broadcast (`cljseq.server`)
+
+- **http-kit dependency** (`2.8.0`) — replaces `com.sun.net.httpserver`;
+  Ring-compatible, WebSocket-native, single JAR. All existing HTTP routes
+  (`/ping`, `/bpm`, `/ctrl`) migrated unchanged.
+- **`GET /ws`** — WebSocket upgrade endpoint. Clients receive a JSON push
+  message on every `ctrl/set!` or `ctrl/send!` call:
+  `{"path": ["filter-a", "cutoff"], "value": 0.73}`. Multiple clients are
+  supported; the channel registry (`ws-channels`) is a thread-safe `atom #{}`.
+- **Inbound writes from browser** — a `/ws` client may send
+  `{"path": [...], "value": v}` to write into the ctrl tree via `ctrl/set!`,
+  enabling bidirectional control surface semantics.
+- **`watch-global!` / `unwatch-global!`** in `cljseq.ctrl` — register a
+  callback `(fn [path value])` that fires on every ctrl-tree change regardless
+  of path. `start-server!` wires `broadcast-ctrl!` as `::ws-broadcast`; 
+  `stop-server!` removes it. Both functions re-exported from `cljseq.user`.
+
+#### `cljseq.ctrl` global watchers
+
+- **`watch-global!`** — register a named global watcher. Distinct from the
+  existing per-path `watch!`; re-registering the same key replaces the
+  callback. Exceptions are swallowed and printed to stderr.
+- **`unwatch-global!`** — remove a named global watcher. Consistent pair with
+  `watch-global!`; avoids confusion with the existing `unwatch-all!` (which
+  removes all per-path watchers on a given path).
+
+### Changed
+
+- **`design-studio-orchestration.md`** — updated to three-host model: Mac Mini
+  (cljseq brain), Ubuntu pair (Bitwig + MixBus), Windows NUC (RME Digiface
+  32×32 routing hub, VCVRack, GigPerformer). Confirmed channel map for the
+  Digiface ADAT/SPDIF connections and ExpertSleepers Eurorack bridge.
+
+---
+
 ## [0.12.0] — 2026-04-15
 
 ### Added

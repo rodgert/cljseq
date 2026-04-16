@@ -73,6 +73,10 @@
 
 (defonce ^:private watchers (atom {}))
 
+;; Global watchers — fire on every set!/send! regardless of path.
+;; Stored separately from per-path watchers.
+(defonce ^:private global-watchers (atom {}))
+
 (defn -register-system!
   "Wire ctrl to the shared system-state atom. Called by cljseq.core/start!."
   [ref]
@@ -132,7 +136,7 @@
                   new-stack))))))
 
 (defn- fire-watchers!
-  "Fire all watchers registered on `path` with `value`.
+  "Fire all watchers registered on `path` with `value`, then all global watchers.
   Called internally after every send-at! and set!."
   [path value]
   (doseq [[_ f] (clojure.core/get @watchers path)]
@@ -141,7 +145,12 @@
       (catch Exception e
         (binding [*out* *err*]
           (println (str "[ctrl] watcher error on " (pr-str path)
-                        ": " (.getMessage e))))))))
+                        ": " (.getMessage e)))))))
+  (doseq [[_ f] @global-watchers]
+    (try (f path value)
+         (catch Exception e
+           (binding [*out* *err*]
+             (println (str "[ctrl] global watcher error: " (.getMessage e))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Core read/write API
@@ -515,6 +524,28 @@
   "Remove all watchers registered on `path`."
   [path]
   (swap! watchers dissoc path)
+  nil)
+
+(defn watch-global!
+  "Register `f` to be called with [path value] on every ctrl-tree change,
+  regardless of which path was written.
+
+  `watch-key` identifies this watcher for later removal via `unwatch-global!`.
+  Use a namespaced keyword to avoid collisions, e.g. ::server/ws-broadcast.
+  Re-registering the same key replaces the previous callback.
+  Exceptions thrown by `f` are printed to stderr and swallowed.
+
+  Example:
+    (ctrl/watch-global! ::ws/broadcast (fn [path v] (broadcast! path v)))"
+  [watch-key f]
+  (swap! global-watchers assoc watch-key f)
+  nil)
+
+(defn unwatch-global!
+  "Remove the global watcher identified by `watch-key`.
+  No-op if the key is not registered."
+  [watch-key]
+  (swap! global-watchers dissoc watch-key)
   nil)
 
 ;; ---------------------------------------------------------------------------
