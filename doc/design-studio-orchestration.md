@@ -99,39 +99,57 @@ dimension of the session, always.
 
 ---
 
-## The dual-DAW model
+## The three-host model
 
-Bitwig and MixBus serve different roles. Neither drives the session — cljseq does.
+The studio runs across three hosts, each with a distinct role. cljseq drives all of them.
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│  cljseq — session orchestration layer                       │
-│  score (Clojure value) · ctrl tree · journey conductor      │
-│  harmony engine · generative fields · trajectory curves     │
-└──────────┬───────────────────────────┬──────────────────────┘
-           │ bwosc IPC / MCU           │ MCU / OSC
-    ┌──────▼──────┐              ┌─────▼──────┐
-    │   Bitwig    │              │  MixBus    │
-    │  creative   │              │  tracking  │
-    │  synthesis  │              │  mixing    │
-    │  clips      │              │  Harrison  │
-    │  devices    │              │  ch-strip  │
-    └─────────────┘              └────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│  cljseq — session orchestration layer (Mac Mini)                   │
+│  score (Clojure value) · ctrl tree · journey conductor             │
+│  harmony engine · generative fields · trajectory curves            │
+└──────┬──────────────────────────┬──────────────────┬──────────────┘
+       │ bwosc IPC / MCU          │ MCU / OSC        │ OSC (TotalMix FX)
+┌──────▼──────┐             ┌─────▼──────┐    ┌──────▼──────────────┐
+│   Bitwig    │             │  MixBus    │    │  Windows NUC        │
+│  creative   │             │  tracking  │    │  routing hub        │
+│  synthesis  │             │  mixing    │    │  RME Digiface 32×32 │
+│  clips      │             │  Harrison  │    │  VCVRack (virtual CV│
+│  devices    │             │  ch-strip  │    │  GigPerformer VSTs) │
+│  (Ubuntu)   │             │  (Ubuntu)  │    └─────────────────────┘
+└─────────────┘             └────────────┘
 ```
+
+**Mac Mini** — the composition brain. cljseq runs here. Also hosts the
+Focusrite Scarlett 18i20 (4th gen) → ADAT → Digiface channel 1–8, and
+SPDIF → Tascam DA-3000 (stereo master recorder).
 
 **Bitwig** — the synthesis and performance engine. cljseq launches clips,
 automates device parameters, drives Grid patches and VST instruments. Bitwig
 does not know what a tension arc is. It executes the MIDI notes and parameter
-values that cljseq sends.
+values that cljseq sends. Runs on Ubuntu.
 
 **MixBus** — the tracking and mixing engine. Sessions that need Harrison's
 channel strip DSP and Ardour's tracking infrastructure run here. cljseq can
 automate sends, fader levels, and routing decisions, timed to the compositional
-arc (send-journey!, strip-down!).
+arc (send-journey!, strip-down!). Runs on Ubuntu. The Ubuntu Scarlett 18i20 3rd gen
+also connects via SPDIF to a **Lexicon MXP-550** (MIDI-addressable reverb/multi-FX);
+cljseq can automate preset recall and parameters in the outboard tracking chain.
 
-Both DAWs are peers in the topology. Surface strips can be assigned to either
-or to cljseq's own state. Context switching between DAWs is a ctrl tree
-operation, not a hardware reconfiguration.
+**Windows NUC** — the signal routing and processing hub. Not a DAW. Contains:
+- RME Digiface USB: 32×32 programmable audio matrix. Channel map (confirmed):
+  - ch 1–8 in/out: Mac Mini Scarlett 18i20 (ADAT)
+  - ch 9–16 in: Focusrite OctoPre (preamp expansion)
+  - ch 9–16 out: Arturia X-8
+  - ch 17–24 in/out: ExpertSleepers ES-3/ES-5/ES-6 (Eurorack CV/gate bridge)
+  - ch 25–32 in/out: Ubuntu Studio Scarlett 18i20 3rd gen (ADAT)
+- VCVRack: virtual CV engine → Digiface → ExpertSleepers → hardware Eurorack
+- GigPerformer Pro: central VST rack, Overbridge, OSC/MIDI bridge to Elektron
+- Controllable via OSC (TotalMix FX). Routing changes are programmatic.
+
+All three hosts are peers in the topology. Surface strips can be assigned to any
+of them — or to cljseq's own state. Context switching is a ctrl tree operation,
+not a hardware reconfiguration.
 
 ---
 

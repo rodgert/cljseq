@@ -698,6 +698,51 @@ The server exposes the following endpoints:
 Peer nodes poll `/ctrl/ensemble/harmony-ctx` and `/ctrl/spectral/state`
 automatically when mounted via `peer/mount-peer!`.
 
+### WebSocket push (`/ws`)
+
+`start-server!` also exposes a WebSocket endpoint at `ws://localhost:7177/ws`.
+Any browser (or other client) that upgrades to WebSocket receives a JSON
+message every time the ctrl tree changes:
+
+```json
+{"path": ["filter-a", "cutoff"], "value": 0.73}
+```
+
+Multiple clients are supported simultaneously. Clients may also write into the
+ctrl tree by sending the same JSON format inbound — the server calls
+`ctrl/set!` on arrival.
+
+```javascript
+// Browser — live ctrl-tree mirror
+const ws = new WebSocket("ws://localhost:7177/ws");
+ws.onmessage = (e) => {
+  const {path, value} = JSON.parse(e.data);
+  console.log(path, "→", value);
+};
+
+// Write from browser
+ws.send(JSON.stringify({path: ["filter-a", "cutoff"], value: 0.5}));
+```
+
+### Global ctrl-tree watchers
+
+`watch-global!` / `unwatch-global!` register a callback that fires on *every*
+ctrl-tree write, regardless of path. The WebSocket broadcast uses this
+internally; you can use the same hook for logging, OSC forwarding, or any
+cross-cutting reaction:
+
+```clojure
+;; Log all ctrl changes to stdout
+(watch-global! ::logger (fn [path value]
+                          (println (str "[ctrl] " path " → " value))))
+
+;; Remove it
+(unwatch-global! ::logger)
+```
+
+Distinct from per-path `watch!` (fires only when a specific path changes) and
+`unwatch-all!` (removes all per-path watchers on a given path).
+
 ---
 
 ## 13. Generative Techniques

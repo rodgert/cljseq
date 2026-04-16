@@ -1,6 +1,6 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.server-test
-  "Unit tests for cljseq.server — control-plane HTTP API."
+  "Unit tests for cljseq.server — control-plane HTTP API and WebSocket broadcast."
   (:require [clojure.test      :refer [deftest is testing use-fixtures]]
             [clojure.data.json :as json]
             [cljseq.core       :as core]
@@ -8,9 +8,11 @@
             [cljseq.peer       :as peer]
             [cljseq.server     :as server])
   (:import  [java.net.http HttpClient HttpRequest
-             HttpRequest$BodyPublishers HttpResponse$BodyHandlers]
+             HttpRequest$BodyPublishers HttpResponse$BodyHandlers
+             WebSocket WebSocket$Listener]
             [java.net URI]
-            [java.time Duration]))
+            [java.time Duration]
+            [java.util.concurrent CompletableFuture LinkedBlockingQueue TimeUnit]))
 
 ;; ---------------------------------------------------------------------------
 ;; Fixtures and HTTP helpers
@@ -239,3 +241,67 @@
         (is (= 880.0 (get v "centroid")))
         (is (= 0.3   (get v "flux")))
         (is (= 0.7   (get v "density")))))))
+
+;; ---------------------------------------------------------------------------
+;; WebSocket — connect and broadcast
+;; ---------------------------------------------------------------------------
+
+(defn- ws-connect
+  "Open a WebSocket connection to /ws on the test server.
+  Returns [ws-ref, messages-queue] where messages-queue is a LinkedBlockingQueue
+  that receives decoded JSON maps for each text message received."
+  []
+  (let [queue    (LinkedBlockingQueue.)
+        ws-ref   (atom nil)
+        listener (proxy [WebSocket$Listener] []
+                   (onOpen [ws]
+                     (reset! ws-ref ws)
+                     (.request ws 10))
+                   (onText [ws data _last?]
+                     (.offer queue (json/read-str (str data)))
+                     (.request ws 1)
+                     (CompletableFuture/completedFuture nil))
+                   (onClose [_ws _code _reason]
+                     (CompletableFuture/completedFuture nil))
+                   (onError [_ws _err]
+                     nil))
+        _ws      (.join (.buildAsync
+                          (.newWebSocketBuilder (HttpClient/newHttpClient))
+                          (URI/create (str "ws://localhost:" test-port "/ws"))
+                          listener))]
+    ;; Brief settle for the on-open registration to complete on the server
+    (Thread/sleep 30)
+    [@ws-ref queue]))
+
+(deftest ws-connect-and-broadcast-test
+  (testing "ctrl/set! after WS connect delivers a JSON broadcast to the client"
+    (let [[ws queue] (ws-connect)]
+      (try
+        (ctrl/set! [:ws-test :param] 42)
+        (let [msg (.poll queue 2 TimeUnit/SECONDS)]
+          (is (some? msg) "message received within 2 s")
+          (is (= ["ws-test" "param"] (get msg "path")))
+          (is (= 42 (get msg "value"))))
+        (finally
+          (.sendClose ws WebSocket/NORMAL_CLOSURE "done"))))))
+
+(deftest ws-inbound-ctrl-write-test
+  (testing "JSON sent over WebSocket applies ctrl/set! on the server"
+    (let [[ws _queue] (ws-connect)]
+      (try
+        (.sendText ws (json/write-str {"path" ["ws-in" "val"] "value" 99}) true)
+        (Thread/sleep 50)  ; allow server-side set! to complete
+        (is (= 99 (ctrl/get [:ws-in :val])) "inbound WS write applied to ctrl tree")
+        (finally
+          (.sendClose ws WebSocket/NORMAL_CLOSURE "done"))))))
+
+(deftest ws-disconnect-removes-channel-test
+  (testing "disconnecting a WS client stops it receiving broadcasts"
+    (let [[ws queue] (ws-connect)]
+      ;; Close the connection
+      (.sendClose ws WebSocket/NORMAL_CLOSURE "bye")
+      (Thread/sleep 50)  ; allow server to process close
+      ;; This set! should not arrive in the closed client's queue
+      (ctrl/set! [:ws-disc/param] :gone)
+      (let [msg (.poll queue 300 TimeUnit/MILLISECONDS)]
+        (is (nil? msg) "no message received after disconnect")))))
