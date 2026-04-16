@@ -43,7 +43,7 @@
 
 (session! :bpm 100)
 
-(def rubycon-scale (make-scale :D 2 :dorian))
+(def session-scale (make-scale :D 2 :dorian))
 
 (def ost-a
   (berlin/ostinato
@@ -51,14 +51,14 @@
      {:pitch/midi 43 :dur/beats 2.5 :mod/velocity 72}
      {:pitch/midi 41 :dur/beats 2.5 :mod/velocity 68}
      {:pitch/midi 40 :dur/beats 2.5 :mod/velocity 75}]
-    {:scale rubycon-scale :mutation-rate 0.08}))
+    {:scale session-scale :mutation-rate 0.08}))
 
 (def ost-b
   (berlin/ostinato
     [{:pitch/midi 50 :dur/beats 4.0 :mod/velocity 65}
      {:pitch/midi 53 :dur/beats 5.0 :mod/velocity 58}
      {:pitch/midi 55 :dur/beats 5.0 :mod/velocity 62}]
-    {:scale rubycon-scale :mutation-rate 0.06}))
+    {:scale session-scale :mutation-rate 0.06}))
 
 (journey/start-bar-counter!)
 

@@ -148,12 +148,14 @@
   "Register the SC server as a supervised service.
   Health check: sc/sc-connected?
   Restore: re-sends all synthdefs that were previously loaded.
-  No automatic reconnect — SC connection params may have changed after a crash.
-  Listen for the :down event to reconnect manually, or pass :restart-fn."
+  Restart: if sc/start-sc! was used to launch sclang, the supervisor will call
+  sc/sc-restart! automatically when the health check fails — no terminal
+  intervention required for audio device reconnects or sclang crashes.
+  Pass :restart-fn to override (e.g. when SC is managed externally)."
   [& {:keys [restart-fn]}]
   (register! :sc
              :check-fn    sc/sc-connected?
-             :restart-fn  restart-fn
+             :restart-fn  (or restart-fn sc/sc-restart!)
              :restore-fn  sc/resend-sent-synthdefs!))
 
 (defn register-sidecar!

@@ -1945,6 +1945,60 @@ cljseq's temporal vocabulary:
 
 Both forms return a cancel function. Call it to stop the trajectory early.
 
+`ramp-param!` is a simpler alternative for long linear ramps (drone fades,
+filter arcs) where a future loop is more predictable than trajectory polling:
+
+```clojure
+;; Fade a drone amp in over 320 beats (~5 min at 100 BPM):
+(ramp-param! verb-node :amp 0.0 0.18 320)
+
+;; Close a filter over 80 bars; keep a handle to abort early:
+(def cancel! (ramp-param! filter-node :cutoff 4000 200 80))
+(cancel!)   ; stop mid-ramp
+
+;; Override BPM or step count:
+(ramp-param! node :room 0.2 0.8 64 :steps 80 :bpm 72)
+```
+
+Returns a zero-argument cancel function. Default is 40 interpolation steps
+spaced evenly across the beat duration at the current BPM.
+
+### SC process management
+
+For live performance, `start-sc!` / `stop-sc!` / `sc-restart!` manage the
+sclang subprocess from the REPL, enabling full recovery from an audio device
+drop without a terminal window.
+
+**First launch:**
+```clojure
+(start-sc! :binary "/opt/homebrew/Caskroom/supercollider/3.14.1/SuperCollider.app/Contents/MacOS/sclang"
+           :script "script/sc-headless.scd")
+;; Blocks until /sc-lang-ready OSC arrives (default 30 s timeout), then calls
+;; connect-sc! automatically.
+```
+
+**Recovery after audio device reconnect:**
+```clojure
+(sc-restart!)
+;; Sequence: stop process → relaunch → wait for boot → resend all SynthDefs
+;; => [sc] restarted — N SynthDef(s) restored
+```
+
+**Supervisor integration** — wire `sc-restart!` as the auto-restart function
+so the watchdog handles recovery without any REPL intervention:
+```clojure
+(supervisor/register-sc!)       ; defaults :restart-fn to sc/sc-restart!
+(supervisor/register-sidecar!)
+(supervisor/start-watchdog!)
+```
+
+`start-sc!` options: `:binary` (required), `:script` (default
+`"script/sc-headless.scd"`), `:timeout-ms` (default 30000).
+
+`sc-restart!` throws if `start-sc!` was never called — it needs the stored
+binary and script path. For externally managed SC processes, call
+`connect-sc!` directly and pass a custom `:restart-fn` to `register-sc!`.
+
 ### Defining custom synths
 
 ```clojure
@@ -3283,8 +3337,9 @@ restoring last-known state after a recovery.
 ```clojure
 (require '[cljseq.supervisor :as supervisor])
 
-;; Register the SC server: health check + synthdef restore on reconnect.
-;; No auto-reconnect by default — SC params may have changed after a crash.
+;; Register the SC server: health check + auto-restart via sc-restart! + synthdef restore.
+;; Requires start-sc! to have been called so sc-restart! knows the binary/script path.
+;; Pass :restart-fn to override (e.g. when SC is managed externally).
 (supervisor/register-sc!)
 
 ;; Register the sidecar: health check + auto-restart using saved start opts.

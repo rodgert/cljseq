@@ -422,6 +422,9 @@
 ;; SuperCollider backend
 (def connect-sc!         sc/connect-sc!)
 (def disconnect-sc!      sc/disconnect-sc!)
+(def start-sc!           sc/start-sc!)
+(def stop-sc!            sc/stop-sc!)
+(def sc-restart!         sc/sc-restart!)
 (def sc-connected?       sc/sc-connected?)
 (def synthdef-str        sc/synthdef-str)
 (def send-synthdef!      sc/send-synthdef!)
@@ -432,6 +435,7 @@
 (def free-synth!       sc/free-synth!)
 (def kill-synth!       sc/kill-synth!)
 (def sc-play!          sc/sc-play!)
+(def ramp-param!       sc/ramp-param!)
 (def sc-status         sc/sc-status)
 (def bind-spectral!    sc/bind-spectral!)
 (def unbind-spectral!  sc/unbind-spectral!)
