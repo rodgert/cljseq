@@ -2,6 +2,7 @@
 (ns cljseq.server-test
   "Unit tests for cljseq.server — control-plane HTTP API and WebSocket broadcast."
   (:require [clojure.test      :refer [deftest is testing use-fixtures]]
+            [clojure.string    :as str]
             [clojure.data.json :as json]
             [cljseq.core       :as core]
             [cljseq.ctrl       :as ctrl]
@@ -305,3 +306,43 @@
       (ctrl/set! [:ws-disc/param] :gone)
       (let [msg (.poll queue 300 TimeUnit/MILLISECONDS)]
         (is (nil? msg) "no message received after disconnect")))))
+
+;; ---------------------------------------------------------------------------
+;; Static file serving — control surface
+;; ---------------------------------------------------------------------------
+
+(defn- http-get-raw [path]
+  (let [req (.build (doto (HttpRequest/newBuilder)
+                      (.uri (URI/create (str base path)))
+                      (.GET)
+                      (.timeout (Duration/ofSeconds 5))))]
+    (let [resp (.send (client) req (HttpResponse$BodyHandlers/ofString))]
+      {:status  (.statusCode resp)
+       :headers (into {} (.map (.headers resp)))
+       :body    (.body resp)})))
+
+(defn- content-type
+  "Extract the first Content-Type value from a header map.
+  Java HttpClient returns header values as lists."
+  [headers]
+  (first (get headers "content-type" [""])))
+
+(deftest control-surface-html-test
+  (testing "GET / serves the control surface HTML with text/html content-type"
+    (let [{:keys [status headers body]} (http-get-raw "/")]
+      (is (= 200 status))
+      (is (str/starts-with? (content-type headers) "text/html"))
+      (is (str/includes? body "<div id=\"app\">")))))
+
+(deftest control-surface-css-test
+  (testing "GET /css/style.css serves the stylesheet"
+    (let [{:keys [status headers]} (http-get-raw "/css/style.css")]
+      (is (= 200 status))
+      (is (str/starts-with? (content-type headers) "text/css")))))
+
+(deftest control-surface-js-missing-test
+  (testing "GET /js/main.js returns 404 when the CLJS build has not run"
+    ;; resources/public/js/ is gitignored and not present in the test classpath
+    ;; until shadow-cljs compiles. A 404 here is the expected/correct response.
+    (let [{:keys [status]} (http-get-raw "/js/main.js")]
+      (is (= 404 status)))))

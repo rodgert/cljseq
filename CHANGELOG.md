@@ -10,6 +10,45 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.14.0] — 2026-04-16
+
+### Added
+
+#### Browser control surface (`cljseq-ui`) — Step 2 of the web UI story
+
+- **`shadow-cljs.edn`** — ClojureScript build config (`:browser` target, `reagent
+  1.2.0` dep, output to `resources/public/js/`). Run `npx shadow-cljs watch app`
+  during development for hot-reload; `npx shadow-cljs release app` for production.
+- **`package.json`** — npm manifest declaring `shadow-cljs`, `react 18`, and
+  `react-dom 18` as devDependencies.
+- **`src/cljseq_ui/core.cljs`** — Reagent control surface:
+  - Connects to `/ws` on load; reconnects automatically after 3 s if closed.
+  - Fetches full ctrl-tree snapshot via `GET /ctrl` on startup.
+  - Displays live **ctrl-tree table** (sorted path → value) and a **recent-changes
+    log** (newest-first, last 60 entries) side-by-side.
+  - **BPM** extracted from the ctrl tree and shown prominently in the header.
+  - **Connection badge**: LIVE (green) / connecting (amber) / OFFLINE (red).
+  - Inbound WebSocket messages update Reagent atoms — no manual DOM manipulation.
+- **`resources/public/index.html`** — HTML shell (`<div id="app">`).
+- **`resources/public/css/style.css`** — dark monospace theme with flash animation
+  on new log entries; native CSS variables, no external framework.
+
+#### Static file serving (`cljseq.server`)
+
+- **`GET /`** — serves `resources/public/index.html` from the classpath.
+- **`GET /css/*`** — serves stylesheets with `text/css` content-type.
+- **`GET /js/*`** — serves compiled ClojureScript with `application/javascript`
+  content-type. Returns 404 before `shadow-cljs release app` has run.
+- **`serve-resource`** — internal helper using `clojure.java.io/resource` +
+  `io/input-stream`; no new Clojure dependencies added.
+
+### Changed
+
+- **`.gitignore`** — added `node_modules/`, `.shadow-cljs/`, and
+  `resources/public/js/` (compiled CLJS output is not committed).
+
+---
+
 ## [0.13.0] — 2026-04-15
 
 ### Added
