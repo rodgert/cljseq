@@ -16,6 +16,10 @@
     PUT  /ctrl/<p0>/<p1>/...   — write node value; body {\"value\":...}
     GET  /ws                   — WebSocket upgrade; receives ctrl-tree change
                                  broadcasts as JSON {\"path\":[...] \"value\":...}
+    GET  /                     — control surface HTML (resources/public/index.html)
+    GET  /css/*                — static stylesheets from resources/public/css/
+    GET  /js/*                 — compiled ClojureScript from resources/public/js/
+                                 (build with: npx shadow-cljs release app)
 
   ## Path encoding
 
@@ -50,6 +54,7 @@
   (:require [org.httpkit.server :as hk]
             [clojure.string    :as str]
             [clojure.data.json :as json]
+            [clojure.java.io   :as io]
             [cljseq.ctrl       :as ctrl]
             [cljseq.core       :as core])
   (:import  [java.net URLDecoder]))
@@ -89,6 +94,34 @@
                                {} v)
     (sequential? v) (mapv ->json-safe v)
     :else           (pr-str v)))
+
+;; ---------------------------------------------------------------------------
+;; Static file serving (resources/public/)
+;; ---------------------------------------------------------------------------
+
+(def ^:private content-types
+  {"html" "text/html; charset=utf-8"
+   "css"  "text/css; charset=utf-8"
+   "js"   "application/javascript; charset=utf-8"
+   "map"  "application/json; charset=utf-8"})
+
+(defn- ext [path]
+  (second (re-find #"\.([^./]+)$" path)))
+
+(defn- serve-resource
+  "Serve a classpath resource from resources/public/.
+  Uses io/input-stream so the body can be any byte sequence (JS, CSS, HTML).
+  Returns 404 if the resource is not found — e.g. before running the CLJS build."
+  [resource-path]
+  (if-let [r (io/resource resource-path)]
+    {:status  200
+     :headers {"Content-Type"  (get content-types (ext resource-path)
+                                    "application/octet-stream")
+               "Cache-Control" "no-cache"}
+     :body    (io/input-stream r)}
+    {:status  404
+     :headers {"Content-Type" "application/json; charset=utf-8"}
+     :body    (json/write-str {"error" "not found"})}))
 
 ;; ---------------------------------------------------------------------------
 ;; Ring response helpers
@@ -164,6 +197,16 @@
         ;; ---- WebSocket upgrade ----
         (= "/ws" path)
         (handle-ws req)
+
+        ;; ---- GET / — control surface HTML ----
+        (and (= :get method) (or (= "/" path) (= "" path)))
+        (serve-resource "public/index.html")
+
+        ;; ---- GET /css/* and /js/* — static assets ----
+        (and (= :get method)
+             (or (str/starts-with? path "/css/")
+                 (str/starts-with? path "/js/")))
+        (serve-resource (str "public" path))
 
         ;; ---- GET /ping ----
         (and (= :get method) (= "/ping" path))

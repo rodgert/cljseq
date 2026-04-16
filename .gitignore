@@ -26,6 +26,11 @@ __pycache__/
 dist/
 *.egg-info/
 
+# ClojureScript / shadow-cljs
+node_modules/
+.shadow-cljs/
+resources/public/js/
+
 # Editor
 .DS_Store
 .idea/

@@ -1,0 +1,186 @@
+/* cljseq control surface — dark theme */
+
+:root {
+  --bg:        #0d0d0d;
+  --surface:   #1a1a1a;
+  --border:    #2e2e2e;
+  --text:      #c8c8c8;
+  --dim:       #666;
+  --accent:    #7ec8a4;   /* green — live/active */
+  --warn:      #c8a47e;   /* amber — connecting */
+  --danger:    #c87e7e;   /* red — offline */
+  --mono:      "JetBrains Mono", "Fira Code", "Cascadia Code", monospace;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* ---------- Layout ---------- */
+
+.container {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+header h1 {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+}
+
+.panels {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex: 1;
+  overflow: hidden;
+}
+
+/* ---------- Connection badge ---------- */
+
+.badge {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  padding: 2px 8px;
+  border-radius: 3px;
+}
+
+.badge.open        { background: #1a3d2b; color: var(--accent); }
+.badge.connecting  { background: #3d2f1a; color: var(--warn); }
+.badge.closed      { background: #3d1a1a; color: var(--danger); }
+
+/* ---------- BPM display ---------- */
+
+.bpm-display {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--text);
+}
+
+.bpm-value {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--accent);
+  min-width: 3.5ch;
+  text-align: right;
+}
+
+.bpm-label {
+  font-size: 11px;
+  color: var(--dim);
+  letter-spacing: 0.1em;
+}
+
+/* ---------- Panel base ---------- */
+
+.ctrl-tree,
+.log {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+}
+
+.log {
+  border-right: none;
+}
+
+h3 {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--dim);
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* ---------- Ctrl tree table ---------- */
+
+.ctrl-tree .scroll {
+  overflow-y: auto;
+  flex: 1;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+tr:hover {
+  background: var(--surface);
+}
+
+td {
+  padding: 3px 1rem;
+  border-bottom: 1px solid #1e1e1e;
+  vertical-align: top;
+}
+
+td.path {
+  color: var(--dim);
+  white-space: nowrap;
+  width: 55%;
+}
+
+td.value {
+  color: var(--text);
+  word-break: break-all;
+}
+
+/* ---------- Log list ---------- */
+
+.log .scroll {
+  overflow-y: auto;
+  flex: 1;
+  padding: 0.25rem 0;
+}
+
+.log-entry {
+  display: flex;
+  gap: 0.5rem;
+  padding: 2px 1rem;
+  border-bottom: 1px solid #1a1a1a;
+  animation: flash 0.4s ease-out;
+}
+
+@keyframes flash {
+  from { background: #1a3d2b; }
+  to   { background: transparent; }
+}
+
+.log-entry .path  { color: var(--dim); flex: 1; }
+.log-entry .value { color: var(--accent); }
+
+/* ---------- Scrollbar ---------- */
+
+::-webkit-scrollbar              { width: 4px; }
+::-webkit-scrollbar-track        { background: var(--bg); }
+::-webkit-scrollbar-thumb        { background: var(--border); border-radius: 2px; }
+::-webkit-scrollbar-thumb:hover  { background: #444; }

@@ -743,6 +743,39 @@ cross-cutting reaction:
 Distinct from per-path `watch!` (fires only when a specific path changes) and
 `unwatch-all!` (removes all per-path watchers on a given path).
 
+### Browser control surface (`cljseq-ui`)
+
+`start-server!` also serves a browser control surface at `http://localhost:7177/`.
+The UI connects via `/ws` and displays two live panels:
+
+- **Ctrl tree** — full snapshot of current ctrl-tree values, updated on every change.
+- **Changes log** — last 60 ctrl writes, newest-first, with a brief green flash
+  on each new entry.
+
+BPM appears in the header alongside a **LIVE / connecting / OFFLINE** connection badge.
+
+The UI is a compiled ClojureScript + Reagent application. Build it before starting
+the server:
+
+```sh
+# Install npm deps (first time only)
+npm install
+
+# Development — hot-reload on CLJS changes
+npx shadow-cljs watch app
+
+# Production — single-pass release build
+npx shadow-cljs release app
+```
+
+The compiled `resources/public/js/main.js` is served automatically by the http-kit
+server; it is not committed to the repository (listed in `.gitignore`). If the build
+has not been run, `GET /js/main.js` returns 404 and the page loads without
+JavaScript.
+
+The CLJS source lives in `src/cljseq_ui/core.cljs`. It uses only the native
+`js/WebSocket` and `js/fetch` APIs plus Reagent — no additional runtime dependencies.
+
 ---
 
 ## 13. Generative Techniques
