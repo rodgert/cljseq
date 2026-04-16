@@ -67,7 +67,11 @@
             [cljseq.transform  :as xf]
             [cljseq.ivk        :as ivk]
             [cljseq.midi-in    :as midi-in]
-            [cljseq.voice      :as voice]))
+            [cljseq.voice      :as voice]
+            [cljseq.journey         :as journey]
+            [cljseq.berlin          :as berlin]
+            [cljseq.temporal-buffer :as tbuf]
+            [cljseq.supervisor      :as supervisor]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session lifecycle
@@ -105,6 +109,8 @@
 (def stop!                core/stop!)
 (def set-bpm!             core/set-bpm!)
 (def get-bpm              core/get-bpm)
+(def set-beats-per-bar!   core/set-beats-per-bar!)
+(def get-beats-per-bar    core/get-beats-per-bar)
 (def play!                core/play!)
 (def sleep!               core/sleep!)
 (def sync!                core/sync!)
@@ -416,6 +422,9 @@
 ;; SuperCollider backend
 (def connect-sc!         sc/connect-sc!)
 (def disconnect-sc!      sc/disconnect-sc!)
+(def start-sc!           sc/start-sc!)
+(def stop-sc!            sc/stop-sc!)
+(def sc-restart!         sc/sc-restart!)
 (def sc-connected?       sc/sc-connected?)
 (def synthdef-str        sc/synthdef-str)
 (def send-synthdef!      sc/send-synthdef!)
@@ -426,6 +435,7 @@
 (def free-synth!       sc/free-synth!)
 (def kill-synth!       sc/kill-synth!)
 (def sc-play!          sc/sc-play!)
+(def ramp-param!       sc/ramp-param!)
 (def sc-status         sc/sc-status)
 (def bind-spectral!    sc/bind-spectral!)
 (def unbind-spectral!  sc/unbind-spectral!)
@@ -458,6 +468,12 @@
 ;; Sidecar shorthand
 ;; ---------------------------------------------------------------------------
 
+(def diag-on!            sidecar/diag-on!)
+(def diag-off!           sidecar/diag-off!)
+(def set-diag!           sidecar/set-diag!)
+(def sidecar-verbose!    sidecar/sidecar-verbose!)
+(def sidecar-quiet!      sidecar/sidecar-quiet!)
+
 (def list-midi-ports         sidecar/list-midi-ports)
 (def find-midi-port          sidecar/find-midi-port)
 (def send-cc!                sidecar/send-cc!)
@@ -475,6 +491,8 @@
                     global keyboard capture (CGEventTap, macOS; requires
                     Accessibility permission).  After start-sidecar! returns,
                     call start-kbd! to register the 0x21 KbdEvent handler.
+    :binary       — explicit path to the sidecar binary (default: searches build/).
+                    Needed when running from a git worktree that has no build/ dir.
 
   Use (list-midi-ports) to discover available ports.
 
@@ -483,10 +501,11 @@
     (start-sidecar! :midi-port 1)
     (start-sidecar! :midi-port \"IAC\")
     (start-sidecar! :midi-port \"Hydra\" :midi-in-port \"Hydra\")
-    (start-sidecar! :kbd? true)   ; keyboard rig — no MIDI hardware needed"
-  [& {:keys [midi-port midi-in-port kbd?] :or {midi-port 0}}]
-  (sidecar/start-sidecar! :midi-port midi-port :midi-in-port midi-in-port
-                           :kbd? kbd?)
+    (start-sidecar! :kbd? true)   ; keyboard rig — no MIDI hardware needed
+    (start-sidecar! :binary \"/path/to/cljseq-sidecar\")  ; worktree use"
+  [& {:keys [binary midi-port midi-in-port kbd?] :or {midi-port 0}}]
+  (sidecar/start-sidecar! :binary binary :midi-port midi-port
+                           :midi-in-port midi-in-port :kbd? kbd?)
   (println (str "Sidecar started on MIDI port " midi-port))
   nil)
 
@@ -556,6 +575,73 @@
 ;; ---------------------------------------------------------------------------
 ;; Handy theory shortcuts at the top level
 ;; ---------------------------------------------------------------------------
+
+;; ---------------------------------------------------------------------------
+;; Kosmische vocabulary — cljseq.journey + cljseq.berlin
+;; ---------------------------------------------------------------------------
+
+;; Journey conductor
+(def start-bar-counter!  journey/start-bar-counter!)
+(def stop-bar-counter!   journey/stop-bar-counter!)
+(def reset-bar-counter!  journey/reset-bar-counter!)
+(def current-bar         journey/current-bar)
+(def start-journey!      journey/start-journey!)
+(def stop-journey!       journey/stop-journey!)
+(def phase-pair          journey/phase-pair)
+(def humanise            journey/humanise)
+(def phaedra-arc         journey/phaedra-arc)
+
+;; Berlin School / Kosmische ostinato + performance tools
+(def ostinato            berlin/ostinato)
+(def next-step!          berlin/next-step!)
+(def reset-ostinato!     berlin/reset-ostinato!)
+(def freeze-ostinato!    berlin/freeze-ostinato!)
+(def thaw-ostinato!      berlin/thaw-ostinato!)
+(def deflect-ostinato!   berlin/deflect-ostinato!)
+(def crystallize!        berlin/crystallize!)
+(def dissolve!           berlin/dissolve!)
+(def set-mutation-trajectory! berlin/set-mutation-trajectory!)
+(def set-portamento!     berlin/set-portamento!)
+(defmacro with-portamento [channel time-ms & body]
+  `(berlin/with-portamento ~channel ~time-ms ~@body))
+(def filter-journey!     berlin/filter-journey!)
+(def phase-drift!        berlin/phase-drift!)
+(def clear-drift!        berlin/clear-drift!)
+(def tuning-morph!       berlin/tuning-morph!)
+(def tape-drift          berlin/tape-drift)
+(def tick-tape!          berlin/tick-tape!)
+(def frippertronics!     berlin/frippertronics!)
+(def sos-send!           berlin/sos-send!)
+
+;; Temporal buffer — direct access for Hold, Flip, Color, Feedback, zone switching
+(def deftemporal-buffer       tbuf/deftemporal-buffer)
+(def deftemporal-buffer-preset tbuf/deftemporal-buffer-preset)
+(def temporal-buffer-send!    tbuf/temporal-buffer-send!)
+(def temporal-buffer-zone!    tbuf/temporal-buffer-zone!)
+(def temporal-buffer-hold!    tbuf/temporal-buffer-hold!)
+(def temporal-buffer-flip!    tbuf/temporal-buffer-flip!)
+(def temporal-buffer-rate!    tbuf/temporal-buffer-rate!)
+(def temporal-buffer-color!   tbuf/temporal-buffer-color!)
+(def temporal-buffer-feedback! tbuf/temporal-buffer-feedback!)
+(def temporal-buffer-halo!    tbuf/temporal-buffer-halo!)
+(def temporal-buffer-info     tbuf/temporal-buffer-info)
+(def temporal-buffer-set!     tbuf/temporal-buffer-set!)
+(def stop-temporal-buffer!    tbuf/stop!)
+(def color-presets            tbuf/color-presets)
+(def buffer-presets           tbuf/presets)
+
+;; Supervisor — service health, events, watchdog
+(def register-service!      supervisor/register!)
+(def deregister-service!    supervisor/deregister!)
+(def register-sc!           supervisor/register-sc!)
+(def register-sidecar!      supervisor/register-sidecar!)
+(def start-watchdog!        supervisor/start-watchdog!)
+(def stop-watchdog!         supervisor/stop-watchdog!)
+(def service-status         supervisor/service-status)
+(def all-service-statuses   supervisor/all-statuses)
+(def on-supervisor-event!   supervisor/on-event!)
+(def off-supervisor-event!  supervisor/off-event!)
+(def restart-loop!          loop-ns/restart-loop!)
 
 (defn make-scale
   "Build a Scale record. Common modal shorthand.

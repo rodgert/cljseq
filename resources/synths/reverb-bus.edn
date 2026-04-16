@@ -11,6 +11,6 @@ Use in patches as a tail-end FX node: set :in-bus to the upstream bus index.
          :amp     1.0}
  :graph [:out :out
           [:* :amp
-           [:free-verb
-            [:in :in-bus 1]
+           [:free-verb2
+            [:in :in-bus 2]
             :mix :room :damp]]]}

@@ -138,7 +138,8 @@
   (testing "send! updates the atom value when not connected to sidecar"
     (ctrl/defnode! [:send/cutoff] :type :float :node-meta {:range [0.0 1.0]})
     (ctrl/bind!    [:send/cutoff] {:type :midi-cc :channel 1 :cc-num 74 :range [0.0 1.0]})
-    (ctrl/send!    [:send/cutoff] 0.5)
+    (binding [ctrl/*dispatch-warn-fn* (fn [& _])]
+      (ctrl/send!    [:send/cutoff] 0.5))
     (is (= 0.5 (ctrl/get [:send/cutoff])) "atom updated even when sidecar absent")))
 
 ;; ---------------------------------------------------------------------------
@@ -430,7 +431,8 @@
     (ctrl/bind! [:send-at/val]
                 {:type :midi-cc :channel 1 :cc-num 10 :range [0 127]})
     (with-redefs [cljseq.sidecar/connected? (constantly false)]
-      (ctrl/send-at! 12345 [:send-at/val] 100))
+      (binding [ctrl/*dispatch-warn-fn* (fn [& _])]
+        (ctrl/send-at! 12345 [:send-at/val] 100)))
     (is (= 100 (ctrl/get [:send-at/val])) "ctrl tree value updated even when sidecar absent")))
 
 (deftest send-at-nrpn-uses-given-timestamp-test
@@ -448,3 +450,30 @@
       ;; the first CC; subsequent CCs get +1/+2/+3 ns.
       (is (= #{777000 777001 777002 777003} @timestamps)
           "4 NRPN CCs use sequentially offset timestamps (+0/+1/+2/+3 ns)"))))
+
+;; ---------------------------------------------------------------------------
+;; send! — diagnostic warning when sidecar not connected
+;; ---------------------------------------------------------------------------
+
+(deftest send-warns-when-sidecar-not-connected-midi-cc-test
+  (testing "send! calls *dispatch-warn-fn* when MIDI CC binding exists but sidecar is absent"
+    (ctrl/defnode! [:diag/cutoff] :type :float)
+    (ctrl/bind! [:diag/cutoff] {:type :midi-cc :channel 1 :cc-num 74 :range [0.0 1.0]})
+    (let [warned (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly false)]
+        (binding [ctrl/*dispatch-warn-fn* (fn [path btype] (swap! warned conj {:path path :type btype}))]
+          (ctrl/send! [:diag/cutoff] 0.5)))
+      (is (= 1 (count @warned)) "warn fired exactly once")
+      (is (= [:diag/cutoff] (:path (first @warned))))
+      (is (= :midi-cc (:type (first @warned)))))))
+
+(deftest send-warns-when-sidecar-not-connected-nrpn-test
+  (testing "send! calls *dispatch-warn-fn* when NRPN binding exists but sidecar is absent"
+    (ctrl/defnode! [:diag/nrpn-param] :type :int)
+    (ctrl/bind! [:diag/nrpn-param] {:type :midi-nrpn :channel 1 :nrpn 5 :bits 14 :range [0 16383]})
+    (let [warned (atom [])]
+      (with-redefs [cljseq.sidecar/connected? (constantly false)]
+        (binding [ctrl/*dispatch-warn-fn* (fn [path btype] (swap! warned conj {:path path :type btype}))]
+          (ctrl/send! [:diag/nrpn-param] 1000)))
+      (is (= 1 (count @warned)) "warn fired exactly once")
+      (is (= :midi-nrpn (:type (first @warned)))))))

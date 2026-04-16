@@ -59,11 +59,15 @@
 ;; ---------------------------------------------------------------------------
 
 (defonce ^:private sc-state
-  (atom {:host      "127.0.0.1"
-         :sc-port   57110    ; scsynth
-         :lang-port 57120    ; sclang
-         :connected false
-         :next-node (atom 1000)}))
+  (atom {:host           "127.0.0.1"
+         :sc-port        57110    ; scsynth
+         :lang-port      57120    ; sclang
+         :connected      false
+         :next-node      (atom 1000)
+         ;; Process management — populated by start-sc!, cleared by stop-sc!
+         :sc-process     nil      ; java.lang.Process holding the sclang subprocess
+         :sclang-binary  nil      ; path to the sclang binary used at last start
+         :sclang-script  nil}))   ; path to the .scd script used at last start
 
 ;; Track which SynthDefs have been sent to sclang in this session.
 ;; Reset on connect/disconnect so a fresh SC server gets all defs re-sent.
@@ -77,7 +81,7 @@
          :control-next 0
          :named        {}}))
 
-(declare sc-connected? send-synthdef!)
+(declare sc-connected? sc-host lang-port send-synthdef! ensure-synthdef! resend-sent-synthdefs!)
 
 (defn connect-sc!
   "Configure the SC connection parameters.
@@ -112,6 +116,155 @@
   (println "[sc] disconnected")
   nil)
 
+;; ---------------------------------------------------------------------------
+;; SC process management — start-sc!, stop-sc!, sc-restart!
+;; ---------------------------------------------------------------------------
+
+(def ^:dynamic *process-launcher*
+  "Launch a sclang subprocess. Called by start-sc! with [binary script].
+  Returns a java.lang.Process.
+  Override in tests to inject a fake process without touching real sclang:
+    (binding [sc/*process-launcher* (fn [_ _] my-mock-process)] ...)"
+  (fn [binary script]
+    (-> (ProcessBuilder. ^java.util.List [binary script])
+        (.redirectErrorStream false)
+        .start)))
+
+(defn start-sc!
+  "Launch sclang as a managed subprocess and wait for it to be ready.
+
+  sc-headless.scd sends an OSC /sc-lang-ready message once scsynth has booted
+  and the /cmd handler is active. start-sc! registers a one-shot handler for
+  that message before launching the process, then blocks until it arrives (or
+  times out).
+
+  On success: stores the Process and startup params in sc-state, calls
+  connect-sc!, and returns the java.lang.Process.
+  On timeout: destroys the process and throws ex-info.
+
+  Options:
+    :binary     — path to the sclang binary (required on first call;
+                  reused automatically by sc-restart!)
+    :script     — path to the .scd boot script
+                  (default \"script/sc-headless.scd\")
+    :timeout-ms — ms to wait for /sc-lang-ready (default 30000)
+
+  Example:
+    (sc/start-sc! :binary \"/opt/homebrew/.../sclang\"
+                  :script  \"script/sc-headless.scd\")"
+  [& {:keys [binary script timeout-ms]
+      :or   {script "script/sc-headless.scd" timeout-ms 30000}}]
+  (when-not binary
+    (throw (ex-info "start-sc!: :binary is required" {})))
+  (let [ctrl-port (or (osc/osc-port) 57121)
+        _         (when-not (osc/osc-running?)
+                    (osc/start-osc-server! :port ctrl-port))
+        p         (promise)
+        _         (osc/register-handler! "/sc-lang-ready" (fn [_] (deliver p :ready)))
+        proc      (*process-launcher* binary script)]
+    (swap! sc-state assoc
+           :sc-process    proc
+           :sclang-binary binary
+           :sclang-script script)
+    (let [result (deref p timeout-ms :timeout)]
+      (if (= result :timeout)
+        (do (osc/register-handler! "/sc-lang-ready" (fn [_] nil)) ; clear stale handler
+            (.destroyForcibly proc)
+            (swap! sc-state assoc :sc-process nil)
+            (throw (ex-info "start-sc!: timed out waiting for sclang to boot"
+                            {:timeout-ms timeout-ms :binary binary :script script})))
+        (do (connect-sc!)
+            (println (str "[sc] sclang process started (" binary ")"))
+            proc)))))
+
+(defn stop-sc!
+  "Kill the managed sclang subprocess (if running) and disconnect.
+
+  Safe to call when no process is running — logs a warning and returns nil.
+  After stop-sc!, sc-restart! or start-sc! is required to resume SC use."
+  []
+  (let [proc (:sc-process @sc-state)]
+    (if proc
+      (do (.destroyForcibly ^java.lang.Process proc)
+          (swap! sc-state assoc :sc-process nil)
+          (disconnect-sc!)
+          (println "[sc] sclang process stopped")
+          nil)
+      (do (println "[sc] stop-sc!: no managed process running")
+          nil))))
+
+(defn sc-restart!
+  "Kill the managed sclang subprocess, relaunch it, and restore all SynthDefs.
+
+  Sequence:
+    1. stop-sc!          — destroys the process, marks SC disconnected
+    2. start-sc!         — relaunches with stored :sclang-binary / :sclang-script,
+                           waits for /sc-lang-ready, calls connect-sc!
+    3. resend-sent-synthdefs! — re-sends every SynthDef that was loaded before
+                                the restart so the audio graph can be rebuilt
+
+  Throws if no managed process was previously started via start-sc! (no stored
+  binary/script). Use start-sc! explicitly for the first launch.
+
+  Options:
+    :timeout-ms — passed to start-sc! (default 30000)
+
+  Example:
+    ;; Audio device reconnected after a USB hiccup:
+    (sc/sc-restart!)"
+  [& {:keys [timeout-ms] :or {timeout-ms 30000}}]
+  (let [{:keys [sclang-binary sclang-script]} @sc-state]
+    (when-not sclang-binary
+      (throw (ex-info "sc-restart!: no previous start-sc! call — binary unknown"
+                      {})))
+    ;; Snapshot def names before stop-sc! and connect-sc! both clear sent-synthdefs.
+    (let [defs-to-restore @sent-synthdefs]
+      (stop-sc!)
+      (start-sc! :binary     sclang-binary
+                 :script     sclang-script
+                 :timeout-ms timeout-ms)
+      ;; Re-send each def; ensure-synthdef! will send any not yet in sent-synthdefs.
+      (doseq [def-name defs-to-restore]
+        (ensure-synthdef! def-name))
+      (println (str "[sc] restarted — " (count defs-to-restore) " SynthDef(s) restored"))
+      nil)))
+
+(defn sc-sync!
+  "Block until scsynth has processed all pending commands (SynthDef compilations etc).
+
+  Sends `s.sync` to sclang via /cmd, which waits for scsynth to acknowledge all
+  outstanding async work, then sends /sc-ready back to the cljseq OSC server.
+  Returns :synced on success, throws ex-info on timeout.
+
+  Options:
+    :timeout-ms — max wait in milliseconds (default 8000)
+
+  The cljseq OSC server must be running (start-osc-server! called) for the
+  /sc-ready reply to arrive. sc-sync! starts the server automatically if needed,
+  on the configured OSC control port (default 57121).
+
+  Example:
+    (sc/ensure-synthdef! :blade)
+    (sc/sc-sync!)           ; wait for scsynth to compile the def
+    (sc/sc-synth! :blade {:freq 440})"
+  [& {:keys [timeout-ms] :or {timeout-ms 8000}}]
+  (when-not (sc-connected?)
+    (throw (ex-info "sc-sync!: not connected" {})))
+  (let [ctrl-port (or (osc/osc-port) 57121)
+        _         (when-not (osc/osc-running?)
+                    (osc/start-osc-server! :port ctrl-port))
+        p         (promise)
+        _         (osc/register-handler! "/sc-ready" (fn [_] (deliver p :synced)))
+        cmd       (str "fork { s.sync; NetAddr(\"127.0.0.1\", " ctrl-port
+                       ").sendMsg('/sc-ready'); };")]
+    (osc/osc-send! (sc-host) (lang-port) "/cmd" cmd)
+    (let [result (deref p timeout-ms :timeout)]
+      (if (= result :timeout)
+        (do (osc/register-handler! "/sc-ready" (fn [_] nil)) ; clear stale handler
+            (throw (ex-info "sc-sync!: timed out waiting for scsynth"
+                            {:timeout-ms timeout-ms})))
+        result))))
+
 (defn ensure-synthdef!
   "Send a named SynthDef to sclang if it has not already been sent this session.
   No-op when SC is not connected or the def is already resident.
@@ -125,6 +278,28 @@
   (when (and (sc-connected?) (not (contains? @sent-synthdefs synth-name)))
     (send-synthdef! synth-name)
     (swap! sent-synthdefs conj synth-name))
+  nil)
+
+(defn ensure-synthdefs!
+  "Send a batch of SynthDefs to sclang, then sync once.
+
+  Sends all defs not yet resident, then calls sc-sync! to wait for scsynth to
+  compile them all before returning. Safe to call multiple times — already-sent
+  defs are skipped.
+
+  Options:
+    :timeout-ms — passed to sc-sync! (default 8000)
+
+  Example:
+    (sc/ensure-synthdefs! [:blade :prophet :dark-ambience])
+    ;; all three are now compiled and ready for sc-synth!"
+  [synth-names & {:keys [timeout-ms] :or {timeout-ms 8000}}]
+  (let [to-send (remove #(contains? @sent-synthdefs %) synth-names)]
+    (when (and (sc-connected?) (seq to-send))
+      (doseq [n to-send]
+        (send-synthdef! n)
+        (swap! sent-synthdefs conj n))
+      (sc-sync! :timeout-ms timeout-ms)))
   nil)
 
 (defn sc-connected?
@@ -214,9 +389,12 @@
     (keyword? node)
     (sc-arg-name node)
 
-    ;; Numeric literal
+    ;; Numeric literal — emit integers as integers (SC 3.13+ requires integer
+    ;; numChannels for In.ar / LocalIn etc.), floats as floats.
     (number? node)
-    (str (double node))
+    (if (integer? node)
+      (str (long node))
+      (str (double node)))
 
     ;; Vector: UGen call
     (vector? node)
@@ -367,6 +545,20 @@
   (doseq [name (synth/synth-names)]
     (send-synthdef! name)))
 
+(defn resend-sent-synthdefs!
+  "Re-send all synthdefs that were previously loaded in this session.
+  Call after reconnecting to a crashed/restarted SC server to restore
+  the synth registry. Clears the sent-synthdefs cache first so
+  ensure-synthdef! treats each def as unsent.
+
+  Returns the set of def names that were re-sent."
+  []
+  (let [defs @sent-synthdefs]
+    (reset! sent-synthdefs #{})
+    (doseq [def-name defs]
+      (ensure-synthdef! def-name))
+    defs))
+
 (defn send-fm-synthdef!
   "Compile a registered FM algorithm to SC and send it to the sclang interpreter.
 
@@ -413,6 +605,10 @@
   The node is created at the tail of the default group (group 1).
   It will free itself when its envelope completes (doneAction: 2).
 
+  If the SynthDef has not been sent to sclang this session, sc-synth! sends it
+  and calls sc-sync! automatically before firing /s_new. This makes sc-synth!
+  safe to call without prior ensure-synthdef! / ensure-synthdefs!.
+
   Example:
     (sc/sc-synth! :blade {:freq 440 :amp 0.6 :attack 0.1})
     ;=> 1001"
@@ -422,6 +618,11 @@
   (let [synth    (synth/get-synth synth-name)
         _        (when-not synth
                    (throw (ex-info "sc-synth!: synth not found" {:name synth-name})))
+        ;; Auto-send + sync if def not yet resident in scsynth
+        _        (when-not (contains? @sent-synthdefs synth-name)
+                   (send-synthdef! synth-name)
+                   (swap! sent-synthdefs conj synth-name)
+                   (sc-sync!))
         node-id  (next-node!)
         defaults (:args synth)
         merged   (merge defaults args-map)
@@ -482,6 +683,10 @@
     :dur-ms     — note duration in milliseconds (default 500)
     any other key matching a synth arg is passed through.
 
+  The release time is computed as an absolute wall-clock epoch before
+  the OSC send, so thread-scheduling jitter does not shorten or lengthen
+  the sounding duration.
+
   Returns node-id.
 
   Example:
@@ -494,12 +699,21 @@
                        (when midi (* 440.0 (Math/pow 2.0 (/ (- midi 69) 12.0)))))
         args       (-> (dissoc event :synth :dur-ms :pitch/midi)
                        (cond-> freq (assoc :freq freq)))
+        ;; Capture release target before sc-synth! so the duration is relative
+        ;; to when we schedule the note-on, not when the daemon thread starts.
+        off-at-ms  (+ (System/currentTimeMillis) (long dur-ms))
         node-id    (sc-synth! synth-name args)]
     (doto (Thread. (fn []
                      (try
-                       (Thread/sleep (long dur-ms))
+                       (let [sleep-ms (- off-at-ms (System/currentTimeMillis))]
+                         (when (pos? sleep-ms)
+                           (Thread/sleep sleep-ms)))
                        (free-synth! node-id)
-                       (catch Exception _))))
+                       (catch Exception e
+                         (binding [*out* *err*]
+                           (println (str "[sc] stuck note: free-synth! failed for node "
+                                         node-id " (" (.getSimpleName (class e)) "): "
+                                         (.getMessage e))))))))
       (.setDaemon true)
       (.start))
     node-id))
@@ -526,6 +740,47 @@
   (core/apply-trajectory!
     (fn [v] (when (sc-connected?) (set-param! node-id param v)))
     traj))
+
+;; ---------------------------------------------------------------------------
+;; ramp-param! — linear parameter ramp over N beats
+;; ---------------------------------------------------------------------------
+
+(defn ramp-param!
+  "Linearly ramp a running SC node parameter from `from` to `to` over `beats` beats.
+
+  Divides the ramp into fine-grained steps sized to the current BPM (typically
+  ~40ms per step, ensuring smooth motion even at slow tempos). More reliable
+  than apply-trajectory! for long, gradual ramps because it uses a simple
+  future loop rather than a 50ms wall-clock poll.
+
+  Returns a zero-argument cancel function. Call it to halt the ramp early:
+    (def stop! (sc/ramp-param! verb-node :amp 0.0 0.18 320))
+    (stop!)   ; abort mid-ramp
+
+  Options:
+    :steps — number of interpolation steps (default 40)
+    :bpm   — BPM override; defaults to core/get-bpm at call time
+
+  Example:
+    ;; Fade drone amp in over 320 beats (~5 min at 100 BPM):
+    (sc/ramp-param! verb-node :amp 0.0 0.18 320)
+
+    ;; Close filter over 80 bars (with early-exit handle):
+    (def cancel! (sc/ramp-param! filter-node :cutoff 4000 200 80))"
+  [node-id param from to beats & {:keys [steps bpm] :or {steps 40}}]
+  (let [bpm-val  (double (or bpm (core/get-bpm)))
+        ms-total (* (double beats) (/ 60000.0 bpm-val))
+        step-ms  (long (/ ms-total steps))
+        delta    (/ (- (double to) (double from)) steps)
+        cancelled (atom false)]
+    (future
+      (loop [i 0 v (double from)]
+        (when (and (not @cancelled) (<= i steps))
+          (when (sc-connected?)
+            (set-param! node-id param v))
+          (Thread/sleep step-ms)
+          (recur (inc i) (+ v delta)))))
+    (fn [] (reset! cancelled true))))
 
 ;; ---------------------------------------------------------------------------
 ;; Spectral bridge — ctrl-tree → live SC node parameter
@@ -704,9 +959,12 @@
 (defn instantiate-patch!
   "Instantiate a registered patch on the SC server.
 
-  Allocates audio/control buses, sends SynthDefs as needed, and starts each
-  node in declaration order. Returns a patch instance map for use with
-  `set-patch-param!` and `free-patch!`.
+  Allocates audio/control buses, sends all SynthDefs, syncs with scsynth, then
+  starts each node in declaration order. Returns a patch instance map for use
+  with `set-patch-param!` and `free-patch!`.
+
+  If instantiation fails partway through, any already-created nodes are freed
+  automatically before the exception propagates (no zombie nodes).
 
   Example:
     (sc/connect-sc!)
@@ -723,18 +981,32 @@
                                               :or   {channels 1 rate :audio}}]]
                                  [bus-key (:idx (sc-bus! bus-key channels rate))])
                                (:buses compiled)))
-        ;; Instantiate nodes in order; collect node-id → sc-node-id
-        node-ids    (into {}
-                          (map (fn [{:keys [id synth args]}]
-                                 (ensure-synthdef! synth)
-                                 (let [resolved (resolve-bus-args args bus-indices)
-                                       node-id  (sc-synth! synth resolved)]
-                                   [id node-id]))
-                               (:nodes compiled)))]
-    {:patch-name (:patch-name compiled)
-     :buses      bus-indices
-     :nodes      node-ids
-     :params     (:params compiled)}))
+        synth-names (mapv :synth (:nodes compiled))]
+    ;; Send all defs and sync once before creating any nodes.
+    ;; This eliminates the race condition where /s_new fires before scsynth
+    ;; has compiled the SynthDef sent via sclang /cmd.
+    (ensure-synthdefs! synth-names)
+    ;; Instantiate nodes in order, cleaning up on failure.
+    (let [allocated (atom [])]
+      (try
+        (let [node-ids (into {}
+                             (map (fn [{:keys [id synth args]}]
+                                    (let [resolved (resolve-bus-args args bus-indices)
+                                          node-id  (sc-synth! synth resolved)]
+                                      (swap! allocated conj node-id)
+                                      [id node-id]))
+                                  (:nodes compiled)))]
+          {:patch-name (:patch-name compiled)
+           :buses      bus-indices
+           :nodes      node-ids
+           :params     (:params compiled)})
+        (catch Exception e
+          ;; Free any nodes we managed to create before the failure
+          (when (seq @allocated)
+            (println (str "[sc] instantiate-patch! failed — freeing " (count @allocated) " allocated nodes"))
+            (doseq [nid @allocated]
+              (try (kill-synth! nid) (catch Exception _ nil))))
+          (throw e))))))
 
 (defn set-patch-param!
   "Update a named parameter on a running patch instance.

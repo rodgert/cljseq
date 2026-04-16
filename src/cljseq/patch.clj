@@ -64,7 +64,8 @@
     (pr-str (get-patch :reverb-chain))"
   (:require [clojure.string  :as str]
             [clojure.edn     :as edn]
-            [clojure.java.io :as io]))
+            [clojure.java.io :as io]
+            [cljseq.synth    :as synth]))
 
 ;; ---------------------------------------------------------------------------
 ;; Registry
@@ -237,6 +238,17 @@
 
 (defonce ^:private _patches-loaded
   (do
+    ;; Stereo reverb synth — registered here so it is available to :s42 at load time.
+    ;; Uses FreeVerb2.ar which takes separate L/R inputs, unlike the mono :reverb-bus.
+    (synth/register-precompiled!
+      :reverb-bus-stereo
+      {:gate 1 :in-bus 8 :out 0 :room 0.5 :mix 0.33 :damp 0.5 :amp 1.0}
+      (str "SynthDef(\\reverb_bus_stereo, {"
+           " |gate=1, in_bus=8, out=0, room=0.5, mix=0.33, damp=0.5, amp=1.0|"
+           " var sig = In.ar(in_bus, 2);"
+           " var verb = FreeVerb2.ar(sig[0], sig[1], mix, room, damp);"
+           " Out.ar(out, verb * amp);"
+           " }).add;"))
     (defpatch! :reverb-chain
       {:buses  {:dry {:channels 1 :rate :audio}}
        :nodes  [{:id   :osc
@@ -332,8 +344,8 @@
                 {:id :filter :synth :s42-filter
                  :args {:cutoff 55 :res 0.3 :amp 0.8}
                  :in {:in-bus :voice-mix} :out {:out-bus :filtered-mix}}
-                ;; ── Effects block ──
-                {:id :verb :synth :reverb-bus
+                ;; ── Effects block (stereo FreeVerb2 — reads 2-ch filtered-mix) ──
+                {:id :verb :synth :reverb-bus-stereo
                  :args {:room 0.5 :mix 0.2 :damp 0.5 :amp 1.0}
                  :in {:in-bus :filtered-mix} :out {:out 0}}]
        :params {;; Filter (the Polivoks pair — biggest sound shaper)

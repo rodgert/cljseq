@@ -78,6 +78,10 @@
 ;; Subscriber registry — {ctrl-path #{:host :port}}
 (defonce ^:private subscriber-registry (atom {}))
 
+;; One-shot handler registry — {address (fn [args])}
+;; Each entry fires once then is removed. Used by sc-sync! and similar.
+(defonce ^:private one-shot-handlers (atom {}))
+
 (declare stop-osc-server! osc-send!)
 
 ;; ---------------------------------------------------------------------------
@@ -285,10 +289,27 @@
 ;; Dispatcher
 ;; ---------------------------------------------------------------------------
 
+(defn register-handler!
+  "Register a one-shot OSC handler for `address`.
+  `f` is called with the message args vector the first time the address is
+  received, then removed. Thread-safe.
+
+  Example:
+    (osc/register-handler! \"/sc-ready\" (fn [_args] (println \"SC ready\")))"
+  [address f]
+  (swap! one-shot-handlers assoc address f))
+
 (defn- dispatch
   "Route a decoded OSC message to the appropriate handler.
   `sender-host` and `sender-port` are used by /tree to push the response."
   [{:keys [address args]} sender-host sender-port]
+  ;; One-shot handlers fire first — fire and remove atomically.
+  (when-let [handler (get @one-shot-handlers address)]
+    (swap! one-shot-handlers dissoc address)
+    (try (handler args)
+         (catch Exception e
+           (binding [*out* *err*]
+             (println "[osc] one-shot handler error at" address ":" (.getMessage e))))))
   (cond
     (= "/ping" address)
     (println "[osc] ping")

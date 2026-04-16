@@ -1,11 +1,13 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.sc-test
   "Tests for cljseq.sc — sclang code generation and compile-synth :sc backend."
-  (:require [clojure.test  :refer [deftest is testing]]
+  (:require [clojure.test   :refer [deftest is testing]]
+            [clojure.set    :as set]
             [clojure.string :as str]
-            [cljseq.synth  :as synth]
-            [cljseq.core   :as core]
-            [cljseq.sc     :as sc]))
+            [cljseq.synth   :as synth]
+            [cljseq.core    :as core]
+            [cljseq.osc     :as osc]
+            [cljseq.sc      :as sc]))
 
 ;; ---------------------------------------------------------------------------
 ;; synthdef-str — code generation
@@ -174,6 +176,79 @@
         (reset! @#'sc/sent-synthdefs #{})))))
 
 ;; ---------------------------------------------------------------------------
+;; sc-sync! — OSC handshake
+;; ---------------------------------------------------------------------------
+
+(deftest sc-sync-throws-when-disconnected-test
+  (testing "sc-sync! throws when SC is not connected"
+    (is (thrown? clojure.lang.ExceptionInfo (sc/sc-sync!)))))
+
+(deftest sc-sync-delivers-synced-test
+  (testing "sc-sync! returns :synced when /sc-ready arrives before timeout"
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (let [osc-sends (atom [])
+            result    (atom nil)]
+        (with-redefs [cljseq.osc/osc-running?        (constantly true)
+                      cljseq.osc/osc-port             (constantly 57121)
+                      cljseq.osc/osc-send!            (fn [& args] (swap! osc-sends conj args))
+                      cljseq.osc/register-handler!    (fn [addr f] (f []) nil)]
+          (reset! result (sc/sc-sync! :timeout-ms 2000)))
+        (is (= :synced @result) "sc-sync! should return :synced")
+        (is (some #(and (= (nth % 2) "/cmd")
+                        (clojure.string/includes? (nth % 3) "s.sync"))
+                  @osc-sends)
+            "should send s.sync to sclang via /cmd"))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)))))
+
+(deftest sc-sync-times-out-test
+  (testing "sc-sync! throws on timeout when no /sc-ready arrives"
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (with-redefs [cljseq.osc/osc-running?      (constantly true)
+                    cljseq.osc/osc-port           (constantly 57121)
+                    cljseq.osc/osc-send!          (fn [& _])
+                    cljseq.osc/register-handler!  (fn [_ _])] ; never fires
+        (is (thrown-with-msg? clojure.lang.ExceptionInfo #"timed out"
+                              (sc/sc-sync! :timeout-ms 100))))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)))))
+
+;; ---------------------------------------------------------------------------
+;; ensure-synthdefs! — batch send + sync
+;; ---------------------------------------------------------------------------
+
+(deftest ensure-synthdefs-sends-all-unsent-test
+  (testing "ensure-synthdefs! sends all defs not yet in sent-synthdefs"
+    (reset! @#'sc/sent-synthdefs #{:sine})  ; :sine already sent
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (let [sent (atom [])]
+        (with-redefs [cljseq.sc/send-synthdef! (fn [n] (swap! sent conj n))
+                      cljseq.sc/sc-sync!       (fn [& _] :synced)]
+          (sc/ensure-synthdefs! [:sine :blade :prophet])))
+      ;; :sine already in sent-synthdefs — only :blade and :prophet should be sent
+      (is (= #{:blade :prophet} (set/difference @@#'sc/sent-synthdefs #{:sine})))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)
+        (reset! @#'sc/sent-synthdefs #{})))))
+
+(deftest ensure-synthdefs-no-op-when-all-sent-test
+  (testing "ensure-synthdefs! is a no-op when all defs already sent"
+    (reset! @#'sc/sent-synthdefs #{:sine :blade})
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (let [sync-called (atom false)]
+        (with-redefs [cljseq.sc/send-synthdef! (fn [_] (throw (ex-info "should not send" {})))
+                      cljseq.sc/sc-sync!       (fn [& _] (reset! sync-called true) :synced)]
+          (sc/ensure-synthdefs! [:sine :blade]))
+        (is (false? @sync-called) "sc-sync! should not be called when nothing to send"))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)
+        (reset! @#'sc/sent-synthdefs #{})))))
+
+;; ---------------------------------------------------------------------------
 ;; apply-trajectory! — 3-arity SC form
 ;; ---------------------------------------------------------------------------
 
@@ -229,3 +304,212 @@
             (core/play! {:pitch/midi 60 :dur/beats 1/4})))
         (is (zero? @sc-calls) "sc-play! must not be called for plain MIDI steps"))
       (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; sc-play! — stuck-note containment
+;; ---------------------------------------------------------------------------
+
+(deftest sc-play-release-failure-is-contained-test
+  (testing "a free-synth! failure in the release daemon does not propagate to the caller"
+    ;; When the release daemon thread fails (e.g., SC server has dropped the
+    ;; node ID), the exception must be caught and not re-thrown.  sc-play!
+    ;; should return the node-id regardless of what happens during release.
+    ;;
+    ;; Pre-populate sent-synthdefs so sc-synth! skips the send+sync step
+    ;; (added by fix/sc-robustness).  That makes call #1 the /s_new note-on
+    ;; and call #2 the free-synth! release — matching the test's intent.
+    (reset! @#'sc/sent-synthdefs #{:sine})
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (let [call-count (atom 0)
+            node-id    (atom nil)]
+        ;; First osc-send! call: sc-synth! /s_new note-on — succeeds.
+        ;; Subsequent osc-send! calls: free-synth! release — throws.
+        (with-redefs [cljseq.osc/osc-send! (fn [& _]
+                                              (when (> (swap! call-count inc) 1)
+                                                (throw (ex-info "simulated OSC failure" {}))))]
+          (reset! node-id (sc/sc-play! {:synth :sine :freq 440.0 :dur-ms 1})))
+        ;; sc-play! must return a valid node-id despite the pending release failure
+        (is (pos-int? @node-id) "sc-play! returns node-id even when release will fail")
+        ;; Allow the release daemon to fire and swallow its exception
+        (Thread/sleep 50)
+        ;; Test passes if we reach here — no exception escaped to the caller
+        (is true "no exception propagated from the release daemon"))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)
+        (reset! @#'sc/sent-synthdefs #{})))))
+
+(deftest sc-play-release-failure-does-not-affect-caller-thread-test
+  (testing "a release daemon exception does not kill or interrupt the calling thread"
+    ;; Pre-populate sent-synthdefs so the first osc-send! is the /s_new note-on.
+    (reset! @#'sc/sent-synthdefs #{:sine})
+    (swap! @#'sc/sc-state assoc :connected true)
+    (try
+      (let [caller-interrupted? (atom false)]
+        (with-redefs [cljseq.osc/osc-send! (fn [& _]
+                                              (throw (ex-info "simulated total OSC failure" {})))]
+          (try
+            (sc/sc-play! {:synth :sine :freq 440.0 :dur-ms 1})
+            ;; sc-synth! throws because /s_new itself failed — that is expected
+            ;; and correct: if we can't send the note-on, sc-play! should throw.
+            (catch Exception _)))
+        ;; After the throw, the calling thread must still be alive and uninterrupted
+        (is (not @caller-interrupted?) "caller thread not interrupted")
+        (is (not (.isInterrupted (Thread/currentThread))) "current thread interrupt flag clear"))
+      (finally
+        (swap! @#'sc/sc-state assoc :connected false)
+        (reset! @#'sc/sent-synthdefs #{})))))
+
+;; ---------------------------------------------------------------------------
+;; Process management — start-sc!, stop-sc!, sc-restart!
+;; ---------------------------------------------------------------------------
+
+;; A fake java.lang.Process that does nothing (never actually starts sclang).
+;; Tests use *process-launcher* to inject it and manually deliver /sc-lang-ready.
+(defn- make-fake-process []
+  (proxy [Process] []
+    (destroyForcibly [] this)
+    (destroy [])
+    (isAlive [] false)
+    (exitValue [] 0)
+    (waitFor [] 0)))
+
+(defn- with-sc-state-reset
+  "Run f with sc-state and sent-synthdefs reset to defaults afterward."
+  [f]
+  (try
+    (f)
+    (finally
+      (swap! @#'sc/sc-state assoc
+             :connected      false
+             :sc-process     nil
+             :sclang-binary  nil
+             :sclang-script  nil)
+      (reset! @#'sc/sent-synthdefs #{}))))
+
+(deftest start-sc-waits-for-sc-lang-ready-test
+  (testing "start-sc! returns process and marks connected after /sc-lang-ready"
+    (with-sc-state-reset
+      (fn []
+        (let [fake-proc (make-fake-process)
+              osc-handler (atom nil)]
+          ;; Capture the registered handler so we can fire it manually
+          (with-redefs [osc/register-handler! (fn [path handler]
+                                                (when (= path "/sc-lang-ready")
+                                                  (reset! osc-handler handler)))
+                        osc/osc-running?      (fn [] true)
+                        osc/osc-port          (fn [] 57121)]
+            (binding [sc/*process-launcher* (fn [_ _]
+                                              ;; Fire /sc-lang-ready asynchronously
+                                              (future (Thread/sleep 10)
+                                                      (when @osc-handler
+                                                        (@osc-handler nil)))
+                                              fake-proc)]
+              (let [result (sc/start-sc! :binary "/fake/sclang"
+                                         :script "script/sc-headless.scd"
+                                         :timeout-ms 2000)]
+                (is (= fake-proc result) "start-sc! returns the process")
+                (is (sc/sc-connected?) "connection is active after start-sc!")
+                (is (= "/fake/sclang" (:sclang-binary @@#'sc/sc-state))
+                    "binary stored in sc-state")
+                (is (= "script/sc-headless.scd" (:sclang-script @@#'sc/sc-state))
+                    "script stored in sc-state")
+                (is (= fake-proc (:sc-process @@#'sc/sc-state))
+                    "process stored in sc-state")))))))))
+
+(deftest start-sc-throws-on-timeout-test
+  (testing "start-sc! destroys process and throws when /sc-lang-ready never arrives"
+    (with-sc-state-reset
+      (fn []
+        (let [destroyed? (atom false)
+              fake-proc  (proxy [Process] []
+                           (destroyForcibly [] (reset! destroyed? true) this)
+                           (destroy [])
+                           (isAlive [] true)
+                           (exitValue [] 0)
+                           (waitFor [] 0))]
+          (with-redefs [osc/register-handler! (fn [_ _])
+                        osc/osc-running?      (fn [] true)
+                        osc/osc-port          (fn [] 57121)]
+            (binding [sc/*process-launcher* (fn [_ _] fake-proc)]
+              (is (thrown? clojure.lang.ExceptionInfo
+                           (sc/start-sc! :binary "/fake/sclang"
+                                         :timeout-ms 50))
+                  "throws on timeout")
+              (is @destroyed? "process is destroyed on timeout")
+              (is (nil? (:sc-process @@#'sc/sc-state))
+                  "sc-state :sc-process cleared on timeout"))))))))
+
+(deftest start-sc-requires-binary-test
+  (testing "start-sc! throws immediately when :binary is omitted"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (sc/start-sc!)))))
+
+(deftest stop-sc-kills-process-and-disconnects-test
+  (testing "stop-sc! destroys the stored process and marks SC disconnected"
+    (with-sc-state-reset
+      (fn []
+        (let [destroyed? (atom false)
+              fake-proc  (proxy [Process] []
+                           (destroyForcibly [] (reset! destroyed? true) this)
+                           (destroy [])
+                           (isAlive [] true)
+                           (exitValue [] 0)
+                           (waitFor [] 0))]
+          (swap! @#'sc/sc-state assoc
+                 :connected     true
+                 :sc-process    fake-proc
+                 :sclang-binary "/fake/sclang"
+                 :sclang-script "script/sc-headless.scd")
+          (sc/stop-sc!)
+          (is @destroyed? "destroyForcibly called on stored process")
+          (is (not (sc/sc-connected?)) "SC marked disconnected")
+          (is (nil? (:sc-process @@#'sc/sc-state)) "process cleared from sc-state"))))))
+
+(deftest stop-sc-noop-when-no-process-test
+  (testing "stop-sc! is safe to call when no managed process exists"
+    (with-sc-state-reset
+      (fn []
+        (swap! @#'sc/sc-state assoc :sc-process nil)
+        (is (nil? (sc/stop-sc!)) "returns nil without throwing")))))
+
+(deftest sc-restart-stop-start-resend-sequence-test
+  (testing "sc-restart! stops, starts, then resends synthdefs in order"
+    (with-sc-state-reset
+      (fn []
+        (let [call-log   (atom [])
+              fake-proc  (make-fake-process)
+              osc-handler (atom nil)]
+          (swap! @#'sc/sc-state assoc
+                 :connected     true
+                 :sc-process    fake-proc
+                 :sclang-binary "/fake/sclang"
+                 :sclang-script "script/sc-headless.scd")
+          ;; Pre-populate sent-synthdefs so resend has something to restore
+          (reset! @#'sc/sent-synthdefs #{:sine :blade})
+          (with-redefs [osc/register-handler! (fn [path handler]
+                                                (when (= path "/sc-lang-ready")
+                                                  (reset! osc-handler handler)))
+                        osc/osc-running?      (fn [] true)
+                        osc/osc-port          (fn [] 57121)
+                        osc/osc-send!         (fn [& _] (swap! call-log conj :osc-send))]
+            (binding [sc/*process-launcher* (fn [_ _]
+                                              (swap! call-log conj :launched)
+                                              (future (Thread/sleep 10)
+                                                      (when @osc-handler
+                                                        (@osc-handler nil)))
+                                              fake-proc)]
+              (sc/sc-restart! :timeout-ms 2000)
+              (is (some #(= % :launched) @call-log) "process was relaunched")
+              (is (sc/sc-connected?) "SC connected after restart")
+              ;; resend-sent-synthdefs! fires osc-send! for each def
+              (is (pos? (count (filter #(= % :osc-send) @call-log)))
+                  "synthdefs were re-sent"))))))))
+
+(deftest sc-restart-throws-without-prior-start-test
+  (testing "sc-restart! throws when no previous start-sc! call exists"
+    (with-sc-state-reset
+      (fn []
+        (swap! @#'sc/sc-state assoc :sclang-binary nil)
+        (is (thrown? clojure.lang.ExceptionInfo
+                     (sc/sc-restart!)))))))

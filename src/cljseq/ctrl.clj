@@ -46,6 +46,22 @@
 (defonce ^:private system-ref (atom nil))
 
 ;; ---------------------------------------------------------------------------
+;; Diagnostics
+;;
+;; ^:dynamic so tests can capture or suppress the warning without forking stderr.
+;; ---------------------------------------------------------------------------
+
+(def ^:dynamic *dispatch-warn-fn*
+  "Called when a physical binding (MIDI CC, NRPN) cannot be dispatched because
+  the sidecar is not connected. Default: print to *err*.
+  Override in tests: (binding [ctrl/*dispatch-warn-fn* (fn [& _])] ...)"
+  (fn [path binding-type]
+    (binding [*out* *err*]
+      (println (str "[ctrl] send! — " (pr-str path)
+                    " has a " binding-type " binding but sidecar is not connected."
+                    " Start the sidecar with (sidecar/start-sidecar!) first.")))))
+
+;; ---------------------------------------------------------------------------
 ;; Watcher registry
 ;;
 ;; {path {watch-key fn}} — keyed by watch-key so callers can remove them.
@@ -200,8 +216,9 @@
               raw     (double value)
               pct     (/ (- raw lo) (- hi lo))
               scaled  (long (Math/round (* pct 127.0)))]
-          (when (sidecar/connected?)
-            (sidecar/send-cc! time-ns ch cc-num (max 0 (min 127 scaled)))))
+          (if (sidecar/connected?)
+            (sidecar/send-cc! time-ns ch cc-num (max 0 (min 127 scaled)))
+            (*dispatch-warn-fn* path :midi-cc)))
 
         :midi-nrpn
         (let [ch        (int (or (:channel binding) 1))
@@ -225,14 +242,16 @@
               ;; (wire value = 0*128+5 = 5 ✓), not CC6=5 (wire value = 5*128 = 640 ✗).
               data-msb  (bit-and (bit-shift-right clamped 7) 0x7F)
               data-lsb  (bit-and clamped 0x7F)]
-          (when (sidecar/connected?)
+          (if (sidecar/connected?)
             ;; NRPN sequence must arrive in order: CC99 → CC98 → CC6 → CC38.
             ;; The scheduler min-heap does not preserve insertion order for equal
             ;; timestamps, so we add 1ns offsets to guarantee ordering.
-            (sidecar/send-cc! time-ns       ch 99 param-msb)
-            (sidecar/send-cc! (+ time-ns 1) ch 98 param-lsb)
-            (sidecar/send-cc! (+ time-ns 2) ch  6 data-msb)
-            (sidecar/send-cc! (+ time-ns 3) ch 38 data-lsb)))
+            (do
+              (sidecar/send-cc! time-ns       ch 99 param-msb)
+              (sidecar/send-cc! (+ time-ns 1) ch 98 param-lsb)
+              (sidecar/send-cc! (+ time-ns 2) ch  6 data-msb)
+              (sidecar/send-cc! (+ time-ns 3) ch 38 data-lsb))
+            (*dispatch-warn-fn* path :midi-nrpn)))
 
         ;; Other binding types: log and skip
         (binding [*out* *err*]

@@ -10,6 +10,162 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.12.0] — 2026-04-15
+
+### Added
+
+#### SC process management (`cljseq.sc`)
+
+- **`start-sc!`** — launches sclang as a managed subprocess and waits for
+  the `/sc-lang-ready` OSC boot gate before calling `connect-sc!`. Stores the
+  `java.lang.Process`, binary path, and script path in sc-state for later
+  restart. Throws on timeout (default 30 s) and destroys the process cleanly.
+- **`stop-sc!`** — `destroyForcibly` on the stored process, then
+  `disconnect-sc!`. Safe to call when no managed process exists.
+- **`sc-restart!`** — full recovery sequence: snapshots `@sent-synthdefs`
+  before stopping (both `stop-sc!` and `connect-sc!` clear the set), then
+  stop → start → re-send all defs. Throws if `start-sc!` was never called
+  (binary unknown). Primary use: audio device reconnect or sclang crash during
+  a live set, without leaving the REPL.
+- **`^:dynamic *process-launcher*`** — test injection point for the sclang
+  subprocess; override with `binding` to unit-test without real sclang.
+- **`supervisor/register-sc!`** now defaults `:restart-fn` to `sc/sc-restart!`
+  instead of nil — the watchdog calls `sc-restart!` automatically when the
+  health check fails, eliminating the need for manual terminal intervention.
+- **`sc-headless.scd`** — sends `NetAddr("127.0.0.1", 57121).sendMsg('/sc-lang-ready')`
+  after scsynth boots and the `/cmd` handler is active; required by `start-sc!`.
+
+#### `sc/ramp-param!`
+
+- **`ramp-param!`** — linearly ramps a live SC node parameter from `from` to
+  `to` over `beats` beats. Uses a future loop sized to the current BPM
+  (~40 ms per step by default). More reliable for long, gradual ramps than
+  `apply-trajectory!`; returns a zero-argument cancel function for early exit.
+  Options: `:steps` (default 40), `:bpm` override.
+
+### Fixed
+
+#### Session arc restart (`sessions/rubycon-core.clj`)
+
+- **`fire-arc!`** — now calls `start-voice-a!` and `start-voice-b!` before
+  firing the conductor, so the `end-silence!` → `fire-arc!` cycle works
+  correctly. Previously `fire-arc!` re-fired the conductor but left the voice
+  loops stopped, producing silence.
+- Voice A and B loops wrapped in named `start-voice-X!` functions;
+  `step-sleeps` atoms promoted to module-level `def`s so the cycle position
+  survives across restarts.
+- Voice C loop (`start-voice-c!`) is no longer auto-started at file load time;
+  it is now called explicitly by `introduce-voice-c!`.
+- `drone-ramp!` now delegates to `sc/ramp-param!` and returns its cancel fn.
+
+### Changed
+
+- **`sessions/rubycon-core.clj`** — added explicit "inspired by Berlin School"
+  disclaimer to file header; removed specific album-title references from
+  comments and variable names (`rubycon-scale` → `session-scale`) to maintain
+  clear artistic distance.
+
+---
+
+## [0.11.0] — 2026-04-14
+
+### Added
+
+#### Process supervisor (`cljseq.supervisor`)
+
+- **`cljseq.supervisor` namespace** — Erlang-style background watchdog that
+  monitors registered services (SC server, sidecar, live loop threads), emits
+  lifecycle events, optionally auto-restarts failed services, and restores
+  last-known state after recovery
+- **Event bus** — `on-event!` / `off-event!` register per-(service, event-type)
+  handlers identified by a user-chosen key; `emit!` fires all registered
+  handlers, swallowing individual handler exceptions so one bad handler can't
+  suppress others
+  - `:up` — service transitioned from `:down`/`:unknown` to `:up`
+  - `:down` — service transitioned from `:up`/`:unknown` to `:down`
+  - `:restore-failed` — restore-fn threw after a recovery
+- **Service registry** — `register!` / `deregister!` with three optional hooks:
+  `:check-fn` (health probe), `:restart-fn` (reconnect attempt), `:restore-fn`
+  (state reload after recovery); `service-status` / `all-statuses` / `any-down?`
+  for status queries
+- **Built-in registrations** — `register-sc!` (health=`sc-connected?`,
+  restore=`resend-sent-synthdefs!`, optional `:restart-fn`) and
+  `register-sidecar!` (health=`sidecar/connected?`,
+  restart=`restart-sidecar!`) wire up the two primary external processes with
+  a single call
+- **Watchdog thread** — `start-watchdog!` / `stop-watchdog!` control a named
+  daemon thread (`cljseq-supervisor-watchdog`) that runs health checks and,
+  optionally, dead loop-thread detection on each tick
+- **BPM-derived scan interval** — when `:interval-ms` is not provided the
+  watchdog sleeps one bar's worth of ms at the current BPM, re-derived each
+  tick so a live `set-bpm!` is automatically reflected; `:bars` (default 1)
+  and `:beats-per-bar` (default reads `core/get-beats-per-bar`) control the
+  period; e.g. dropping to 72 BPM for doom territory slows the watchdog to
+  match without any intervention
+- **Loop pause/resume integration** — `deflive-loop` accepts `:pause-on-down`
+  (list of service names) and `:resume-on-bar` (beat boundary, default 4);
+  when a dependency is `:down` the loop sleeps one `:resume-on-bar` period and
+  retries, maintaining virtual-time continuity without playing into silence; on
+  recovery the loop re-enters at the next beat boundary automatically
+- **29 tests, 34 assertions** in `cljseq.supervisor-test`
+
+#### Global beats-per-bar (`core/system-state`)
+
+- **`:beats-per-bar` in `core/system-state :config`** — global time-signature
+  numerator stored alongside `:bpm`; defaults to `4`
+- **`get-beats-per-bar` / `set-beats-per-bar!`** — accessors exported from
+  `cljseq.user`; `set-beats-per-bar! 3` switches to waltz time globally
+- **`start!` `:beats-per-bar` option** — `(start! :bpm 100 :beats-per-bar 3)`
+  sets both clock and meter at boot; pattern for future meter-aware namespaces
+- **`journey/start-bar-counter!` default** — the no-arg arity now reads
+  `core/get-beats-per-bar` instead of hardcoding 4, so `set-beats-per-bar!`
+  automatically propagates to new bar counters
+- **`supervisor/start-watchdog!` default** — `:beats-per-bar` reads
+  `core/get-beats-per-bar` on each tick when not explicitly overridden
+
+#### Bombproof loop error recovery
+
+- **`catch Throwable` in `deflive-loop`** — loop body exceptions now catch
+  `Throwable` (not just `Exception`), covering `AssertionError`,
+  `OutOfMemoryError`, and other JVM errors; class name is included in the
+  stderr log so errors are diagnosable without killing the loop
+- **Atomic stale-entry check** — the dead-thread cleanup at loop exit is now a
+  single `swap!` that checks and removes the stale entry atomically, preventing
+  a race where two exits could double-remove the same entry
+- **`restart-loop!`** — restarts a dead loop thread aligned to the next N-beat
+  bar boundary (`:align-beats`, default 4); safe to call on a live loop (returns
+  nil); uses the same `-park-until-beat!` / `-start-beat-for-period`
+  infrastructure as `deflive-loop`
+
+#### SC and sidecar reliability
+
+- **`sc-play!` stuck-note containment** — the release-daemon thread now catches
+  and logs `free-synth!` failures (e.g. node already freed by SC server) to
+  stderr instead of swallowing them silently; the caller thread is never
+  interrupted
+- **`resend-sent-synthdefs!`** — clears the sent-synthdefs cache and re-sends
+  all previously loaded synthdefs to sclang; called automatically by
+  `register-sc!` as the restore-fn so synthdefs survive an SC server restart
+- **`restart-sidecar!`** — restarts the sidecar process using the opts from the
+  last `start-sidecar!` call (saved in sidecar state as `:last-start-opts`);
+  called automatically by `register-sidecar!` as the restart-fn
+
+### Changed
+
+- **`start!`** — accepts `:beats-per-bar` alongside `:bpm`; both are stored in
+  `:config` and readable via `get-beats-per-bar`
+- **`journey/start-bar-counter!`** — no-arg arity reads `core/get-beats-per-bar`
+  (was hardcoded to 4); explicit-arity form still accepts a positional override
+
+### Sessions
+
+- **`sessions/rubycon-core.clj`** — Berlin School polyrhythmic session extended
+  with a fourth S42 drone voice (SC-only; `drone-ramp!` fade helper), full
+  four-movement arc wiring (`begin-emergence!` through `end-silence!`),
+  Frippertronics SOS buffer section, and REPL variation palette
+
+---
+
 ## [0.10.0] — 2026-04-11
 
 ### Added
