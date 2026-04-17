@@ -1,6 +1,6 @@
 # cljseq User Manual
 
-Version 0.9.0 · April 2026
+Version 0.14.0 · April 2026
 
 ---
 
@@ -44,6 +44,7 @@ Version 0.9.0 · April 2026
 36. [MIDI Input (`cljseq.midi-in`)](#36-midi-input-cljseqmidi-in)
 37. [Process Supervisor (`cljseq.supervisor`)](#37-process-supervisor-cljseqsupervisor)
 38. [Reference: REPL Commands and Step Keys](#38-reference)
+39. [Browser Control Surface (`cljseq-ui`)](#39-browser-control-surface)
 
 ---
 
@@ -3639,6 +3640,89 @@ All durations are in **beats** (quarter notes at the current BPM).
 | `1/8` | eighth beat — 32nd note |
 | `1/3` | triplet eighth |
 | `2/3` | triplet quarter |
+
+---
+
+## 39. Browser Control Surface
+
+The browser control surface is a ClojureScript + Reagent application served
+directly by the cljseq HTTP server. It gives you a live view of the ctrl tree
+during a session without having to stay in the REPL.
+
+Open `http://localhost:7177/` after starting the server. The page requires the
+CLJS build to have run (see below); before that, the HTML shell loads but
+JavaScript is absent.
+
+### What it shows
+
+Two side-by-side panels fill the window:
+
+| Panel | Contents |
+|-------|----------|
+| **Ctrl tree** | All current ctrl-tree values, sorted by path, updated in real time |
+| **Changes log** | Last 60 writes, newest at top, with a brief green flash on arrival |
+
+The header shows **BPM** (extracted from the ctrl tree) and a connection badge:
+**LIVE** (green) when the WebSocket is open, **connecting** (amber) while
+reconnecting, **OFFLINE** (red) if the server is unreachable. The connection
+auto-recovers after 3 seconds.
+
+### Building the UI
+
+The CLJS source is in `src/cljseq_ui/core.cljs`. It compiles to
+`resources/public/js/main.js` (gitignored). You need Node.js and npm.
+
+```sh
+# First time — install shadow-cljs, react, and react-dom
+npm install
+
+# Production build (single pass, minified) — run before a session
+npx shadow-cljs release app
+
+# Development — watch mode with hot-reload on CLJS saves
+npx shadow-cljs watch app
+```
+
+The lein build (`lein test`, `lein uberjar`) is entirely independent of the
+CLJS build. You do not need npm for any JVM-side operation.
+
+### Workflow
+
+```clojure
+;; In the REPL — start the server (default port 7177)
+(server/start-server!)
+
+;; Then open http://localhost:7177/ in a browser.
+;; Any ctrl/set! call appears in both panels immediately.
+
+;; The UI also writes back — changes from the browser arrive via ctrl/set!
+;; on the server (logical write only; does not dispatch MIDI CC).
+```
+
+### Build outputs and gitignore
+
+| Path | Status |
+|------|--------|
+| `resources/public/index.html` | Committed — HTML shell |
+| `resources/public/css/style.css` | Committed — dark theme stylesheet |
+| `resources/public/js/` | **Gitignored** — compiled CLJS output |
+| `node_modules/` | **Gitignored** — npm packages |
+| `.shadow-cljs/` | **Gitignored** — shadow-cljs build cache |
+
+### Architecture note
+
+The control surface is Step 2 of a planned web UI sequence:
+
+| Step | Version | Feature |
+|------|---------|---------|
+| 1 | v0.13.0 | `/ws` WebSocket endpoint + `watch-global!` in `cljseq.ctrl` |
+| 2 | v0.14.0 | ClojureScript + Reagent frontend served from http-kit |
+| 3 | planned | `defdevice :ui` key — device layout drives control surface generation |
+| 4 | planned | Tauri packaging — `.app` wrapping JVM + scsynth as sidecars |
+
+Steps 1 and 2 are complete. The control surface at Step 2 is a general-purpose
+ctrl-tree observer; Step 3 will add device-specific panels generated from the
+device model data.
 
 ---
 
