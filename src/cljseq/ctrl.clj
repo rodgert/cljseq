@@ -473,7 +473,7 @@
         [path binding]))))
 
 (defn all-nodes
-  "Return a seq of {:path [...] :value v :type kw} maps for every ctrl node.
+  "Return a seq of {:path [...] :value v :type kw :node-meta m} maps for every ctrl node.
 
   Walks the entire tree; useful for serialising the tree to external consumers
   (e.g. the control-plane HTTP server).  Returns an empty seq if the system is
@@ -481,13 +481,14 @@
 
   Example:
     (ctrl/all-nodes)
-    ;; => ({:path [:filter/cutoff] :value 0.5 :type :float} ...)"
+    ;; => ({:path [:filter/cutoff] :value 0.5 :type :float :node-meta {:range [0.0 1.0]}} ...)"
   []
   (if-let [s @system-ref]
     (map (fn [[path node]]
-           {:path  path
-            :value (:value node)
-            :type  (:type node)})
+           {:path      path
+            :value     (:value node)
+            :type      (:type node)
+            :node-meta (or (:node-meta node) {})})
          (walk-nodes (:tree @s) []))
     []))
 
