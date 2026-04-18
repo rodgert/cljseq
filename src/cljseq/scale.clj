@@ -245,3 +245,36 @@
   "Return true if pitch `p` is a member of scale `s` (ignoring octave)."
   [s p]
   (some? (degree-of s (pitch/->pitch p))))
+
+;; ---------------------------------------------------------------------------
+;; Generative helpers
+;; ---------------------------------------------------------------------------
+
+(defn choose-from-scale
+  "Return a random MIDI note from the given key and scale.
+
+  Accepts:
+    (choose-from-scale :C :major)              ; keyword key + scale name
+    (choose-from-scale :C :major :octave 3)    ; specify octave
+    (choose-from-scale :D scale-record)        ; Scale record
+
+  When a Scale record is passed, the root of the record is used directly
+  and `key` determines the octave override only."
+  [key scale & {:keys [octave] :or {octave 4}}]
+  (cond
+    (instance? Scale scale)
+    (pitch/pitch->midi
+      (pitch-at scale (rand-int (count (:intervals scale)))))
+
+    (keyword? scale)
+    (let [root    (pitch/pitch->midi (pitch/keyword->pitch
+                                       (keyword (str (name key) octave))))
+          s       (named-scale scale)
+          offsets (if s
+                    (vec (butlast (reductions + 0 (:intervals s))))
+                    [0 2 4 5 7 9 11])]
+      (+ root (rand-nth offsets)))
+
+    :else
+    (throw (ex-info "choose-from-scale: scale must be keyword or Scale record"
+                    {:scale scale}))))

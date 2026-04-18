@@ -1,0 +1,561 @@
+;; Hydrasynth Phrase Library — 64 built-in phrases
+;;
+;; Source: ASM Hydrasynth Deluxe Owner's Manual v2.2, pp. 120-123
+;;         Hydrasynth Explorer Addendum v2.0.0, pp. 12-15
+;;
+;; Format — :type :phrase
+;;   :steps  — vector of {:semi n :beats b} or {:rest true :beats b}
+;;   :semi   — semitone offset from the held root note (0 = root, 12 = octave up)
+;;   :beats  — duration in quarter notes (1/4=sixteenth, 1/2=eighth, 1=quarter,
+;;              3/2=dotted-quarter, 2=half, 3=dotted-half, 4=whole)
+;;
+;; All phrases are notated in C (treble clef, no key signature) at ♩=120 in 4/4 time.
+;; Each phrase spans two measures (8 beats total) unless shortened by a rest at the end.
+;; On the Hydrasynth the phrase transposes relative to the lowest held note.
+;;
+;; Transcription notes:
+;;   - Notation read from PDF score images; complex 16th-note passages are approximate.
+;;   - :verified? false — cross-check against hardware before relying on exact pitches.
+;;   - Semitone reference: C4=0, D4=2, Eb4=3, E4=4, F4=5, F#4=6, G4=7, Ab4=8,
+;;     A4=9, Bb4=10, B4=11, C5=12, D5=14, Eb5=15, E5=16, F5=17, G5=19, A5=21.
+
+[
+ ;; ── Phrases 1–16 ────────────────────────────────────────────────────────────
+
+ {:id 1 :name "Phrase 01" :verified? false
+  :steps [{:semi 12 :beats 1} {:semi 14 :beats 1} {:semi 16 :beats 1} {:semi 14 :beats 1}
+          {:semi 12 :beats 1} {:semi 10 :beats 1} {:semi 12 :beats 1} {:semi 14 :beats 1}]}
+
+ {:id 2 :name "Phrase 02" :verified? false
+  :steps [{:semi 4 :beats 1/2} {:semi 5 :beats 1/2} {:semi 7 :beats 1/2} {:semi 9 :beats 1/2}
+          {:rest true :beats 1/2} {:semi 10 :beats 3/2}
+          {:semi 2 :beats 1/2} {:semi 4 :beats 1/2} {:semi 5 :beats 1/2} {:semi 7 :beats 1/2}
+          {:rest true :beats 1/2} {:semi 12 :beats 3/2}]}
+
+ {:id 3 :name "Phrase 03" :verified? false
+  ;; Dense ascending/descending 16th run with chromatic passing tones (Bb)
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 2  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 17 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4}]}
+
+ {:id 4 :name "Phrase 04" :verified? false
+  ;; Wide-range 16th figuration, ascending then descending with Bb
+  :steps [{:semi 2  :beats 1/4} {:semi 4  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4}
+          {:semi 17 :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 19 :beats 1/4}
+          {:semi 17 :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 4  :beats 1/4}]}
+
+ {:id 5 :name "Phrase 05" :verified? false
+  ;; Repeating G-A-Bb-C cell in 8th notes with variation
+  :steps [{:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:semi 10 :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:semi 10 :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:semi 10 :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 7  :beats 1/2} {:semi 5  :beats 1/2} {:semi 4  :beats 1/2} {:semi 5  :beats 1/2}]}
+
+ {:id 6 :name "Phrase 06" :verified? false
+  ;; Ascending 8th-note run through Bb passing tone, continuing in bar 2
+  :steps [{:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:semi 10 :beats 1/2}
+          {:semi 12 :beats 1/2} {:semi 14 :beats 1/2} {:semi 17 :beats 1/2} {:semi 16 :beats 1/2}
+          {:semi 14 :beats 1/2} {:semi 12 :beats 1/2} {:semi 10 :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 7  :beats 1/2} {:semi 5  :beats 1/2} {:semi 4  :beats 1/2} {:semi 2  :beats 1/2}]}
+
+ {:id 7 :name "Phrase 07" :verified? false
+  ;; Fast ascending 16th run then stepwise descent — two bars
+  :steps [{:semi 2  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4}
+          {:semi 2  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4}
+          {:semi 17 :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}]}
+
+ {:id 8 :name "Phrase 08" :verified? false
+  ;; Dense 16th figuration with multiple Bb passing tones
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}]}
+
+ {:id 9 :name "Phrase 09" :verified? false
+  ;; Wide-interval 16th jumps with rests — syncopated, leaping across octaves
+  :steps [{:semi 4  :beats 1/4} {:semi 16 :beats 1/4} {:semi 5  :beats 1/4} {:semi 17 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 19 :beats 1/4} {:semi 9  :beats 1/4} {:semi 21 :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 22 :beats 1/4} {:semi 9  :beats 1/4} {:semi 21 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 19 :beats 1/4} {:semi 5  :beats 1/4} {:semi 17 :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 16 :beats 1/4} {:rest true :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 16 :beats 1/4} {:rest true :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 10 :beats 1/4} {:rest true :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}]}
+
+ {:id 10 :name "Phrase 10" :verified? false
+  ;; Dense 16ths starting with Bb — chromatic ascending/descending
+  :steps [{:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}]}
+
+ {:id 11 :name "Phrase 11" :verified? false
+  ;; Mixed rhythms with Bb and natural cancellation
+  :steps [{:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:semi 10 :beats 1/2}
+          {:semi 12 :beats 1/2} {:semi 11 :beats 1/2} {:semi 10 :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:semi 10 :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/2} {:semi 7  :beats 1/2}]}
+
+ {:id 12 :name "Phrase 12" :verified? false
+  ;; Syncopated 16th notes with rests — staccato rhythmic figure
+  :steps [{:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:rest true :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:rest true :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 17 :beats 1/4} {:rest true :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 17 :beats 1/4} {:rest true :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:rest true :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:rest true :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:rest true :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:rest true :beats 1/4}]}
+
+ {:id 13 :name "Phrase 13" :verified? false
+  ;; Ascending broken-chord 8th notes — two bars
+  :steps [{:semi 2  :beats 1/2} {:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:semi 7  :beats 1/2}
+          {:semi 9  :beats 1/2} {:semi 10 :beats 1/2} {:semi 12 :beats 1/2} {:semi 14 :beats 1/2}
+          {:semi 12 :beats 1/2} {:semi 14 :beats 1/2} {:semi 16 :beats 1/2} {:semi 14 :beats 1/2}
+          {:semi 12 :beats 1/2} {:semi 10 :beats 1/2} {:semi 9  :beats 1/2} {:semi 7  :beats 1/2}]}
+
+ {:id 14 :name "Phrase 14" :verified? false
+  ;; Simple quarter-note melody ending with Bb passing tone
+  :steps [{:semi 7  :beats 1} {:semi 9  :beats 1} {:semi 11 :beats 1} {:semi 9  :beats 1}
+          {:semi 7  :beats 1} {:semi 5  :beats 1} {:semi 10 :beats 1} {:semi 9  :beats 1}]}
+
+ {:id 15 :name "Phrase 15" :verified? false
+  ;; Very dense chromatic run — multiple flats (Bb, Ab, Eb)
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 3  :beats 1/4} {:semi 4  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 8  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 8  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 3  :beats 1/4} {:semi 2  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 8  :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 8  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 3  :beats 1/4}
+          {:semi 2  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}]}
+
+ {:id 16 :name "Phrase 16" :verified? false
+  ;; Fast ascending 16th-note run over two bars
+  :steps [{:semi 2  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 17 :beats 1/4} {:semi 19 :beats 1/4} {:semi 17 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 17 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}]}
+
+ ;; ── Phrases 17–32 ───────────────────────────────────────────────────────────
+
+ {:id 17 :name "Phrase 17" :verified? false
+  ;; Ascending 8th pattern with Bb, rests create syncopated feel
+  :steps [{:semi 4  :beats 1/2} {:semi 7  :beats 1/2} {:semi 10 :beats 1/2} {:semi 12 :beats 1/2}
+          {:rest true :beats 1/2} {:semi 14 :beats 1/2} {:semi 16 :beats 1/2} {:semi 10 :beats 1/2}
+          {:semi 12 :beats 1/2} {:semi 14 :beats 1/2} {:semi 16 :beats 1/2} {:semi 10 :beats 1/2}
+          {:rest true :beats 1/2} {:semi 12 :beats 1/2} {:semi 10 :beats 1/2} {:semi 7  :beats 1/2}]}
+
+ {:id 18 :name "Phrase 18" :verified? false
+  ;; Syncopated 8ths with Bb, alternating rests
+  :steps [{:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1}
+          {:rest true :beats 1/2} {:semi 12 :beats 1/2} {:rest true :beats 1/2}
+          {:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1}
+          {:rest true :beats 1/2} {:semi 12 :beats 3/2}]}
+
+ {:id 19 :name "Phrase 19" :verified? false
+  ;; Dense 16ths with Bb — two-bar ascending/oscillating figure
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}]}
+
+ {:id 20 :name "Phrase 20" :verified? false
+  ;; Moderate density — ascending 16ths then 8th/quarter descent with Bb
+  :steps [{:semi 2  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4}
+          {:semi 14 :beats 1/2} {:semi 12 :beats 1/2} {:semi 10 :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 2  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/2} {:semi 14 :beats 1/2} {:semi 12 :beats 1/2} {:semi 10 :beats 1/2}]}
+
+ {:id 21 :name "Phrase 21" :verified? false
+  ;; Wide interval jumps — ascending leap pattern with Bb
+  :steps [{:semi 4  :beats 1/2} {:semi 12 :beats 1/2} {:semi 5  :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 7  :beats 1/2} {:semi 10 :beats 1/2} {:semi 7  :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 4  :beats 1/2} {:semi 12 :beats 1/2} {:semi 7  :beats 1/2} {:semi 10 :beats 1/2}
+          {:semi 9  :beats 1/2} {:semi 14 :beats 1/2} {:semi 12 :beats 1/2} {:semi 9  :beats 1/2}]}
+
+ {:id 22 :name "Phrase 22" :verified? false
+  ;; 8th notes with Bb and brief rests
+  :steps [{:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:semi 10 :beats 1/2}
+          {:rest true :beats 1/2} {:semi 12 :beats 1/2} {:semi 14 :beats 1/2} {:rest true :beats 1/2}
+          {:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:semi 10 :beats 1/2} {:rest true :beats 1/2}
+          {:semi 12 :beats 1/2} {:semi 14 :beats 1/2} {:semi 16 :beats 1/2} {:rest true :beats 1/2}]}
+
+ {:id 23 :name "Phrase 23" :verified? false
+  ;; Dense 8th-note pattern oscillating around Bb
+  :steps [{:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:semi 10 :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 10 :beats 1/2} {:semi 7  :beats 1/2} {:semi 5  :beats 1/2} {:semi 4  :beats 1/2}
+          {:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:semi 10 :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 14 :beats 1/2} {:semi 12 :beats 1/2} {:semi 10 :beats 1/2} {:semi 7  :beats 1/2}]}
+
+ {:id 24 :name "Phrase 24" :verified? false
+  ;; Syncopated Bb quarter notes with rests — sparse rhythmic figure
+  :steps [{:semi 12 :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1}
+          {:rest true :beats 1/2} {:semi 12 :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1}
+          {:rest true :beats 1/2} {:semi 12 :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1}
+          {:rest true :beats 1/2} {:semi 12 :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1}]}
+
+ {:id 25 :name "Phrase 25" :verified? false
+  ;; Ascending then descending 8th note run — diatonic, clean
+  :steps [{:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 10 :beats 1/2} {:semi 12 :beats 1/2} {:semi 14 :beats 1/2} {:semi 16 :beats 1/2}
+          {:semi 14 :beats 1/2} {:semi 12 :beats 1/2} {:semi 10 :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 7  :beats 1/2} {:semi 5  :beats 1/2} {:semi 4  :beats 1/2} {:semi 2  :beats 1/2}]}
+
+ {:id 26 :name "Phrase 26" :verified? false
+  ;; Dense 16th figuration — oscillating around a central pitch
+  :steps [{:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 11 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 11 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 11 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 11 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 11 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 11 :beats 1/4} {:semi 12 :beats 1/4} {:semi 11 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 2  :beats 1/4}]}
+
+ {:id 27 :name "Phrase 27" :verified? false
+  ;; Mixed rhythm with dotted notes and Bb — jazz-inflected
+  :steps [{:semi 5  :beats 3/2} {:semi 7  :beats 1/2} {:semi 10 :beats 1} {:semi 9  :beats 1}
+          {:semi 7  :beats 3/4} {:semi 5  :beats 1/4} {:rest true :beats 1/2} {:semi 7  :beats 3/2}
+          {:semi 10 :beats 1/2} {:semi 12 :beats 1} {:semi 10 :beats 3/4} {:semi 9 :beats 1/4}
+          {:semi 7  :beats 1} {:semi 5  :beats 3/2} {:semi 10 :beats 1/2}]}
+
+ {:id 28 :name "Phrase 28" :verified? false
+  ;; Simple quarter-note melody — clean diatonic
+  :steps [{:semi 7  :beats 1} {:semi 9  :beats 1} {:semi 12 :beats 1} {:semi 9  :beats 1}
+          {:semi 7  :beats 1} {:semi 5  :beats 1} {:semi 4  :beats 1} {:semi 5  :beats 1}]}
+
+ {:id 29 :name "Phrase 29" :verified? false
+  ;; 16th-note runs — two bars of flowing figuration
+  :steps [{:semi 4  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4}
+          {:semi 17 :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}]}
+
+ {:id 30 :name "Phrase 30" :verified? false
+  ;; Short ascending phrase + half-bar rest — Phrase 30 fills ~4 beats only
+  :steps [{:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:semi 10 :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 14 :beats 1/2} {:semi 12 :beats 1/2} {:semi 10 :beats 1/2} {:semi 9  :beats 1/2}
+          {:rest true :beats 4}]}
+
+ {:id 31 :name "Phrase 31" :verified? false
+  ;; Short simple ascending + rest
+  :steps [{:semi 2  :beats 1/2} {:semi 4  :beats 1/2} {:semi 7  :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 12 :beats 1} {:semi 14 :beats 1}
+          {:rest true :beats 4}]}
+
+ {:id 32 :name "Phrase 32" :verified? false
+  ;; Dense start (16th runs) transitioning to syncopated quarter/8th figures
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 10 :beats 1/2} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:rest true :beats 1/2}
+          {:semi 9  :beats 1/2} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/2}]}
+
+ ;; ── Phrases 33–48 ───────────────────────────────────────────────────────────
+
+ {:id 33 :name "Phrase 33" :verified? false
+  ;; Dense 16ths with Bb across three bars of material — chromatic ascending
+  :steps [{:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 17 :beats 1/4} {:semi 16 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4}]}
+
+ {:id 34 :name "Phrase 34" :verified? false
+  ;; Mixed dotted eighth / sixteenth — short-long rhythmic pattern
+  :steps [{:semi 4  :beats 3/4} {:semi 5  :beats 1/4} {:semi 7  :beats 3/4} {:semi 9  :beats 1/4}
+          {:semi 10 :beats 1} {:rest true :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 10 :beats 3/4} {:semi 9  :beats 1/4} {:semi 7  :beats 3/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1} {:rest true :beats 1/2} {:semi 9  :beats 1/2}]}
+
+ {:id 35 :name "Phrase 35" :verified? false
+  ;; Short phrase — ascending run with Bb, then long rest
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 17 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:rest true :beats 4}]}
+
+ {:id 36 :name "Phrase 36" :verified? false
+  ;; Short phrase — ascending with sharp (#), then rest
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 8  :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 11 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 11 :beats 1/4}
+          {:rest true :beats 4}]}
+
+ {:id 37 :name "Phrase 37" :verified? false
+  ;; Syncopated 8th/quarter pattern with rests
+  :steps [{:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:rest true :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 9  :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1}
+          {:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:rest true :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 10 :beats 1/2} {:rest true :beats 1/2} {:semi 9  :beats 1}]}
+
+ {:id 38 :name "Phrase 38" :verified? false
+  ;; Dense 16ths with Bb — oscillating chromatic figure
+  :steps [{:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 8  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:rest true :beats 1/2} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 8  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 8  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4}]}
+
+ {:id 39 :name "Phrase 39" :verified? false
+  ;; Ascending 8th run with dotted-quarter Bb note
+  :steps [{:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:semi 9  :beats 1/2}
+          {:rest true :beats 1/2} {:semi 10 :beats 3/2}
+          {:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:semi 10 :beats 1/2} {:semi 12 :beats 1/2}
+          {:rest true :beats 1/2} {:semi 14 :beats 3/2}]}
+
+ {:id 40 :name "Phrase 40" :verified? false
+  ;; Short phrase — descending with Bb, then long rest
+  :steps [{:semi 10 :beats 1/2} {:semi 12 :beats 1/2} {:semi 14 :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 10 :beats 1/2} {:semi 9  :beats 1/2} {:semi 7  :beats 1/2} {:semi 5  :beats 1/2}
+          {:rest true :beats 4}]}
+
+ {:id 41 :name "Phrase 41" :verified? false
+  ;; Dense chromatic 16th runs — Bb and Ab passing tones
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 8  :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 8  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 8  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 8  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 8  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}]}
+
+ {:id 42 :name "Phrase 42" :verified? false
+  ;; Simple quarter-note melody — one of the most basic phrases
+  :steps [{:semi 4  :beats 1} {:semi 7  :beats 1} {:semi 9  :beats 1} {:semi 12 :beats 1}
+          {:semi 9  :beats 1} {:semi 7  :beats 1} {:semi 5  :beats 1} {:semi 4  :beats 1}]}
+
+ {:id 43 :name "Phrase 43" :verified? false
+  ;; Dense 16ths with Bb — chromatic neighbor-note figuration
+  :steps [{:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 2  :beats 1/4} {:semi 4  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}]}
+
+ {:id 44 :name "Phrase 44" :verified? false
+  ;; Dense 16ths — ascending Bb-inflected run with return
+  :steps [{:semi 2  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 13 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 2  :beats 1/4} {:semi 4  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 13 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}]}
+
+ {:id 45 :name "Phrase 45" :verified? false
+  ;; Short ascending phrase with 8th notes then rest
+  :steps [{:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:semi 9  :beats 1/2}
+          {:rest true :beats 1/2} {:semi 12 :beats 3/2}
+          {:semi 14 :beats 1/2} {:semi 16 :beats 1/2}
+          {:rest true :beats 3}]}
+
+ {:id 46 :name "Phrase 46" :verified? false
+  ;; Dense 16th runs — two bars of fast ascending/descending
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 17 :beats 1/4}
+          {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4}]}
+
+ {:id 47 :name "Phrase 47" :verified? false
+  ;; Syncopated pattern with 8th rests — sparse punchy figure
+  :steps [{:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:rest true :beats 1/2} {:semi 12 :beats 1}
+          {:rest true :beats 1/2} {:semi 14 :beats 1/2} {:rest true :beats 1/2}
+          {:semi 9  :beats 1/2} {:semi 7  :beats 1/2} {:rest true :beats 1/2} {:semi 9  :beats 1}
+          {:rest true :beats 1/2} {:semi 7  :beats 1/2} {:rest true :beats 1/2}]}
+
+ {:id 48 :name "Phrase 48" :verified? false
+  ;; Syncopated 8th pattern with Bb
+  :steps [{:semi 4  :beats 1/2} {:semi 7  :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1/2}
+          {:semi 12 :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1/2} {:semi 7  :beats 1/2}
+          {:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1/2}
+          {:semi 12 :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1/2} {:semi 7  :beats 1/2}]}
+
+ ;; ── Phrases 49–64 ───────────────────────────────────────────────────────────
+
+ {:id 49 :name "Phrase 49" :verified? false
+  ;; Short ascending phrase then long rest
+  :steps [{:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/2} {:rest true :beats 1/2}
+          {:semi 14 :beats 1} {:semi 16 :beats 1}
+          {:rest true :beats 4}]}
+
+ {:id 50 :name "Phrase 50" :verified? false
+  ;; Dense ascending 16th-note run — wide range
+  :steps [{:semi 2  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4}
+          {:semi 17 :beats 1/4} {:semi 19 :beats 1/4} {:semi 17 :beats 1/4} {:semi 16 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 16 :beats 1/4} {:semi 17 :beats 1/4} {:semi 19 :beats 1/4}
+          {:semi 21 :beats 1/4} {:semi 19 :beats 1/4} {:semi 17 :beats 1/4} {:semi 16 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}]}
+
+ {:id 51 :name "Phrase 51" :verified? false
+  ;; Mixed register with Bb — descending phrase with octave drop
+  :steps [{:semi 16 :beats 1/2} {:semi 14 :beats 1/2} {:semi 12 :beats 1/2} {:semi 10 :beats 1/2}
+          {:semi 9  :beats 1/2} {:semi 7  :beats 1/2} {:semi 5  :beats 1/2} {:semi 4  :beats 1/2}
+          {:semi 2  :beats 1/2} {:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:semi 7  :beats 1/2}
+          {:semi 9  :beats 1/2} {:semi 7  :beats 1/2} {:semi 5  :beats 1/2} {:semi 4  :beats 1/2}]}
+
+ {:id 52 :name "Phrase 52" :verified? false
+  ;; Syncopated 8th-note figure with Bb and rests
+  :steps [{:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1}
+          {:rest true :beats 1/2} {:semi 12 :beats 1}
+          {:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:rest true :beats 1/2} {:semi 10 :beats 1}
+          {:rest true :beats 1/2} {:semi 14 :beats 1}]}
+
+ {:id 53 :name "Phrase 53" :verified? false
+  ;; Dense 16th notes — steady eighth-triplet feel
+  :steps [{:semi 4  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 4  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 4  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 4  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 16 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}]}
+
+ {:id 54 :name "Phrase 54" :verified? false
+  ;; Ascending 8th-note pattern with dotted-quarter Bb
+  :steps [{:semi 4  :beats 1/2} {:semi 5  :beats 1/2} {:semi 7  :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 10 :beats 3/2} {:semi 12 :beats 1/2}
+          {:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:semi 10 :beats 1/2} {:semi 12 :beats 1/2}
+          {:semi 14 :beats 3/2} {:semi 12 :beats 1/2}]}
+
+ {:id 55 :name "Phrase 55" :verified? false
+  ;; Mixed rhythm with rests and Bb — jazz phrasing
+  :steps [{:semi 7  :beats 1/2} {:semi 9  :beats 1/2} {:semi 12 :beats 1/2} {:semi 14 :beats 1/2}
+          {:semi 12 :beats 3/4} {:semi 9  :beats 1/4} {:rest true :beats 1/2} {:semi 10 :beats 3/2}
+          {:semi 9  :beats 1/2} {:semi 7  :beats 1/2} {:semi 5  :beats 1/2} {:semi 7  :beats 1/2}
+          {:rest true :beats 1/2} {:semi 10 :beats 3/2}]}
+
+ {:id 56 :name "Phrase 56" :verified? false
+  ;; Syncopated quarter-note figure with rests
+  :steps [{:semi 7  :beats 1} {:rest true :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 12 :beats 1} {:rest true :beats 1/2} {:semi 9  :beats 1/2}
+          {:semi 7  :beats 1} {:rest true :beats 1/2} {:semi 5  :beats 1/2}
+          {:semi 7  :beats 1} {:rest true :beats 1/2} {:semi 9  :beats 1/2}]}
+
+ {:id 57 :name "Phrase 57" :verified? false
+  ;; Ascending 8th/quarter pattern ending with Bb
+  :steps [{:semi 4  :beats 1/2} {:semi 7  :beats 1/2} {:semi 9  :beats 1} {:semi 12 :beats 1}
+          {:semi 14 :beats 1/2} {:semi 10 :beats 1/2} {:semi 9  :beats 1} {:semi 7  :beats 1}]}
+
+ {:id 58 :name "Phrase 58" :verified? false
+  ;; Dense opening then slower figures with Bb
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 7  :beats 1/2} {:semi 10 :beats 1} {:semi 9  :beats 3/2}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/2} {:semi 10 :beats 1} {:semi 12 :beats 3/2}]}
+
+ {:id 59 :name "Phrase 59" :verified? false
+  ;; Complex syncopated wide-range figure — crosses two octaves
+  :steps [{:semi 4  :beats 1/4} {:semi 12 :beats 1/4} {:semi 4  :beats 1/4} {:semi 16 :beats 1/4}
+          {:rest true :beats 1/2} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 16 :beats 1/4} {:semi 7  :beats 1/4} {:semi 19 :beats 1/4}
+          {:rest true :beats 1/2} {:semi 17 :beats 1/4} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 10 :beats 1/4} {:semi 14 :beats 1/4} {:semi 10 :beats 1/4} {:semi 17 :beats 1/4}
+          {:rest true :beats 1/2} {:semi 16 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}]}
+
+ {:id 60 :name "Phrase 60" :verified? false
+  ;; Short phrase — descending with Bb, then long rest
+  :steps [{:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/2}
+          {:rest true :beats 5}]}
+
+ {:id 61 :name "Phrase 61" :verified? false
+  ;; Short ascending phrase + long rest
+  :steps [{:semi 2  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 14 :beats 1/4}
+          {:semi 16 :beats 1/2} {:semi 14 :beats 1/2} {:semi 12 :beats 1/2}
+          {:rest true :beats 5}]}
+
+ {:id 62 :name "Phrase 62" :verified? false
+  ;; Dense 16ths with one tied note — flowing two-bar figure
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 12 :beats 3/2}  ; tied note (dotted quarter)
+          {:semi 9  :beats 1/4} {:semi 7  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4}]}
+
+ {:id 63 :name "Phrase 63" :verified? false
+  ;; Dense 16th figuration — ascending/descending broken pattern
+  :steps [{:semi 4  :beats 1/4} {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 7  :beats 1/4} {:semi 12 :beats 1/4} {:semi 7  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 9  :beats 1/4} {:semi 14 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 9  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 12 :beats 1/4} {:semi 16 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 12 :beats 1/4} {:semi 16 :beats 1/4} {:semi 12 :beats 1/4}
+          {:semi 9  :beats 1/4} {:semi 12 :beats 1/4} {:semi 16 :beats 1/4} {:semi 12 :beats 1/4}]}
+
+ {:id 64 :name "Phrase 64" :verified? false
+  ;; Dense with Bb — oscillating chromatic closing phrase
+  :steps [{:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 5  :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 4  :beats 1/4} {:semi 5  :beats 1/4} {:semi 7  :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 12 :beats 1/4} {:semi 14 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 10 :beats 1/4} {:semi 12 :beats 1/4} {:semi 10 :beats 1/4}
+          {:semi 7  :beats 1/4} {:semi 5  :beats 1/4} {:semi 4  :beats 1/4} {:semi 2  :beats 1/4}]}
+]

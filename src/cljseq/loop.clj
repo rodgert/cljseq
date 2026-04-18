@@ -73,7 +73,7 @@
   nil means no context — channel 1, velocity 64 are the fallback defaults.
 
   Bound per-thread by deflive-loop (from the :synth key in opts) and by
-  cljseq.dsl/with-synth. Set at the REPL root with cljseq.dsl/use-synth!.
+  cljseq.live/with-synth. Set at the REPL root with cljseq.live/use-synth!.
 
   Example context map:
     {:midi/channel 3 :mod/velocity 100}"
@@ -85,7 +85,7 @@
   or nil for no timing modification.
 
   Bound per-thread by deflive-loop (from the :timing key in opts) and by
-  cljseq.dsl/with-timing. Set at the REPL root with cljseq.dsl/use-timing!."
+  cljseq.live/with-timing. Set at the REPL root with cljseq.live/use-timing!."
   nil)
 
 (def ^:dynamic *mod-ctx*
@@ -97,7 +97,7 @@
   to ctrl/send!.
 
   Bound per-thread by deflive-loop (from the :mod key in opts) and by
-  cljseq.dsl/with-mod. Set at the REPL root with cljseq.dsl/use-mod!.
+  cljseq.live/with-mod. Set at the REPL root with cljseq.live/use-mod!.
 
   Example context map:
     {[:filter/cutoff] (mod/lfo (->Phasor 1/4 0) phasor/sine-uni)
@@ -114,7 +114,7 @@
   gate length, or pitch.
 
   Bound per-thread by deflive-loop (from the :step-mods key in opts) and by
-  cljseq.dsl/with-step-mods. Set at the REPL root with cljseq.dsl/use-step-mods!.
+  cljseq.live/with-step-mods. Set at the REPL root with cljseq.live/use-step-mods!.
 
   Example:
     {[:mod/velocity] (mod/lfo (->Phasor 1/4 0) phasor/triangle)
@@ -129,7 +129,7 @@
   current key/scale without hard-coding MIDI numbers.
 
   Bound per-thread by deflive-loop (from the :harmony key in opts) and by
-  cljseq.dsl/with-harmony. Set at the REPL root with cljseq.dsl/use-harmony!.
+  cljseq.live/with-harmony. Set at the REPL root with cljseq.live/use-harmony!.
 
   Example:
     (scale/scale :C 4 :major)      ; C major, root C4
@@ -145,7 +145,7 @@
   cycle upward by octave.
 
   Bound per-thread by deflive-loop (from the :chord key in opts) and by
-  cljseq.dsl/with-chord. Set at the REPL root with cljseq.dsl/use-chord!.
+  cljseq.live/with-chord. Set at the REPL root with cljseq.live/use-chord!.
 
   Example:
     (chord/chord :C 4 :maj7)   ; Cmaj7 as chord context"
@@ -165,7 +165,7 @@
   :x (unmapped), pass through unchanged.
 
   Bound per-thread by deflive-loop (from the :tuning key in opts) and by
-  cljseq.dsl/with-tuning. Set at the REPL root with cljseq.dsl/use-tuning!.
+  cljseq.live/with-tuning. Set at the REPL root with cljseq.live/use-tuning!.
 
   Example:
     {:scale (scala/load-scl \"31edo.scl\")}

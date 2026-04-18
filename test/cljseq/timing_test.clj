@@ -4,7 +4,7 @@
   (:require [clojure.test  :refer [deftest is testing]]
             [cljseq.clock  :as clock]
             [cljseq.core   :as core]
-            [cljseq.dsl    :as dsl]
+            [cljseq.live  :as live]
             [cljseq.loop   :as loop-ns]
             [cljseq.timing :as timing]))
 
@@ -168,12 +168,12 @@
           captured (atom nil)]
       ;; Capture *timing-ctx* directly from inside the body rather than
       ;; redeffing clock/sample (protocol dispatch doesn't reliably intercept).
-      (dsl/with-timing sw
+      (live/with-timing sw
         (reset! captured loop-ns/*timing-ctx*))
       (is (= sw @captured) "*timing-ctx* was bound inside with-timing scope")))
   (testing "with-timing restores nil after the block"
     (binding [loop-ns/*timing-ctx* nil]
-      (dsl/with-timing (timing/swing)
+      (live/with-timing (timing/swing)
         (is (some? loop-ns/*timing-ctx*)))
       (is (nil? loop-ns/*timing-ctx*) "restored after block"))))
 

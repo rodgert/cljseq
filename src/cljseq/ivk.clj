@@ -405,7 +405,8 @@
   "Start the arp engine. Cycles through :arp-notes at :arp-rate beats.
 
   Uses a background thread that reads the live :arp-notes queue each step,
-  so notes added while the arp is running are picked up immediately."
+  so notes added while the arp is running are picked up immediately.
+  Timing is via loop-ns/sleep! so it respects virtual time inside live-loops."
   []
   (when-not @arp-future
     (reset! arp-future
@@ -415,12 +416,10 @@
                   (let [st    @ivk-state
                         notes (:arp-notes st)]
                     (when (seq notes)
-                      (let [note  (nth notes (mod i (count notes)))
-                            rate  (:arp-rate st 1/4)
-                            bpm   (core/get-bpm)
-                            ms    (long (* (/ 60000.0 bpm) rate))]
+                      (let [note (nth notes (mod i (count notes)))
+                            rate (:arp-rate st 1/4)]
                         (core/play! {:pitch/midi note :dur/beats rate})
-                        (Thread/sleep ms)))
+                        (loop-ns/sleep! rate)))
                     (when (:arp? @ivk-state)
                       (recur (inc i)))))
                 (catch InterruptedException _)

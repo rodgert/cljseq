@@ -66,7 +66,7 @@
             [clojure.java.io    :as io]
             [clojure.string     :as str]
             [cljseq.dirs        :as dirs]
-            [cljseq.dsl         :as dsl]
+            [cljseq.live  :as live]
             [cljseq.loop        :as loop-ns])
   (:import  [java.io BufferedReader BufferedWriter InputStreamReader
                      OutputStreamWriter]
@@ -340,7 +340,7 @@
      (doseq [{:keys [pitches rest dur/beats]} chords]
        (let [dur (* (double (or beats 1)) (double dur-mult))]
          (when-not rest
-           (dsl/play-voicing! pitches))
+           (live/play-voicing! pitches))
          (loop-ns/sleep! dur))))))
 
 ;; ---------------------------------------------------------------------------
@@ -377,7 +377,7 @@
     (doseq [{:keys [pitch rest dur/beats]} events]
       (let [dur (* (double (or beats 1)) (double dur-mult))]
         (when-not rest
-          (dsl/play! {:pitch/midi pitch :dur/beats dur}))
+          (live/play! {:pitch/midi pitch :dur/beats dur}))
         (loop-ns/sleep! dur)))))
 
 (defn play-chorale-parts!

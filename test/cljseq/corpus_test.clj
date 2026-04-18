@@ -5,7 +5,7 @@
   Encodes the opening phrase of Bach's 'Ich dank' dir, lieber Herre' (BWV 371)
   as a G-major Roman-numeral progression and plays it through the full stack:
 
-    chord/progression → voice/smooth-progression → dsl/play-progression!
+    chord/progression → voice/smooth-progression → live/play-progression!
       → sidecar IPC → MIDI scheduler → Hydrasynth Explorer
 
   ## Automated (lein test cljseq.corpus-test)
@@ -24,7 +24,7 @@
             [clojure.string  :as str]
             [cljseq.chord   :as chord]
             [cljseq.core    :as core]
-            [cljseq.dsl     :as dsl]
+            [cljseq.live  :as live]
             [cljseq.loop    :as loop-ns]
             [cljseq.scale   :as scale]
             [cljseq.sidecar :as sidecar]
@@ -72,7 +72,7 @@
   synth context (*synth-ctx*) if set."
   ([] (play-bach-phrase! 2))
   ([dur]
-   (dsl/play-progression! (bach-chords) dur)))
+   (live/play-progression! (bach-chords) dur)))
 
 (defn bach!
   "Play the Bach chorale phrase in a one-shot live loop, then stop.
@@ -170,7 +170,7 @@
         ;; progression does not block the test for too long.
         (let [first-voicing (first (bach-voicings))]
           (binding [loop-ns/*virtual-time* (loop-ns/-current-beat)]
-            (dsl/play-voicing! first-voicing)))
+            (live/play-voicing! first-voicing)))
         ;; G4 = MIDI 67 should appear in the sidecar enqueue log.
         ;; Voice leading may shift the chord, so we check all three notes.
         (let [first-voicing (first (bach-voicings))

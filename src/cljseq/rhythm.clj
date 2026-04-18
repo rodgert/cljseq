@@ -115,7 +115,7 @@
   Each pulse (1) becomes {:beat? true :dur (dur-fn i)},
   each rest (0) becomes {:beat? false :dur (dur-fn i)}.
 
-  Useful for integrating with cljseq.dsl/play! pipelines."
+  Useful for integrating with cljseq.live/play! pipelines."
   ([r]
    (rhythm->steps r (constantly 1)))
   ([r dur-fn]

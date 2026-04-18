@@ -8,7 +8,7 @@
     (session!)           ; start clock at 120 BPM, prints status
     (session! :bpm 140)  ; with custom BPM
 
-  Everything in cljseq.core, cljseq.dsl, and the most-used theory namespaces
+  Everything in cljseq.core, cljseq.live, and the most-used theory namespaces
   is re-exported. You can also require just the pieces you need directly.
 
   Typical live session:
@@ -38,7 +38,7 @@
             [cljseq.chord      :as chord]
             [cljseq.conductor  :as conductor]
             [cljseq.core       :as core]
-            [cljseq.dsl        :as dsl]
+            [cljseq.live       :as live]
             [cljseq.fractal    :as frac]
             [cljseq.learn      :as learn]
             [cljseq.loop       :as loop-ns]
@@ -72,7 +72,8 @@
             [cljseq.berlin          :as berlin]
             [cljseq.temporal-buffer :as tbuf]
             [cljseq.ctrl            :as ctrl-ns]
-            [cljseq.supervisor      :as supervisor]))
+            [cljseq.supervisor      :as supervisor]
+            [cljseq.arp             :as arp-ns]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session lifecycle
@@ -132,10 +133,6 @@
 
 (defmacro live-loop [loop-name opts & body]
   `(core/deflive-loop ~loop-name ~opts ~@body))
-
-;; ---------------------------------------------------------------------------
-;; Re-export DSL
-;; ---------------------------------------------------------------------------
 
 ;; ---------------------------------------------------------------------------
 ;; Trajectory / arc types
@@ -341,27 +338,26 @@
 (def export-device-map!    learn/export-device-map!)
 
 ;; ---------------------------------------------------------------------------
-;; Re-export DSL
+;; Re-export live context
 ;; ---------------------------------------------------------------------------
 
-(defmacro with-dur [dur & body] `(dsl/with-dur ~dur ~@body))
-(def use-harmony!   dsl/use-harmony!)
+(defmacro with-dur [dur & body] `(live/with-dur ~dur ~@body))
+(def use-harmony!   live/use-harmony!)
 
 (defmacro with-harmony [scale & body]
-  `(dsl/with-harmony ~scale ~@body))
+  `(live/with-harmony ~scale ~@body))
 
-(def use-chord!     dsl/use-chord!)
-(def use-synth!     dsl/use-synth!)
-(def use-tuning!    dsl/use-tuning!)
-(def play-chord!    dsl/play-chord!)
-(def play-voicing!  dsl/play-voicing!)
-(def arp!           dsl/arp!)
-(defmacro phrase! [& args] `(dsl/phrase! ~@args))
-(def ring           dsl/ring)
-(def tick!          dsl/tick!)
+(def use-chord!     live/use-chord!)
+(def use-synth!     live/use-synth!)
+(def use-tuning!    live/use-tuning!)
+(def play-chord!    live/play-chord!)
+(def play-voicing!  live/play-voicing!)
+(defmacro phrase! [& args] `(live/phrase! ~@args))
+(def ring           live/ring)
+(def tick!          live/tick!)
 
 (defmacro with-tuning [ctx & body]
-  `(dsl/with-tuning ~ctx ~@body))
+  `(live/with-tuning ~ctx ~@body))
 
 ;; ---------------------------------------------------------------------------
 ;; ---------------------------------------------------------------------------
@@ -539,6 +535,19 @@
 (def render-layout      ivk/render-layout)
 
 ;; ---------------------------------------------------------------------------
+;; Arpeggiator pattern library (cljseq.arp)
+;; ---------------------------------------------------------------------------
+
+(def arp-ls             arp-ns/ls)
+(def arp-get            arp-ns/get-pattern)
+(def arp-register!      arp-ns/register!)
+(def arp-play!          arp-ns/play!)
+(def arp-loop!          arp-ns/arp-loop!)
+(def arp-stop!          arp-ns/stop-arp!)
+(def make-arp-state     arp-ns/make-arp-state)
+(def next-arp-step!     arp-ns/next-step!)
+
+;; ---------------------------------------------------------------------------
 ;; MIDI input (cljseq.midi-in)
 ;; ---------------------------------------------------------------------------
 
@@ -648,6 +657,8 @@
 (def on-supervisor-event!   supervisor/on-event!)
 (def off-supervisor-event!  supervisor/off-event!)
 (def restart-loop!          loop-ns/restart-loop!)
+
+(def choose-from-scale  scale/choose-from-scale)
 
 (defn make-scale
   "Build a Scale record. Common modal shorthand.

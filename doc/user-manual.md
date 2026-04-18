@@ -43,8 +43,9 @@ Version 0.14.0 · April 2026
 35. [Keyboard Performance (`cljseq.ivk`)](#35-keyboard-performance-cljseqivk)
 36. [MIDI Input (`cljseq.midi-in`)](#36-midi-input-cljseqmidi-in)
 37. [Process Supervisor (`cljseq.supervisor`)](#37-process-supervisor-cljseqsupervisor)
-38. [Reference: REPL Commands and Step Keys](#38-reference)
-39. [Browser Control Surface (`cljseq-ui`)](#39-browser-control-surface)
+38. [Arpeggiator (`cljseq.arp`)](#38-arpeggiator-cljseqarp)
+39. [Reference: REPL Commands and Step Keys](#39-reference)
+40. [Browser Control Surface (`cljseq-ui`)](#40-browser-control-surface)
 
 ---
 
@@ -3590,7 +3591,167 @@ without changing the global setting.
 
 ---
 
-## 38. Reference
+## 38. Arpeggiator (`cljseq.arp`)
+
+`cljseq.arp` provides a first-class arpeggiator engine with a named pattern
+library. Patterns can be used one-shot from the REPL, looped in the background,
+or stepped through manually inside a `live-loop` or Berlin ostinato.
+
+### Pattern formats
+
+Two formats are supported:
+
+**`:chord` patterns** — classic arpeggiation using chord-tone indices.
+
+```clojure
+{:type    :chord
+ :order   [0 2 1 2]   ; indices into the chord (0=root, 1=3rd, 2=5th, ...)
+ :rhythm  [1 1 1 1]   ; step durations in beats (1=quarter, 1/2=eighth)
+ :dur     3/4}        ; gate fraction (75%)
+```
+
+Indices beyond the chord size wrap upward by octave: index 3 on a triad plays
+root+octave (root+12), index 4 plays 3rd+octave, and so on.
+
+**`:phrase` patterns** — semitone-offset figures, modelled after the Hydrasynth.
+
+```clojure
+{:type  :phrase
+ :dur   3/4                       ; gate fraction (default 3/4; optional)
+ :steps [{:semi 0 :beats 1}       ; root of held chord/note
+          {:semi 4 :beats 1}       ; major third above root
+          {:rest true :beats 1/2}  ; rest — no note played
+          {:semi 7 :beats 1}]}     ; perfect fifth
+```
+
+`:semi` is a semitone offset from the root. The root comes from the
+`chord-or-root` argument at play time. `:rest true` steps advance the clock
+without playing.
+
+### Built-in patterns
+
+11 chord patterns and 64 Hydrasynth phrases are loaded automatically:
+
+```clojure
+(arp-ls)   ; list all registered patterns
+;; => [[:alberti "Classical Alberti bass: root-fifth-third-fifth"]
+;;     [:bounce  "Ascend then descend — pendulum through chord tones"]
+;;     ...
+;;     [:phrase-01 "phrase-01"] ... [:phrase-64 "phrase-64"]]
+```
+
+**Chord patterns**: `:up`, `:down`, `:bounce`, `:alberti`, `:waltz-bass`,
+`:broken-triad`, `:guitar-pick`, `:jazz-stride`, `:montuno`, `:raga-alap`,
+`:euclid-5-8`.
+
+**Phrase patterns**: `:phrase-01` through `:phrase-64`, transcribed from the
+ASM Hydrasynth Deluxe Owner's Manual v2.2. All are flagged `:verified? false`
+pending hardware cross-check; treat as musically plausible approximations.
+
+### One-shot playback
+
+```clojure
+;; Chord arp — pass a chord map or MIDI integer vector
+(arp-play! :alberti (chord/make :C4 :major) :vel 90)
+(arp-play! :up      [60 64 67])
+
+;; Phrase arp — pass a root MIDI number or {:root N} map
+(arp-play! :phrase-14 {:root 60} :vel 80)
+(arp-play! :phrase-14 60         :vel 80)
+
+;; Options
+;;   :vel  0–127 (default 100)
+;;   :oct  octave shift applied to all notes (default 0)
+;;   :rate beat-duration multiplier: 2.0 = half-speed, 0.5 = double (default 1.0)
+(arp-play! :euclid-5-8 [60 64 67] :rate 0.5 :vel 110)
+```
+
+`arp-play!` blocks for the full pattern duration — call it from a `live-loop`
+body or a background thread.
+
+### Looping arps
+
+```clojure
+;; Start a looping arp; returns a loop-id atom
+(def my-arp (arp-loop! :alberti [60 64 67] :vel 90))
+
+;; Stop it
+(arp-stop! my-arp)
+```
+
+`arp-loop!` returns a self-contained handle map — no global loop registry.
+The handle holds the `:running?` atom and the background `:future` directly.
+Each call to `arp-loop!` starts a background future that calls `arp-play!` in
+a tight loop. Tempo changes via `set-bpm!` take effect at the next cycle
+boundary.
+
+### Step-by-step engine (live-loop integration)
+
+For fine-grained control inside a `deflive-loop`, use the stateful step engine:
+
+```clojure
+;; Create an arp state atom
+(def my-state (make-arp-state :montuno [60 64 67 70] :vel 95))
+
+;; Inside a live-loop:
+(deflive-loop :bass-arp []
+  (let [{:keys [pitch/midi dur/beats beats]} (next-arp-step! my-state)]
+    (when midi
+      (play! {:pitch/midi midi :dur/beats dur/beats :mod/velocity 95}))
+    (sleep! beats)))
+```
+
+`next-arp-step!` returns:
+
+| Key | Present | Value |
+|-----|---------|-------|
+| `:pitch/midi` | note steps only | MIDI note to play |
+| `:dur/beats` | note steps only | Gate duration in beats |
+| `:beats` | always | Step duration (advance clock by this) |
+| `:vel` | always | Velocity from make-arp-state |
+
+Rest steps return only `:beats` and `:vel` — no `:pitch/midi`.
+
+### Custom patterns
+
+```clojure
+;; Register a custom chord pattern
+(arp-register! :my-stride
+  {:type        :chord
+   :description "My custom stride pattern"
+   :order       [0 2 1 3 2]
+   :rhythm      [2 1 1 1 1]
+   :dur         1/2})
+
+;; Register a custom phrase
+(arp-register! :my-riff
+  {:type  :phrase
+   :steps [{:semi 0 :beats 1}
+           {:semi 2 :beats 1/2}
+           {:semi 4 :beats 1/2}
+           {:semi 7 :beats 2}]})
+
+;; Retrieve
+(arp-get :my-stride)
+```
+
+Custom patterns are stored in the same registry as built-ins. They persist
+for the lifetime of the JVM session.
+
+### Keyboard arp (cljseq.ivk integration)
+
+The ivk arp mode queues keyboard-pressed notes and cycles through them. It
+now uses `loop-ns/sleep!` for timing (respects virtual time inside live-loops):
+
+```clojure
+(swap! ivk-state assoc :arp? true)
+(start-arp!)   ; cycle :arp-notes at :arp-rate (default 1/4 beat)
+(stop-arp!)    ; stop and clear queue
+```
+
+---
+
+## 39. Reference
 
 ### REPL commands
 
@@ -3643,7 +3804,7 @@ All durations are in **beats** (quarter notes at the current BPM).
 
 ---
 
-## 39. Browser Control Surface
+## 40. Browser Control Surface
 
 The browser control surface is a ClojureScript + Reagent application served
 directly by the cljseq HTTP server. It gives you a live view of the ctrl tree
