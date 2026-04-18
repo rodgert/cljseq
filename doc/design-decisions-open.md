@@ -365,6 +365,161 @@ can be migrated or remain as plain-Clojure alternatives for non-Emacs users.
 
 ---
 
+## Audio target model
+
+### Q71 — ITarget / ITriggerTarget / IParamTarget: unified audio target protocol
+
+**Blocking**: `PdTarget`; formal target registry in `core/play!`; topology-driven
+target construction; `param-live?` health checks on FX processors.
+
+**Context**
+
+`core/play!` currently routes note events via two ad-hoc atoms (`@sc-dispatch`,
+`@sample-dispatch`) keyed off the presence of `:synth` / `:sample` in the event
+map. Parameter control flows through the ctrl tree (`ctrl/set!` + `ctrl/bind!`)
+with no formal device abstraction. These are the same conceptual gap approached
+from opposite sides: one handles triggered events without a protocol, the other
+handles continuous parameter events without a named face on the device.
+
+Every audio target in cljseq (synthesizer, FX processor, sample player, Pd patch,
+external hardware) receives two kinds of event:
+
+- **Triggered** — note-on with pitch/velocity/duration; voice has a lifecycle
+- **Continuous** — parameter change at a path/value; no lifecycle, always-running
+
+These are dual. Formalizing one without the other produces an asymmetric model.
+The ctrl tree already *is* `IParamTarget` in practice — `param-root` and
+`send-param!` are the formal face it has been missing.
+
+**Proposed protocols** (implemented in `cljseq.target`):
+
+```clojure
+(defprotocol ITarget
+  "Base: any addressable audio/synthesis target."
+  (target-id    [t])     ; keyword name in the target registry
+  (target-live? [t]))    ; is the underlying transport reachable?
+
+(defprotocol ITriggerTarget
+  "Capability: accepts triggered note events with voice lifecycle."
+  (trigger-note!  [t event])    ; fire note; returns opaque handle or nil
+  (release-note!  [t handle]))  ; explicit release (sustained/held notes)
+
+(defprotocol IParamTarget
+  "Capability: accepts continuous parameter control via the ctrl tree."
+  (param-root   [t])               ; ctrl-tree path root for this device
+  (send-param!  [t path value]))   ; set param at path (relative to param-root)
+```
+
+A target implements whichever combination matches its nature:
+
+| Target | ITriggerTarget | IParamTarget |
+|---|:---:|:---:|
+| `SCTarget` | ✓ (sc-synth! per note) | ✓ (ctrl subtree) |
+| `MidiTarget` | ✓ (sidecar note-on/off) | ✓ (CC/NRPN via ctrl) |
+| `PdTarget` (Q72) | ✓ (OSC note messages) | ✓ (OSC param messages) |
+| `OscFxTarget` (NightSky etc.) | — | ✓ (OSC parameter control) |
+| Future: `ClapTarget` | ✓ | ✓ (automation via IPC) |
+
+**`IParamTarget` relationship to ctrl tree**
+
+`send-param!` in almost all cases delegates to `ctrl/set!` at
+`(conj (param-root t) relative-path)`. The protocol adds:
+
+1. Relative addressing — `(send-param! nightsky [:reverb :mix] 0.7)` rather
+   than needing to know the full `[:studio :nightsky :reverb :mix]` path
+2. `param-live?` (via `target-live?`) — transport connectivity check without
+   querying the ctrl tree directly
+3. Formal device identity — the ctrl subtree has an owner; the topology loader
+   can construct the right concrete type from `:type` declarations
+
+**`core/play!` migration**
+
+The `@sc-dispatch` and `@sample-dispatch` atoms become a target registry
+(`defonce ^:private target-registry (atom {})`). Dispatch looks up the target
+by the `:synth` or `:target` key in the event map and calls `trigger-note!`.
+The `:synth` key remains as the event-map signal; the dispatch mechanism
+becomes protocol-based rather than atom-based.
+
+```clojure
+;; Register targets (done in cljseq.sc / cljseq.target setup)
+(target/register! :sc    (->SCTarget ...))
+(target/register! :midi  (->MidiTarget ...))
+
+;; Event routing in play!
+(if-let [tgt (target/lookup (:synth event))]
+  (trigger-note! tgt event)
+  (midi-dispatch event))        ; fall-through to sidecar
+```
+
+**Topology integration**
+
+Studio topology entries gain a `:target-type` key that the topology loader uses
+to construct and register the right concrete `ITarget` at session start:
+
+```clojure
+{:id          :iridium
+ :type        [:synth :fx]
+ :target-type :midi
+ :ctrl-path   [:studio :iridium]}
+
+{:id          :nightsky
+ :type        [:fx]
+ :target-type :osc-fx
+ :osc-host    "192.168.1.10"
+ :osc-port    8000
+ :ctrl-path   [:studio :nightsky]}
+```
+
+**Implementation order**
+
+1. `cljseq.target` namespace — protocols + target registry + `SCTarget` +
+   `MidiTarget`; `core/play!` dispatch migrated (this Q)
+2. `OscFxTarget` — thin `IParamTarget`-only implementation; replaces the
+   ad-hoc OSC calls in `cljseq.arc` NightSky / Strymon arcs (follow-on)
+3. `PdTarget` — OSC-backed `ITriggerTarget` + `IParamTarget`; no compile step;
+   configurable address convention (Q72)
+4. Topology loader: construct + register targets from `:target-type`
+   declarations at session start (Q73)
+
+---
+
+### Q72 — PdTarget: Pure Data as an OSC-driven synthesis backend
+
+**Blocking**: Nothing currently; Pure Data as a first-class cljseq target.
+
+**Context**
+
+Pure Data is a visual DSP environment. Its patch format (`.pd`) is the instrument
+definition. At runtime, cljseq drives a running Pd patch via OSC or MIDI — the
+patch itself is authored separately (by hand or via offline generation tools).
+
+Unlike SC, there is no "compile and send SynthDef" step at runtime. The
+`compile-synth` multimethod and hiccup graph IR do not apply to Pd. The right
+model is an `ITriggerTarget` + `IParamTarget` that speaks OSC to a running patch:
+
+```clojure
+;; Note-on: OSC to /note/on with freq, amp, dur
+;; Note-off: OSC to /note/off with the same note id
+;; Param: OSC to /param/<path> with value
+(register-target! :pd-pad
+  (->PdTarget {:host "127.0.0.1"
+               :port 7400
+               :note-on-addr  "/pad/note/on"
+               :note-off-addr "/pad/note/off"
+               :param-root    [:pd :pad]}))
+```
+
+Polyphony is handled inside the Pd patch (`[poly]`, `[clone~]` etc.); cljseq
+sends note-on messages and the patch manages voice allocation.
+
+**Pd `.pd` file generation** (longer term) — the hiccup graph IR could compile
+to `.pd` native text format for common UGen subsets. This is a separate tool,
+not part of the runtime protocol. The UGen vocabulary mapping (`:sin-osc` →
+`[osc~]`, `:env-gen` → `[vline~]`-based recipe) is lossy but tractable for
+standard oscillators/filters. Polyphony generation requires explicit design.
+
+---
+
 ## Deferred
 
 ### Q50 — P2P control plane: peer discovery and remote tree composition
