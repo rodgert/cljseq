@@ -342,7 +342,7 @@
                         (catch Exception e
                           (binding [*out* *err*]
                             (println "[peer/beacon] send error:" (.getMessage e)))))
-                      (Thread/sleep beacon-interval-ms)
+                      (Thread/sleep (long beacon-interval-ms))
                       (recur)))
                   (finally (.close socket))))
               (catch InterruptedException _ nil)
@@ -512,7 +512,7 @@
               (loop []
                 (when-not (.isInterrupted (Thread/currentThread))
                   (poll-peer! node-id host http-port)
-                  (Thread/sleep poll-interval-ms)
+                  (Thread/sleep (long poll-interval-ms))
                   (recur)))
               (catch InterruptedException _ nil)
               (catch Exception e

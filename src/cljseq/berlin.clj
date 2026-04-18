@@ -178,7 +178,7 @@
         (mapv (fn [step]
                 (let [midi (int (:pitch/midi step))]
                   (if (and (not (target-pitches midi)) (< (rand) mutation-rate))
-                    (let [nearest (apply min-key #(Math/abs (- % midi)) target-pitches)]
+                    (let [nearest (apply min-key #(Math/abs ^long (- (long %) midi)) target-pitches)]
                       (assoc step :pitch/midi nearest))
                     step)))
               pattern)))))
@@ -189,7 +189,7 @@
     (mapv (fn [step]
             (if (< (rand) mutation-rate)
               (let [cur   (int (:pitch/midi step))
-                    range (max 2 (long (Math/round (* mutation-rate 12))))
+                    range (max 2 (long (Math/round ^double (* mutation-rate 12))))
                     delta (- (rand-int (* 2 range)) range)
                     cand  (max 0 (min 127 (+ cur delta)))]
                 (assoc step :pitch/midi
@@ -426,7 +426,7 @@
      (loop-ns/deflive-loop loop-name {}
        (let [b             @bar-beat
              elapsed-beats (* b 4.0)
-             val           (long (Math/round (clock/sample traj elapsed-beats)))]
+             val           (long (Math/round ^double (clock/sample traj elapsed-beats)))]
          (ctrl/send! ctrl-path val)
          (swap! bar-beat inc)
          (when (>= @bar-beat bars)

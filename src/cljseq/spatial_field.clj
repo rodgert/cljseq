@@ -133,7 +133,7 @@
         dy (- by ay)
         ;; det = dx*vy - dy*vx
         det (- (* dx vy) (* dy vx))]
-    (if (< (Math/abs det) 1e-10)
+    (if (< (Math/abs ^double det) 1e-10)
       ##Inf   ; parallel
       (let [;; t = ((px-ax)*dy - (py-ay)*dx) / det
             t (/ (- (* (- px ax) dy) (* (- py ay) dx)) det)
