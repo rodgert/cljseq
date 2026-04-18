@@ -74,7 +74,8 @@
             [cljseq.ctrl            :as ctrl-ns]
             [cljseq.supervisor      :as supervisor]
             [cljseq.arp             :as arp-ns]
-            [cljseq.seq             :as sq]))
+            [cljseq.seq             :as sq]
+            [cljseq.target          :as target]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session lifecycle
@@ -554,6 +555,16 @@
 (def run-cycle!         sq/run-cycle!)
 (def seq-loop!          sq/seq-loop!)
 (def stop-seq!          sq/stop-seq!)
+
+;; ---------------------------------------------------------------------------
+;; Audio target registry (cljseq.target)
+;; ---------------------------------------------------------------------------
+
+(def register-target!   target/register!)
+(def lookup-target      target/lookup)
+(def registered-targets target/registered-targets)
+(def fn-target          target/fn-target)
+(def osc-param-target   target/osc-param-target)
 
 ;; ---------------------------------------------------------------------------
 ;; MIDI input (cljseq.midi-in)

@@ -52,7 +52,8 @@
             [cljseq.osc      :as osc]
             [cljseq.patch    :as patch]
             [cljseq.peer     :as peer]
-            [cljseq.synth    :as synth]))
+            [cljseq.synth    :as synth]
+            [cljseq.target   :as target]))
 
 ;; ---------------------------------------------------------------------------
 ;; Connection state
@@ -849,9 +850,20 @@
       (ensure-synthdef! (:synth note))
       (sc-play! event))))
 
-;; Register with core when sc is loaded — no circular dep because core
-;; stores only the fn reference, not a compile-time require of cljseq.sc.
+;; Register with core — legacy atom dispatch (backward compat)
 (core/register-sc-dispatch! sc-play-dispatch!)
+
+;; Register as a named ITriggerTarget in the target registry.
+;; Allows (play! {:target :sc ...}) or (play! {:synth :sc ...}) to route
+;; through the ITriggerTarget protocol rather than the atom dispatch.
+(target/register! :sc
+  (target/fn-target :sc
+    :trigger-fn  (fn [event]
+                   (let [bpm (or (:bpm event) (core/get-bpm))
+                         dur (or (:dur event) (:dur/beats event) 1/4)]
+                     (sc-play-dispatch! (dissoc event :bpm :dur) dur bpm)))
+    :live?-fn    sc-connected?
+    :param-root  [:sc]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session helpers

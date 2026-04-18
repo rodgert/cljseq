@@ -26,6 +26,7 @@
             [cljseq.mod             :as mod]
             [cljseq.mpe             :as mpe]
             [cljseq.sidecar         :as sidecar]
+            [cljseq.target          :as target]
             [cljseq.temporal-buffer :as tbuf])
   (:import  [java.util.concurrent.locks LockSupport])
   (:gen-class))
@@ -228,14 +229,20 @@
 ;; SC dispatch — optional backend, registered by cljseq.sc at load time
 ;; ---------------------------------------------------------------------------
 
-;; Backends register a (fn [note dur bpm]) handler here.
-;; Avoids a compile-time dependency on cljseq.sc (which would create a cycle
-;; through cljseq.osc → cljseq.core).
+;; ---------------------------------------------------------------------------
+;; Legacy dispatch atoms — kept for backward compatibility.
+;; New code should use cljseq.target/register! and ITriggerTarget instead.
+;; When a target is registered via target/register!, it takes priority.
+;; The atom-based dispatch fires as a fallback for backends (cljseq.sc,
+;; cljseq.sample) that registered before the target protocol existed.
+;; ---------------------------------------------------------------------------
+
 (defonce ^:private sc-dispatch (atom nil))
 
 (defn ^:no-doc register-sc-dispatch!
   "Register a function to handle :synth play! events.
-  Called automatically when cljseq.sc is loaded. Not part of the public API."
+  Called automatically when cljseq.sc is loaded.
+  Prefer target/register! with an ITriggerTarget for new backends."
   [f]
   (reset! sc-dispatch f))
 
@@ -243,7 +250,8 @@
 
 (defn ^:no-doc register-sample-dispatch!
   "Register a function to handle :sample play! events.
-  Called automatically when cljseq.sample is loaded. Not part of the public API."
+  Called automatically when cljseq.sample is loaded.
+  Prefer target/register! with an ITriggerTarget for new backends."
   [f]
   (reset! sample-dispatch f))
 
@@ -271,12 +279,24 @@
   ([note]
    (play! note nil))
   ([note dur]
-   ;; SC dispatch — routes :synth events to SuperCollider, bypassing MIDI
-   ;; Sample dispatch — routes :sample events to SC buffer playback
+   ;; Target dispatch — routes :synth/:sample events to registered ITriggerTargets.
+   ;; Priority: target registry (ITriggerTarget protocol) → legacy dispatch atoms.
+   ;; MIDI falls through when neither is registered for the given target key.
    (cond
+     ;; 1. Named target registered via cljseq.target/register! (ITriggerTarget)
+     (and (map? note)
+          (or (contains? note :synth) (contains? note :target))
+          (target/lookup (or (:target note) (:synth note))))
+     (let [tgt (target/lookup (or (:target note) (:synth note)))]
+       (target/trigger-note! tgt (assoc note
+                                        :dur   (or dur (:dur/beats note) 1/4)
+                                        :bpm   (get-bpm))))
+
+     ;; 2. Legacy SC dispatch atom (cljseq.sc registers this at load time)
      (and (map? note) (contains? note :synth) @sc-dispatch)
      (@sc-dispatch note dur (get-bpm))
 
+     ;; 3. Legacy sample dispatch atom (cljseq.sample registers this at load time)
      (and (map? note) (contains? note :sample) @sample-dispatch)
      (@sample-dispatch note dur (get-bpm))
 
