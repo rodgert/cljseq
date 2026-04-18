@@ -5,11 +5,34 @@
   The control tree is a persistent map within the shared system-state atom.
   Nodes hold a typed value and optional physical bindings (MIDI CC, OSC, etc.).
 
+  ## set! vs send! — the core distinction
+
+  There are two write functions and the choice is intentional:
+
+    ctrl/set!   — YOU ARE RECORDING a value. Use when the value arrives from
+                  outside (MIDI input, OSC, peer sync, UI, config) or when
+                  updating internal state that has no hardware target.
+                  Never dispatches to physical outputs. Safe to call freely.
+
+    ctrl/send!  — YOU ARE DRIVING hardware. Use when Clojure code is the
+                  source of truth and you want the value to reach the bound
+                  device (MIDI CC, NRPN). Dispatches to all physical bindings.
+
+  The distinction prevents feedback loops: if MIDI arrives on CC 74 and you
+  record it with set!, it updates the tree without echoing back to hardware.
+  If your LFO calls send!, it drives CC 74 out. Same path, opposite direction.
+
+  A third variant exists for timing-critical dispatch:
+
+    ctrl/send-at! time-ns path value — like send! but schedules the outgoing
+                  hardware messages at an explicit nanosecond timestamp, for
+                  alignment with note-on events already in the sidecar queue.
+
   ## Node lifecycle
     (ctrl/defnode! [:filter/cutoff] :type :float :meta {:range [0.0 1.0]} :value 0.5)
     (ctrl/bind!    [:filter/cutoff] {:type :midi-cc :channel 1 :cc-num 74} :priority 20)
-    (ctrl/set!     [:filter/cutoff] 0.3)    ; logical: atom only
-    (ctrl/send!    [:filter/cutoff] 0.3)    ; physical: atom + MIDI CC dispatch
+    (ctrl/set!     [:filter/cutoff] 0.3)    ; record a value — no hardware dispatch
+    (ctrl/send!    [:filter/cutoff] 0.3)    ; drive hardware — atom + MIDI CC out
     (ctrl/get      [:filter/cutoff])        ; => 0.3
 
   ## Safety net
@@ -30,7 +53,7 @@
     :data     opaque Clojure value (default)
 
   ## Binding priorities (Q9) — lower number = higher priority
-    0   Clojure code (ctrl/set! always wins)
+    0   Clojure code (ctrl/send! from code always wins)
     10  Ableton Link
     20  MIDI
     30  OSC
@@ -173,15 +196,25 @@
   (get-node @@system-ref path))
 
 (defn set!
-  "Logical write: update `path` to `value` in the control tree.
+  "Record `value` at `path` in the control tree. Never dispatches to hardware.
 
-  Does NOT dispatch to physical outputs (MIDI CC, OSC). Use `send!` for that.
+  Use set! when the value originates outside Clojure — incoming MIDI CC,
+  incoming OSC, peer sync, UI writes, config updates. Also use it for any
+  internal state that has no hardware binding. Because set! never echoes to
+  hardware, it is safe to call from MIDI/OSC input handlers without creating
+  feedback loops.
+
   Not an undo target by default; pass :undoable true to push to the undo stack.
   Creates a :data node if the path does not exist; preserves existing type and bindings.
 
+  Use send! when Clojure is the source and you want the value to reach bound
+  hardware. Use send-at! when you need the hardware message at a specific time.
+
   Examples:
-    (ctrl/set! [:filter/cutoff] 0.7)
-    (ctrl/set! [:chord] :C-major :undoable true)"
+    (ctrl/set! [:filter/cutoff] 0.7)           ; record value, no hardware dispatch
+    (ctrl/set! [:chord] :C-major :undoable true)
+    ;; In a MIDI input handler — safe: will not echo back to hardware:
+    (ctrl/set! [:cc/74] incoming-value)"
   [path value & {:keys [undoable]}]
   (swap! @system-ref
          (fn [s]
@@ -192,21 +225,22 @@
   nil)
 
 (defn send-at!
-  "Physical write: update `path` to `value` and dispatch to all physical bindings,
-  scheduling the outgoing messages at `time-ns` (nanoseconds since epoch).
+  "Drive `value` to `path` with explicit nanosecond timing.
 
-  Use this when you need the CC or NRPN to arrive at the sidecar at a specific
-  wall-clock time — for example, to align a per-step filter sweep with a note-on
-  that was already scheduled for `time-ns` via sidecar/send-note-on!.
+  Identical to send! but schedules the outgoing hardware messages at `time-ns`
+  (nanoseconds since epoch) rather than at the current wall-clock time. Use
+  this to align a CC or NRPN with a note-on that has already been placed in
+  the sidecar queue — for example, per-step mod routing in core/play!.
 
-  Binding types dispatched:
+  Like send!, this is for Clojure-originated values going to hardware. Use
+  set! for values arriving from hardware or from external sources.
 
+  Binding types dispatched and value scaling are identical to send!:
     :midi-cc   — single CC message; value scaled to [0,127] via binding :range.
     :midi-nrpn — NRPN parameter (CC 99/98/6/38); supports 7-bit, 14-bit, :raw.
 
-  Binding types and value scaling behave identically to send!.
-
   Example:
+    ;; Schedule a filter sweep to arrive at the same time as the note-on:
     (ctrl/send-at! on-ns [:filter/cutoff] 0.7)"
   [time-ns path value]
   (swap! @system-ref
@@ -270,11 +304,15 @@
   nil)
 
 (defn send!
-  "Physical write: update `path` to `value` and dispatch to all physical bindings.
+  "Drive `value` to `path`: update the control tree and dispatch to all physical
+  bindings at the current wall-clock time.
 
-  Schedules outgoing MIDI at the current wall-clock time.
-  Use send-at! when you need to align the dispatch with a previously scheduled
-  note-on (e.g. for per-step mod routing).
+  Use send! when Clojure is the source of the value and you want it to reach
+  bound hardware — LFOs, trajectories, live REPL tweaks, mod routing. Do NOT
+  use send! in MIDI/OSC input handlers; use set! there to avoid feedback loops.
+
+  Use send-at! when you need the hardware message aligned with an already-
+  scheduled note-on (e.g. per-step mod routing in core/play!).
 
   Binding types dispatched:
 
@@ -282,12 +320,10 @@
                  Example: (ctrl/send! [:filter/cutoff] 0.7) ; CC 74 = 89
 
     :midi-nrpn — NRPN parameter; emits CC 99/98 (parameter select) then CC 6/38
-                 (data entry). Supports 7-bit (CC6 only) and 14-bit (CC6 + CC38)
-                 resolution controlled by :bits in the binding (default 14).
-                 Value is scaled from binding :range to [0,127] or [0,16383].
-                 Add :raw true to the binding to skip scaling and use the value
-                 directly (useful for compound-addressed parameters where the
-                 user encodes sub-param and data manually).
+                 (data entry). Supports 7-bit and 14-bit resolution controlled
+                 by :bits in the binding (default 14). Value scaled from binding
+                 :range to [0,127] or [0,16383]. Add :raw true to the binding to
+                 skip scaling (useful for compound-addressed parameters).
                  Example: (ctrl/send! [:portamento] 1000) ; NRPN 1, 14-bit
                  Example: (ctrl/send! [:ribbon/mode] 1)   ; :raw true, direct value
 
