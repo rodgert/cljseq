@@ -79,7 +79,8 @@
             [cljseq.loop   :as loop-ns]
             [cljseq.pitch  :as pitch]
             [cljseq.rhythm :as rhythm-ns]
-            [cljseq.scale  :as scale-ns]))
+            [cljseq.scale  :as scale-ns]
+            [cljseq.seq    :as sq]))
 
 ;; ---------------------------------------------------------------------------
 ;; Records
@@ -91,6 +92,19 @@
 
 (defrecord Rhythm [data])
 ;; data — vector of velocity values (int 0–127), nil (rest), or :tie (hold)
+
+(defrecord Locks [data])
+;; data — vector of maps (nil or {} = no lock at this step)
+;; Cycles independently of Pattern and Rhythm; see make-motif-state.
+
+(defrecord MotifState [pat        ; Pattern record
+                       rhy        ; Rhythm record
+                       locks      ; Locks record or nil
+                       clock-div  ; duration per step in beats (double)
+                       gate       ; gate fraction of clock-div (double)
+                       probability ; per-note fire probability 0.0–1.0 (double)
+                       channel    ; MIDI channel override or nil
+                       step-atom]); atom holding current step index (wraps at seq-cycle-length)
 
 ;; ---------------------------------------------------------------------------
 ;; Constructors
@@ -138,6 +152,22 @@
   (when (empty? v)
     (throw (ex-info "rhythm: data must be non-empty" {})))
   (->Rhythm (vec v)))
+
+(defn locks
+  "Construct a Locks record for per-step parameter overrides.
+
+  `v` — vector of maps. nil or {} means no lock at that step. Any other keys
+  are merged into the note map for that step before dispatch (parameter locks).
+
+  Locks cycle independently of Pattern and Rhythm. A 4-step Locks against a
+  5-note Pattern and a 3-step Rhythm repeats every lcm(4,5,3)=60 steps.
+
+  Example:
+    (locks [{} {:mod/cutoff 127} {} {:mod/resonance 32}])"
+  [v]
+  (when (empty? v)
+    (throw (ex-info "locks: data must be non-empty" {})))
+  (->Locks (vec v)))
 
 ;; ---------------------------------------------------------------------------
 ;; Euclidean → Rhythm bridge
@@ -261,13 +291,86 @@
     (->Pattern (:ptype p) (mapv #(- pivot %) data))))
 
 ;; ---------------------------------------------------------------------------
-;; motif!
+;; MotifState — IStepSequencer implementation
+;; ---------------------------------------------------------------------------
+
+(defn make-motif-state
+  "Create a MotifState that implements IStepSequencer.
+
+  Arguments:
+    pat  — a Pattern record (from `pattern` or `named-pattern`)
+    rhy  — a Rhythm record (from `rhythm` or `named-rhythm`)
+
+  Options:
+    :locks       — a Locks record for per-step parameter overrides (default nil)
+    :clock-div   — duration per step in beats (default 1/8)
+    :gate        — note duration as fraction of clock-div (default 0.9)
+    :probability — per-note fire probability 0.0–1.0 (default 1.0)
+    :channel     — MIDI channel override (integer 1–16, default nil)
+
+  Returns a MotifState record. Use with run-cycle!, run-step!, or seq-loop!
+  from cljseq.seq.
+
+  Example:
+    (def my-motif (make-motif-state (named-pattern :bounce)
+                                    (named-rhythm  :tresillo)
+                                    :clock-div 1/8))
+    (deflive-loop :melody {:harmony (scale/scale :C 4 :major)}
+      (run-cycle! my-motif))"
+  [pat rhy & {:keys [locks clock-div gate probability channel]
+               :or   {clock-div 1/8 gate 0.9 probability 1.0}}]
+  (->MotifState pat rhy locks
+                (double clock-div) (double gate) (double probability)
+                channel (atom 0)))
+
+(defn- motif-cycle-length
+  "Three-way lcm: lcm(pat-len, rhy-len[, locks-len])."
+  [^MotifState ms]
+  (let [base (lcm (long (count (:data (:pat ms))))
+                  (long (count (:data (:rhy ms)))))]
+    (if-let [ld (and (:locks ms) (:data (:locks ms)))]
+      (lcm base (long (count ld)))
+      base)))
+
+(extend-protocol sq/IStepSequencer
+  MotifState
+  (next-event [ms]
+    (let [{:keys [pat rhy locks clock-div gate probability channel step-atom]} ms
+          pd          (:data pat)
+          rd          (:data rhy)
+          pcnt        (long (count pd))
+          rcnt        (long (count rd))
+          n           (motif-cycle-length ms)
+          i           (mod @step-atom n)
+          selector    (nth pd (mod i pcnt))
+          vel         (nth rd (mod i rcnt))
+          beats       clock-div
+          harmony-ctx loop-ns/*harmony-ctx*
+          chord-ctx   loop-ns/*chord-ctx*]
+      (swap! step-atom #(mod (inc %) n))
+      (if (or (nil? vel) (= :tie vel) (>= (rand) probability))
+        {:event nil :beats beats}
+        (let [midi  (resolve-selector (:ptype pat) selector harmony-ctx chord-ctx)
+              lock  (when-let [ld (and locks (:data locks))]
+                      (not-empty (nth ld (mod i (count ld)) {})))
+              event (cond-> {:pitch/midi   (long midi)
+                             :dur/beats    (* beats gate)
+                             :mod/velocity (long vel)}
+                      channel (assoc :midi/channel (long channel))
+                      lock    (merge lock))]
+          {:event event :beats beats}))))
+
+  (seq-cycle-length [ms]
+    (motif-cycle-length ms)))
+
+;; ---------------------------------------------------------------------------
+;; motif! — convenience one-shot cycle player
 ;; ---------------------------------------------------------------------------
 
 (defn motif!
   "Play one full lcm-length cycle of `pat` × `rhy` against the current context.
 
-  Steps through (lcm (count pat-data) (count rhy-data)) steps. At each step:
+  Steps through lcm(len-pat, len-rhy[, len-locks]) steps. At each step:
     - pattern cycles at its own length (independent of rhythm)
     - rhythm  cycles at its own length (independent of pattern)
     - nil velocity → rest (sleep only)
@@ -282,6 +385,8 @@
     :gate        — note duration fraction of clock-div (default 0.9)
     :probability — per-note fire probability 0.0–1.0 (default 1.0)
     :channel     — MIDI channel override (overrides *synth-ctx*)
+    :locks       — a Locks record for per-step parameter overrides
+    :xf          — ITransformer applied to each note event
 
   Example (from a live loop):
     (deflive-loop :melody {:harmony (scale/scale :C 4 :major)
@@ -292,30 +397,13 @@
   ([pat rhy]
    (motif! pat rhy {}))
   ([pat rhy opts]
-   (let [pd          (:data pat)
-         rd          (:data rhy)
-         ptype       (:ptype pat)
-         pcnt        (long (count pd))
-         rcnt        (long (count rd))
-         n-steps     (lcm pcnt rcnt)
-         clock-div   (get opts :clock-div 1/8)
-         gate        (double (get opts :gate 0.9))
-         prob        (double (get opts :probability 1.0))
-         channel     (:channel opts)
-         harmony-ctx loop-ns/*harmony-ctx*
-         chord-ctx   loop-ns/*chord-ctx*
-         note-dur    (* (double clock-div) gate)]
-     (dotimes [i n-steps]
-       (let [selector (nth pd (mod i pcnt))
-             vel      (nth rd (mod i rcnt))]
-         (when (and (some? vel) (not= :tie vel) (< (rand) prob))
-           (let [midi (resolve-selector ptype selector harmony-ctx chord-ctx)
-                 step {:pitch/midi   (long midi)
-                       :dur/beats    note-dur
-                       :mod/velocity (long vel)}
-                 step (if channel (assoc step :midi/channel (long channel)) step)]
-             (live/play! step)))
-         (core/sleep! clock-div))))))
+   (let [state (make-motif-state pat rhy
+                                 :locks       (:locks opts)
+                                 :clock-div   (get opts :clock-div 1/8)
+                                 :gate        (get opts :gate 0.9)
+                                 :probability (get opts :probability 1.0)
+                                 :channel     (:channel opts))]
+     (sq/run-cycle! state {:xf (:xf opts)}))))
 
 ;; ---------------------------------------------------------------------------
 ;; Pattern/Rhythm utilities

@@ -547,3 +547,112 @@
                         {:clock-div 1/16})))
         (is (= 5 (count @played)) "5 notes from 5-in-8 Euclidean rhythm"))
       (finally (core/stop!)))))
+
+;; ---------------------------------------------------------------------------
+;; Locks constructor
+;; ---------------------------------------------------------------------------
+
+(deftest locks-constructor-test
+  (testing "locks creates Locks record with correct data"
+    (let [l (pat/locks [{} {:mod/cutoff 127} nil {}])]
+      (is (instance? cljseq.pattern.Locks l))
+      (is (= [{} {:mod/cutoff 127} nil {}] (:data l)))))
+
+  (testing "locks rejects empty data"
+    (is (thrown? clojure.lang.ExceptionInfo
+                 (pat/locks [])))))
+
+;; ---------------------------------------------------------------------------
+;; make-motif-state / MotifState / IStepSequencer
+;; ---------------------------------------------------------------------------
+
+(deftest make-motif-state-test
+  (testing "make-motif-state returns a MotifState"
+    (let [ms (pat/make-motif-state (pat/pattern [:midi 60 64])
+                                   (pat/rhythm  [100 80]))]
+      (is (instance? cljseq.pattern.MotifState ms))
+      (is (= (pat/pattern [:midi 60 64]) (:pat ms)))
+      (is (= (pat/rhythm  [100 80])      (:rhy ms)))
+      (is (nil? (:locks ms)))
+      (is (= (/ 1.0 8.0) (double (:clock-div ms))))
+      (is (= 0.9 (:gate ms)))
+      (is (= 1.0 (:probability ms)))
+      (is (nil? (:channel ms)))))
+
+  (testing "make-motif-state options are applied"
+    (let [lk (pat/locks [{} {:mod/cutoff 64}])
+          ms (pat/make-motif-state (pat/pattern [:midi 60])
+                                   (pat/rhythm  [100])
+                                   :locks lk
+                                   :clock-div 1/4
+                                   :gate 0.5
+                                   :probability 0.8
+                                   :channel 3)]
+      (is (= lk (:locks ms)))
+      (is (= 0.25 (double (:clock-div ms))))
+      (is (= 0.5  (:gate ms)))
+      (is (= 0.8  (:probability ms)))
+      (is (= 3    (:channel ms))))))
+
+(deftest motif-state-seq-cycle-length-test
+  (testing "seq-cycle-length = lcm(pat-len, rhy-len) without locks"
+    (require '[cljseq.seq :as sq])
+    (let [ms (pat/make-motif-state (pat/pattern [:midi 60 64 67])
+                                   (pat/rhythm  [100 80]))]
+      ;; lcm(3,2) = 6
+      (is (= 6 ((resolve 'cljseq.seq/seq-cycle-length) ms)))))
+
+  (testing "seq-cycle-length = three-way lcm with locks"
+    (require '[cljseq.seq :as sq])
+    (let [lk (pat/locks [{} {:mod/cutoff 127} nil {}])   ; 4 steps
+          ms (pat/make-motif-state (pat/pattern [:midi 60 64 67])  ; 3 steps
+                                   (pat/rhythm  [100 80])          ; 2 steps
+                                   :locks lk)]
+      ;; lcm(lcm(3,2), 4) = lcm(6, 4) = 12
+      (is (= 12 ((resolve 'cljseq.seq/seq-cycle-length) ms))))))
+
+(deftest motif-state-next-event-midi-test
+  (testing "next-event on MotifState returns correct note maps"
+    (require '[cljseq.seq :as sq])
+    (let [ms  (pat/make-motif-state (pat/pattern [:midi 60 64 67])
+                                    (pat/rhythm  [100 80 60])
+                                    :clock-div 1/4
+                                    :gate 0.5)
+          r0  ((resolve 'cljseq.seq/next-event) ms)
+          r1  ((resolve 'cljseq.seq/next-event) ms)
+          r2  ((resolve 'cljseq.seq/next-event) ms)]
+      (is (= 60  (get-in r0 [:event :pitch/midi])))
+      (is (= 100 (get-in r0 [:event :mod/velocity])))
+      (is (= 0.125 (double (get-in r0 [:event :dur/beats])))) ; 0.25 * 0.5
+      (is (= 0.25 (double (:beats r0))))
+      (is (= 64  (get-in r1 [:event :pitch/midi])))
+      (is (= 80  (get-in r1 [:event :mod/velocity])))
+      (is (= 67  (get-in r2 [:event :pitch/midi]))))))
+
+(deftest motif-state-next-event-rest-test
+  (testing "next-event returns {:event nil} for rest steps"
+    (require '[cljseq.seq :as sq])
+    (let [ms  (pat/make-motif-state (pat/pattern [:midi 60 64 67])
+                                    (pat/rhythm  [100 nil 80])
+                                    :clock-div 1/8)
+          r0  ((resolve 'cljseq.seq/next-event) ms)
+          r1  ((resolve 'cljseq.seq/next-event) ms)
+          r2  ((resolve 'cljseq.seq/next-event) ms)]
+      (is (= 60  (get-in r0 [:event :pitch/midi])) "step 0: note")
+      (is (nil?  (:event r1))                        "step 1: rest (nil vel)")
+      (is (= 67  (get-in r2 [:event :pitch/midi])) "step 2: note"))))
+
+(deftest motif-state-parameter-locks-test
+  (testing "Locks values are merged into note map at matching step"
+    (require '[cljseq.seq :as sq])
+    (let [lk (pat/locks [{:mod/cutoff 127} {} {:mod/cutoff 32}])
+          ms (pat/make-motif-state (pat/pattern [:midi 60 64 67])
+                                   (pat/rhythm  [100 90 80])
+                                   :locks lk
+                                   :clock-div 1/8)
+          r0  ((resolve 'cljseq.seq/next-event) ms)
+          r1  ((resolve 'cljseq.seq/next-event) ms)
+          r2  ((resolve 'cljseq.seq/next-event) ms)]
+      (is (= 127 (:mod/cutoff (:event r0))) "lock merged at step 0")
+      (is (nil?  (:mod/cutoff (:event r1))) "no lock at step 1")
+      (is (= 32  (:mod/cutoff (:event r2))) "lock merged at step 2"))))
