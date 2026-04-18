@@ -227,10 +227,11 @@
         ;; ---- GET /ctrl (full dump) ----
         (and (= :get method) (or (= "/ctrl" path) (= "/ctrl/" path)))
         (respond 200
-          (mapv (fn [{:keys [path value type]}]
+          (mapv (fn [{:keys [path value type node-meta]}]
                   {"path"  (mapv kw->str path)
                    "value" (->json-safe value)
-                   "type"  (kw->str type)})
+                   "type"  (kw->str type)
+                   "meta"  (->json-safe node-meta)})
                 (ctrl/all-nodes)))
 
         ;; ---- GET /ctrl/<path> ----
@@ -244,7 +245,8 @@
                 (respond 200
                   {"path"  (mapv kw->str ctrl-path)
                    "value" (->json-safe (:value node))
-                   "type"  (kw->str (:type node))})))))
+                   "type"  (kw->str (:type node))
+                   "meta"  (->json-safe (or (:node-meta node) {}))})))))
 
         ;; ---- PUT /ctrl/<path> ----
         (and (= :put method) (str/starts-with? path "/ctrl/"))

@@ -48,6 +48,24 @@
 ;; defnode!
 ;; ---------------------------------------------------------------------------
 
+(deftest all-nodes-includes-node-meta-test
+  (testing "all-nodes returns :node-meta for each node"
+    (ctrl/defnode! [:all-nodes-test/param] :type :float
+                   :node-meta {:range [0.0 1.0]} :value 0.5)
+    (let [nodes (ctrl/all-nodes)
+          entry (first (filter #(= [:all-nodes-test/param] (:path %)) nodes))]
+      (is (some? entry) "node present in all-nodes output")
+      (is (= {:range [0.0 1.0]} (:node-meta entry)))
+      (is (= :float (:type entry)))
+      (is (= 0.5 (:value entry)))))
+
+  (testing "all-nodes returns empty :node-meta map for nodes without declared meta"
+    (ctrl/set! [:all-nodes-test/plain] 42)
+    (let [nodes (ctrl/all-nodes)
+          entry (first (filter #(= [:all-nodes-test/plain] (:path %)) nodes))]
+      (is (some? entry))
+      (is (= {} (:node-meta entry)) "no-meta node returns empty map"))))
+
 (deftest defnode-test
   (testing "defnode! sets type and meta"
     (ctrl/defnode! [:my/cutoff] :type :float :node-meta {:range [0.0 1.0]} :value 0.5)
