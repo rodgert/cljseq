@@ -1,24 +1,10 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.arp-test
   "Unit tests for cljseq.arp — pattern registry, playback, and step engine."
-  (:require [clojure.test  :refer [deftest is testing use-fixtures]]
+  (:require [clojure.test  :refer [deftest is testing]]
             [cljseq.arp    :as arp]
+            [cljseq.seq    :as sq]
             [cljseq.core   :as core]))
-
-;; ---------------------------------------------------------------------------
-;; Helpers
-;; ---------------------------------------------------------------------------
-
-(def ^:private played-notes (atom []))
-
-(defn- capture-play! [note dur]
-  (swap! played-notes conj {:midi (:pitch/midi note) :dur (:dur/beats note)})
-  nil)
-
-(defn- with-mock-play [f]
-  (reset! played-notes [])
-  (with-redefs [core/play! capture-play!]
-    (f)))
 
 ;; ---------------------------------------------------------------------------
 ;; Pattern registry
@@ -148,60 +134,121 @@
       (is (= [0.5 1.0] (mapv double @gates))))))
 
 ;; ---------------------------------------------------------------------------
-;; arp-loop! / stop-arp!
+;; seq-loop! / stop-seq! via ArpState
 ;; ---------------------------------------------------------------------------
 
-(deftest arp-loop-and-stop-test
-  (testing "arp-loop! returns a stoppable handle; stop-arp! sets :running? false"
+(deftest seq-loop-and-stop-test
+  (testing "seq-loop! returns a stoppable handle; stop-seq! sets :running? false"
     (with-redefs [core/play!         (fn [_ & _] nil)
                   cljseq.loop/sleep! (fn [_] (Thread/sleep 5) nil)]
-      (let [handle (arp/arp-loop! :alberti [60 64 67])]
+      (let [state  (arp/make-arp-state :alberti [60 64 67])
+            handle (sq/seq-loop! state)]
         (is (map? handle))
         (is (true? @(:running? handle)))
         (is (future? (:future handle)))
-        (arp/stop-arp! handle)
+        (sq/stop-seq! handle)
         (is (false? @(:running? handle)))
         (is (future-cancelled? (:future handle)))))))
 
 ;; ---------------------------------------------------------------------------
-;; next-step! stateful engine
+;; next-event stateful engine (IStepSequencer)
 ;; ---------------------------------------------------------------------------
 
-(deftest next-step-chord-advances-test
-  (testing "next-step! cycles through :alberti order"
+(deftest next-event-chord-advances-test
+  (testing "next-event cycles through :alberti order"
     (let [state (arp/make-arp-state :alberti [60 64 67])]
       ;; [0 2 1 2] → 60, 67, 64, 67, then wraps
-      (is (= 60 (:pitch/midi (arp/next-step! state))))
-      (is (= 67 (:pitch/midi (arp/next-step! state))))
-      (is (= 64 (:pitch/midi (arp/next-step! state))))
-      (is (= 67 (:pitch/midi (arp/next-step! state))))
+      (is (= 60 (get-in (sq/next-event state) [:event :pitch/midi])))
+      (is (= 67 (get-in (sq/next-event state) [:event :pitch/midi])))
+      (is (= 64 (get-in (sq/next-event state) [:event :pitch/midi])))
+      (is (= 67 (get-in (sq/next-event state) [:event :pitch/midi])))
       ;; wraps back
-      (is (= 60 (:pitch/midi (arp/next-step! state)))))))
+      (is (= 60 (get-in (sq/next-event state) [:event :pitch/midi]))))))
 
-(deftest next-step-phrase-advances-test
-  (testing "next-step! cycles through phrase steps"
+(deftest next-event-uses-mod-velocity-test
+  (testing "next-event returns :mod/velocity not :vel"
+    (let [state (arp/make-arp-state :alberti [60 64 67] :vel 90)
+          ev    (:event (sq/next-event state))]
+      (is (= 90 (:mod/velocity ev)))
+      (is (nil? (:vel ev))))))
+
+(deftest next-event-phrase-advances-test
+  (testing "next-event cycles through phrase steps"
     (let [state (arp/make-arp-state :phrase-01 {:root 60})]
       (let [p     (arp/get-pattern :phrase-01)
             steps (:steps p)
             n     (count steps)]
         ;; Advance through all steps; verify no exceptions and wrap-around
-        (dotimes [i (* 2 n)]  ; two full cycles
-          (let [result (arp/next-step! state)]
+        (dotimes [_ (* 2 n)]
+          (let [result (sq/next-event state)]
             (is (map? result))
             (is (number? (:beats result)))))))))
 
-(deftest next-step-rest-returns-no-pitch-test
-  (testing "next-step! on a rest step returns no :pitch/midi"
+(deftest next-event-rest-returns-nil-event-test
+  (testing "next-event on a rest step returns {:event nil :beats N}"
     (let [state (arp/make-arp-state
                   {:type  :phrase
                    :steps [{:rest true :beats 1}
                             {:semi 7 :beats 1}]}
                   {:root 60})]
-      (let [rest-result (arp/next-step! state)]
-        (is (nil? (:pitch/midi rest-result)))
+      (let [rest-result (sq/next-event state)]
+        (is (nil? (:event rest-result)))
         (is (= 1.0 (double (:beats rest-result)))))
-      (let [note-result (arp/next-step! state)]
-        (is (= 67 (:pitch/midi note-result)))))))
+      (let [note-result (sq/next-event state)]
+        (is (= 67 (get-in note-result [:event :pitch/midi])))))))
+
+(deftest next-event-phrase-parameter-locks-test
+  (testing "extra keys in phrase step are merged into the event map"
+    (let [state (arp/make-arp-state
+                  {:type  :phrase
+                   :steps [{:semi 0 :beats 1 :mod/cutoff 127}
+                            {:semi 4 :beats 1}]}
+                  {:root 60})]
+      (let [locked-ev (:event (sq/next-event state))
+            plain-ev  (:event (sq/next-event state))]
+        (is (= 127 (:mod/cutoff locked-ev)))
+        (is (nil? (:mod/cutoff plain-ev)))))))
+
+(deftest next-event-chord-parameter-locks-test
+  (testing ":params vector on chord pattern merges locks per step"
+    (let [state (arp/make-arp-state
+                  {:type   :chord
+                   :order  [0 1 2]
+                   :rhythm [1 1 1]
+                   :dur    3/4
+                   :params [{} {:mod/cutoff 64} {}]}
+                  [60 64 67])]
+      (let [ev0 (:event (sq/next-event state))
+            ev1 (:event (sq/next-event state))
+            ev2 (:event (sq/next-event state))]
+        (is (nil? (:mod/cutoff ev0)))
+        (is (= 64 (:mod/cutoff ev1)))
+        (is (nil? (:mod/cutoff ev2)))))))
+
+(deftest seq-cycle-length-test
+  (testing "seq-cycle-length for chord pattern equals order length"
+    (let [state (arp/make-arp-state :alberti [60 64 67])]
+      ;; :alberti order is [0 2 1 2] — 4 steps
+      (is (= 4 (sq/seq-cycle-length state)))))
+  (testing "seq-cycle-length for phrase pattern equals step count"
+    (let [state (arp/make-arp-state
+                  {:type  :phrase
+                   :steps [{:semi 0 :beats 1}
+                            {:semi 4 :beats 1}
+                            {:rest true :beats 1}]}
+                  {:root 60})]
+      (is (= 3 (sq/seq-cycle-length state))))))
+
+;; ---------------------------------------------------------------------------
+;; reset-chord!
+;; ---------------------------------------------------------------------------
+
+(deftest reset-chord-test
+  (testing "reset-chord! changes the chord voicing for subsequent steps"
+    (let [state  (arp/make-arp-state :up [60 64 67])
+          state2 (arp/reset-chord! state [62 65 69])]
+      ;; new state plays from updated chord
+      (is (= 62 (get-in (sq/next-event state2) [:event :pitch/midi]))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Pattern total-beats sanity
