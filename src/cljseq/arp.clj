@@ -10,18 +10,20 @@
                Indices ≥ chord length wrap with octave shifts upward.
     :rhythm  — vector of step durations in beats (1=quarter, 1/2=eighth, etc.)
     :dur     — gate fraction per step (3/4 = 75%)
+    :params  — optional vector of parameter-lock maps, parallel to :order;
+               each map is merged into the note map for that step.
+               [{} {:mod/cutoff 127} {} {:mod/resonance 32}]
 
   :phrase patterns (Hydrasynth-compatible)
     :steps   — vector of {:semi n :beats b} or {:rest true :beats b}.
                :semi is a semitone offset from the root of the held chord/note.
                :beats is the step duration in quarter-note beats.
+               Any extra keys are parameter locks merged into the note map:
+               {:semi 4 :beats 1 :mod/cutoff 127 :pitch/microtone 17}
 
   Built-in pattern library
   ─────────────────────────
-  11 chord patterns loaded from resources/arpeggios/built-in.edn:
-    :up :down :bounce :alberti :waltz-bass :broken-triad
-    :guitar-pick :jazz-stride :montuno :raga-alap :euclid-5-8
-
+  Built-in chord patterns loaded from resources/arpeggios/built-in.edn.
   64 phrase patterns loaded from resources/arpeggios/hydrasynth-phrases.edn:
     :phrase-01 through :phrase-64
 
@@ -30,27 +32,41 @@
   ls              — list all loaded patterns (keywords + descriptions)
   get-pattern     — return a pattern map by keyword
   register!       — add a custom pattern to the registry
-  play!           — play one complete iteration of a pattern
-  next-step!      — advance an arp-state atom one step, return MIDI event
-  arp-loop        — start a stateful looping arp (returns loop-id atom)
-  stop-arp!       — stop a running arp loop
+  make-arp-state  — create an ArpState record (implements IStepSequencer)
+  play!           — convenience: play one complete iteration of a pattern
+
+  ArpState implements IStepSequencer (cljseq.seq):
+    (next-event arp)       — advance one step, return {:event note-map :beats N}
+    (seq-cycle-length arp) — steps in one full cycle
+
+  Use seq-loop! / run-cycle! / run-step! from cljseq.seq to drive ArpState.
 
   Examples
   ────────
-  ;; One-shot chord arpeggio
-  (arp/play! :alberti (chord/make :C4 :major) :vel 90)
+  ;; One-shot arpeggio (convenience)
+  (arp/play! :alberti (chord/chord :C 4 :major) :vel 90)
 
-  ;; One-shot Hydrasynth phrase (root = C4, semitone offsets applied)
-  (arp/play! :phrase-14 {:root 60} :vel 80)
+  ;; Stateful step-by-step (inside a live-loop)
+  (def my-arp (make-arp-state :phrase-03 {:root 60} :vel 95))
+  (deflive-loop :arp {}
+    (run-cycle! my-arp))
 
-  ;; Looping phrase arp — stays alive until stop-arp! called
-  (def my-arp (arp/arp-loop! :phrase-03 {:root 60} :vel 95))
-  (arp/stop-arp! my-arp)"
+  ;; Looping in background
+  (def handle (seq-loop! my-arp))
+  (stop-seq! handle)
+
+  ;; Phrase step with parameter lock
+  (register! :locked-phrase
+    {:type  :phrase
+     :steps [{:semi 0 :beats 1 :mod/cutoff 64}
+             {:semi 4 :beats 1 :mod/cutoff 127}
+             {:semi 7 :beats 1}
+             {:rest true :beats 1}]})"
   (:require [clojure.edn     :as edn]
             [clojure.java.io :as io]
-            [cljseq.chord    :as chord]
             [cljseq.core     :as core]
-            [cljseq.loop     :as loop-ns]))
+            [cljseq.loop     :as loop-ns]
+            [cljseq.seq      :as sq]))
 
 ;; ---------------------------------------------------------------------------
 ;; Pattern registry
@@ -64,7 +80,7 @@
 (defn register!
   "Add or replace a pattern in the registry.
 
-  `kw`      — keyword identifying the pattern (e.g. :my-alberti)
+  `kw`      — keyword identifying the pattern (e.g. :my-pattern)
   `pattern` — map with at least :type and either :order/:rhythm/:dur (chord)
                or :steps (phrase)."
   [kw pattern]
@@ -88,24 +104,16 @@
 ;; EDN loading helpers
 ;; ---------------------------------------------------------------------------
 
-(defn- load-edn-resource
-  "Read a vector of pattern maps from `resource-path` on the classpath.
-  Returns nil if the resource is not found."
-  [resource-path]
+(defn- load-edn-resource [resource-path]
   (when-let [r (io/resource resource-path)]
     (edn/read-string (slurp r))))
 
-(defn- load-built-ins!
-  "Load built-in chord patterns from resources/arpeggios/built-in.edn."
-  []
+(defn- load-built-ins! []
   (when-let [patterns (load-edn-resource "arpeggios/built-in.edn")]
     (doseq [p patterns]
       (register! (:name p) p))))
 
-(defn- load-hydrasynth-phrases!
-  "Load 64 Hydrasynth phrases from resources/arpeggios/hydrasynth-phrases.edn.
-  Each phrase is registered as :phrase-NN (zero-padded two digits)."
-  []
+(defn- load-hydrasynth-phrases! []
   (when-let [phrases (load-edn-resource "arpeggios/hydrasynth-phrases.edn")]
     (doseq [p phrases]
       (let [kw (keyword (format "phrase-%02d" (:id p)))]
@@ -128,12 +136,11 @@
     :else                 order))
 
 (defn- chord-note-at
-  "Return the MIDI note for chord-tone index `i`.
-  Indices ≥ chord-size wrap upward by octave."
+  "Return the MIDI note for chord-tone index `i`, wrapping upward by octave."
   [chord-midis i]
-  (let [n    (count chord-midis)
-        idx  (mod i n)
-        oct  (quot i n)]
+  (let [n   (count chord-midis)
+        idx (mod i n)
+        oct (quot i n)]
     (+ (nth chord-midis idx) (* 12 oct))))
 
 ;; ---------------------------------------------------------------------------
@@ -145,197 +152,174 @@
   [root-midi step]
   (+ root-midi (:semi step 0)))
 
+(def ^:private phrase-reserved-keys
+  "Keys consumed by the phrase step engine; all others are parameter locks."
+  #{:semi :beats :rest :dur})
+
+(defn- phrase-locks
+  "Extract parameter-lock keys from a phrase step map."
+  [step]
+  (not-empty (apply dissoc step phrase-reserved-keys)))
+
 ;; ---------------------------------------------------------------------------
-;; Core playback
+;; ArpState record — implements IStepSequencer
+;; ---------------------------------------------------------------------------
+
+(defrecord ArpState [pattern    ; resolved pattern map
+                     ptype      ; :chord or :phrase
+                     chord-midis ; vec of MIDI ints (chord mode) or nil
+                     root-midi  ; MIDI root (phrase mode) or nil
+                     rate       ; beat-duration multiplier
+                     vel        ; default velocity 0-127
+                     step-atom]) ; atom holding current step index
+
+(defn- resolve-pattern [pattern-kw]
+  (if (map? pattern-kw)
+    pattern-kw
+    (or (get-pattern pattern-kw)
+        (throw (ex-info (str "arp: unknown pattern " pattern-kw)
+                        {:pattern pattern-kw})))))
+
+(defn- resolve-chord-midis [chord-or-root oct]
+  (let [base (cond
+               (map? chord-or-root)    (:midi/notes chord-or-root)
+               (vector? chord-or-root) chord-or-root
+               :else                   [(long chord-or-root)])]
+    (mapv #(+ % (* 12 oct)) base)))
+
+(defn- resolve-root-midi [chord-or-root oct]
+  (+ (cond
+       (map? chord-or-root)     (:root chord-or-root 60)
+       (integer? chord-or-root) (long chord-or-root)
+       :else                    60)
+     (* 12 oct)))
+
+(defn make-arp-state
+  "Create an ArpState that implements IStepSequencer.
+
+  Arguments:
+    pattern-kw     — keyword of a registered pattern, or a pattern map directly
+    chord-or-root  — for :chord patterns: a chord map with :midi/notes, or a
+                     vector of MIDI integers.
+                     For :phrase patterns: a map with :root (MIDI integer), or a
+                     plain MIDI integer.
+  Options:
+    :vel   — default velocity 0–127 (default 100)
+    :oct   — octave shift applied to all notes (default 0)
+    :rate  — beat-duration multiplier (default 1.0)
+
+  Returns an ArpState record. Use with run-cycle!, run-step!, or seq-loop!
+  from cljseq.seq.
+
+  Example:
+    (def my-arp (make-arp-state :bounce (chord/chord :C 4 :maj7) :vel 90))
+    (deflive-loop :melody {} (run-cycle! my-arp))"
+  [pattern-kw chord-or-root & {:keys [vel oct rate]
+                                :or   {vel 100 oct 0 rate 1.0}}]
+  (let [pattern (resolve-pattern pattern-kw)
+        ptype   (:type pattern :phrase)]
+    (->ArpState pattern
+                ptype
+                (when (= ptype :chord) (resolve-chord-midis chord-or-root oct))
+                (when (= ptype :phrase) (resolve-root-midi chord-or-root oct))
+                (double rate)
+                (long vel)
+                (atom 0))))
+
+(defn reset-chord!
+  "Update the chord voicing of a running ArpState in place.
+
+  `arp`          — an ArpState record
+  `chord-or-root` — new chord map, MIDI integer vector, or root MIDI integer
+
+  Does not reset the step position — the arp continues from wherever it is
+  in the pattern, with the new pitches taking effect on the next step.
+
+  Example:
+    ;; Change chord on the bar boundary from the parent loop
+    (deflive-loop :harmony {}
+      (reset-chord! my-arp (next-chord!))
+      (run-cycle! my-arp))"
+  [^ArpState arp chord-or-root]
+  (let [new-midis (resolve-chord-midis chord-or-root 0)]
+    ;; ArpState is a record (immutable fields), but we can rebuild it cheaply.
+    ;; Return the new state — callers should rebind their var.
+    (assoc arp :chord-midis new-midis)))
+
+;; ---------------------------------------------------------------------------
+;; IStepSequencer implementation
+;; ---------------------------------------------------------------------------
+
+(defn- chord-cycle-length [^ArpState arp]
+  (count (derive-order (get-in arp [:pattern :order])
+                       (count (:chord-midis arp)))))
+
+(defn- phrase-cycle-length [^ArpState arp]
+  (count (get-in arp [:pattern :steps])))
+
+(extend-protocol sq/IStepSequencer
+  ArpState
+  (next-event [arp]
+    (let [{:keys [pattern ptype chord-midis root-midi rate vel step-atom]} arp]
+      (case ptype
+        :chord
+        (let [order    (derive-order (:order pattern) (count chord-midis))
+              rhythm   (:rhythm pattern (repeat (count order) 1))
+              params   (:params pattern)
+              dur-frac (double (:dur pattern 3/4))
+              n        (count order)
+              idx      (mod @step-atom n)
+              chord-i  (nth order idx)
+              midi     (chord-note-at chord-midis chord-i)
+              beats    (* (double (nth (vec rhythm) idx 1)) rate)
+              gate     (* beats dur-frac)
+              lock     (when params (nth params idx nil))
+              event    (cond-> {:pitch/midi   midi
+                                :dur/beats    gate
+                                :mod/velocity vel}
+                         (seq lock) (merge lock))]
+          (swap! step-atom #(mod (inc %) n))
+          {:event event :beats beats})
+
+        :phrase
+        (let [steps    (:steps pattern)
+              dur-frac (double (:dur pattern 3/4))
+              n        (count steps)
+              idx      (mod @step-atom n)
+              step     (nth steps idx)
+              beats    (* (double (:beats step 1)) rate)
+              locks    (phrase-locks step)]
+          (swap! step-atom #(mod (inc %) n))
+          (if (:rest step)
+            {:event nil :beats beats}
+            (let [event (cond-> {:pitch/midi   (step-midi root-midi step)
+                                 :dur/beats    (* beats dur-frac)
+                                 :mod/velocity vel}
+                          (seq locks) (merge locks))]
+              {:event event :beats beats}))))))
+
+  (seq-cycle-length [arp]
+    (case (:ptype arp)
+      :chord  (chord-cycle-length arp)
+      :phrase (phrase-cycle-length arp))))
+
+;; ---------------------------------------------------------------------------
+;; Convenience one-shot player
 ;; ---------------------------------------------------------------------------
 
 (defn play!
   "Play one complete iteration of `pattern-kw` against `chord-or-root`.
-  Blocks (sleeps) for the full pattern duration — call from inside a
-  `live-loop` or from a background thread.
+  Convenience wrapper around make-arp-state + run-cycle!.
+  Blocks for the full pattern duration — call from a live-loop or background thread.
 
-  Arguments
-  ─────────
-  pattern-kw     — keyword of a registered pattern, or a pattern map directly
-  chord-or-root  — for :chord patterns: a chord map with :midi/notes key, or a
-                   vector of MIDI integers.
-                   For :phrase patterns: a map with :root (MIDI integer), or a
-                   plain MIDI integer for the root note.
-  opts           — keyword args:
-                     :vel      velocity 0–127 (default 100)
-                     :oct      octave shift applied to all notes (default 0)
-                     :rate     beat-duration multiplier (default 1.0);
-                               use 2.0 for half-speed, 0.5 for double-speed
-
-  Each note is sent via core/play!; timing advances via loop-ns/sleep!
-  (works correctly inside live-loops and falls back to Thread/sleep outside)."
-  [pattern-kw chord-or-root & {:keys [vel oct rate]
-                                :or   {vel 100 oct 0 rate 1.0}}]
-  (let [pattern  (if (map? pattern-kw)
-                   pattern-kw
-                   (or (get-pattern pattern-kw)
-                       (throw (ex-info (str "arp: unknown pattern " pattern-kw)
-                                       {:pattern pattern-kw}))))
-        ptype    (:type pattern :phrase)]
-    (case ptype
-      :chord
-      (let [chord-midis (cond
-                          (map? chord-or-root)    (:midi/notes chord-or-root)
-                          (vector? chord-or-root) chord-or-root
-                          :else                   [chord-or-root])
-            order       (derive-order (:order pattern) (count chord-midis))
-            rhythm      (:rhythm pattern (repeat (count order) 1))
-            dur-frac    (:dur pattern 3/4)]
-        (doseq [[idx beats] (map vector order rhythm)]
-          (let [midi (+ (chord-note-at chord-midis idx) (* 12 oct))
-                db   (* beats rate)
-                gate (* db dur-frac)]
-            (core/play! (cond-> {:pitch/midi midi :dur/beats gate}
-                          vel (assoc :mod/velocity vel)))
-            (loop-ns/sleep! db))))
-
-      :phrase
-      (let [root-midi (cond
-                        (map? chord-or-root)     (+ (:root chord-or-root 60) (* 12 oct))
-                        (integer? chord-or-root) (+ chord-or-root (* 12 oct))
-                        :else                    (+ 60 (* 12 oct)))
-            steps     (:steps pattern)
-            dur-frac  (:dur pattern 3/4)]
-        (doseq [step steps]
-          (let [db (* (:beats step 1) rate)]
-            (when-not (:rest step)
-              (core/play! (cond-> {:pitch/midi (step-midi root-midi step)
-                                   :dur/beats  (* db dur-frac)}
-                            vel (assoc :mod/velocity vel))))
-            (loop-ns/sleep! db)))))))
-
-;; ---------------------------------------------------------------------------
-;; Looping arp engine
-;; ---------------------------------------------------------------------------
-
-(defn arp-loop!
-  "Start a looping arp that repeats `pattern-kw` until stopped.
-
-  Arguments mirror `play!`. Returns a loop handle — a map with:
-    :running?  — atom; true while the loop is active
-    :future    — the background future
-
-  Pass the handle to stop-arp! to cancel the loop. The handle is
-  self-contained: no global registry is needed.
-
-  The loop is phase-aware: each iteration starts after the previous one
-  completes, so tempo changes (via core/set-bpm!) take effect on the next
-  cycle.
+  Options:
+    :vel   — velocity 0–127 (default 100)
+    :oct   — octave shift (default 0)
+    :rate  — beat-duration multiplier (default 1.0)
 
   Example:
-    (def my-arp (arp/arp-loop! :alberti [60 64 67] :vel 90))
-    (arp/stop-arp! my-arp)"
-  [pattern-kw chord-or-root & opts]
-  (let [running? (atom true)
-        f (future
-            (try
-              (loop []
-                (when @running?
-                  (apply play! pattern-kw chord-or-root opts)
-                  (recur)))
-              (catch InterruptedException _)
-              (catch Exception e
-                (binding [*out* *err*]
-                  (println "[arp] loop error:" (.getMessage e))))))]
-    {:running? running? :future f}))
-
-(defn stop-arp!
-  "Stop a running arp loop.
-
-  `loop-handle` — the map returned by arp-loop!."
-  [loop-handle]
-  (when loop-handle
-    (reset! (:running? loop-handle) false)
-    (future-cancel (:future loop-handle))
-    nil))
-
-;; ---------------------------------------------------------------------------
-;; Step-by-step engine (for integration with live-loops and Berlin ostinati)
-;; ---------------------------------------------------------------------------
-
-(defn make-arp-state
-  "Create a mutable arp state atom for use with next-step!.
-
-  `pattern-kw`     — pattern keyword or map
-  `chord-or-root`  — as in play!
-  opts:
-    :rate   — beat-duration multiplier (default 1.0)
-    :vel    — velocity (default 100)
-    :oct    — octave shift (default 0)
-
-  The returned atom holds:
-    :pattern       — resolved pattern map
-    :chord-midis   — resolved MIDI integers (chord mode) or nil
-    :root-midi     — resolved root MIDI (phrase mode) or nil
-    :step-index    — current position in the pattern
-    :rate :vel :oct — as provided"
-  [pattern-kw chord-or-root & {:keys [rate vel oct]
-                                :or   {rate 1.0 vel 100 oct 0}}]
-  (let [pattern (if (map? pattern-kw)
-                  pattern-kw
-                  (or (get-pattern pattern-kw)
-                      (throw (ex-info (str "arp: unknown pattern " pattern-kw)
-                                      {:pattern pattern-kw}))))
-        ptype   (:type pattern :phrase)]
-    (atom {:pattern     pattern
-           :ptype       ptype
-           :chord-midis (when (= ptype :chord)
-                          (let [m chord-or-root]
-                            (cond
-                              (map? m)    (:midi/notes m)
-                              (vector? m) m
-                              :else       [m])))
-           :root-midi   (when (= ptype :phrase)
-                          (+ (if (map? chord-or-root)
-                               (:root chord-or-root 60)
-                               (if (integer? chord-or-root) chord-or-root 60))
-                             (* 12 oct)))
-           :step-index  0
-           :rate        rate
-           :vel         vel
-           :oct         oct})))
-
-(defn next-step!
-  "Advance `arp-state` one step.
-
-  Returns a map:
-    {:pitch/midi N   — MIDI note to play (absent if this step is a rest)
-     :dur/beats  D   — gate duration in beats
-     :vel        V   — velocity
-     :beats      B   — total step duration in beats (advance the clock by this)}
-
-  Mutates arp-state to advance :step-index, wrapping at pattern length."
-  [arp-state]
-  (let [{:keys [pattern ptype chord-midis root-midi step-index rate vel]} @arp-state]
-    (case ptype
-      :chord
-      (let [order   (derive-order (:order pattern) (count chord-midis))
-            rhythm  (:rhythm pattern (repeat (count order) 1))
-            dur-frac (:dur pattern 3/4)
-            n       (count order)
-            idx     (mod step-index n)
-            midi    (chord-note-at chord-midis (nth order idx))
-            beats   (* (nth (vec rhythm) idx 1) rate)
-            gate    (* beats dur-frac)]
-        (swap! arp-state update :step-index #(mod (inc %) n))
-        {:pitch/midi midi :dur/beats gate :vel vel :beats beats})
-
-      :phrase
-      (let [steps    (get-in @arp-state [:pattern :steps])
-            dur-frac (:dur (:pattern @arp-state) 3/4)
-            n        (count steps)
-            idx      (mod step-index n)
-            step     (nth steps idx)
-            beats    (* (:beats step 1) rate)]
-        (swap! arp-state update :step-index #(mod (inc %) n))
-        (if (:rest step)
-          {:beats beats :vel vel}
-          {:pitch/midi (step-midi root-midi step)
-           :dur/beats  (* beats dur-frac)
-           :vel        vel
-           :beats      beats})))))
+    (arp/play! :alberti (chord/chord :C 4 :major) :vel 90 :rate 0.5)"
+  [pattern-kw chord-or-root & {:keys [vel oct rate]
+                                :or   {vel 100 oct 0 rate 1.0}}]
+  (let [state (make-arp-state pattern-kw chord-or-root :vel vel :oct oct :rate rate)]
+    (sq/run-cycle! state)))

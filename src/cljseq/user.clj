@@ -73,7 +73,8 @@
             [cljseq.temporal-buffer :as tbuf]
             [cljseq.ctrl            :as ctrl-ns]
             [cljseq.supervisor      :as supervisor]
-            [cljseq.arp             :as arp-ns]))
+            [cljseq.arp             :as arp-ns]
+            [cljseq.seq             :as sq]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session lifecycle
@@ -542,10 +543,17 @@
 (def arp-get            arp-ns/get-pattern)
 (def arp-register!      arp-ns/register!)
 (def arp-play!          arp-ns/play!)
-(def arp-loop!          arp-ns/arp-loop!)
-(def arp-stop!          arp-ns/stop-arp!)
 (def make-arp-state     arp-ns/make-arp-state)
-(def next-arp-step!     arp-ns/next-step!)
+(def reset-arp-chord!   arp-ns/reset-chord!)
+
+;; ---------------------------------------------------------------------------
+;; IStepSequencer runners (cljseq.seq)
+;; ---------------------------------------------------------------------------
+
+(def run-step!          sq/run-step!)
+(def run-cycle!         sq/run-cycle!)
+(def seq-loop!          sq/seq-loop!)
+(def stop-seq!          sq/stop-seq!)
 
 ;; ---------------------------------------------------------------------------
 ;; MIDI input (cljseq.midi-in)

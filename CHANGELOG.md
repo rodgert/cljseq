@@ -8,6 +8,12 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Prerequisites before cutting next release
+
+- [ ] Run `npx shadow-cljs release app` to produce `resources/public/js/main.js`
+- [ ] Visual check of the control surface at `http://localhost:7177/`:
+  beat dot pulses, level-meter sliders fill, XY pad sends ctrl writes
+
 ---
 
 ## [0.15.0] — 2026-04-17
