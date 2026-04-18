@@ -530,6 +530,26 @@
       (stop-loop! lname)))
   nil)
 
+(defn loop-status
+  "Return a vector of {:name kw :running? bool :ticks long} for all registered
+  live-loops. Returns an empty vector if the system is not started.
+
+  :running?  — true if the loop's thread is alive and has not been stopped
+  :ticks     — number of completed iterations since the loop was started
+
+  Example:
+    (loop/loop-status)
+    ;; => [{:name :bass :running? true :ticks 42}
+    ;;     {:name :pad  :running? true :ticks 41}]"
+  []
+  (if-let [s @system-ref]
+    (mapv (fn [[lname entry]]
+            {:name     lname
+             :running? @(:running? entry)
+             :ticks    (get entry :tick-count 0)})
+          (:loops @s))
+    []))
+
 (defn restart-loop!
   "Restart a named loop whose thread has died, aligning re-entry to the next
   `align-beats` boundary (default 4). This uses the last-known fn from the

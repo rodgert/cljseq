@@ -53,9 +53,18 @@ header h1 {
 
 .panels {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 3fr 2fr;
   flex: 1;
   overflow: hidden;
+}
+
+/* ---------- Right panel (loop monitor + log stacked) ---------- */
+
+.right-panel {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-left: 1px solid var(--border);
 }
 
 /* ---------- Connection badge ---------- */
@@ -98,8 +107,7 @@ header h1 {
 
 /* ---------- Panel base ---------- */
 
-.ctrl-tree,
-.log {
+.ctrl-tree {
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -107,7 +115,48 @@ header h1 {
 }
 
 .log {
-  border-right: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex: 1;
+}
+
+/* ---------- Ctrl tree group headers ---------- */
+
+.group-header {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 4px 1rem;
+  cursor: pointer;
+  user-select: none;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.group-header:hover {
+  background: #1f1f1f;
+}
+
+.group-chevron {
+  font-size: 9px;
+  color: var(--dim);
+  width: 1em;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.group-name {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--text);
+}
+
+.group-count {
+  font-size: 10px;
+  color: var(--dim);
+  margin-left: 0.2rem;
 }
 
 h3 {
@@ -318,6 +367,60 @@ button.enum-btn.active {
 
 .log-entry .path  { color: var(--dim); flex: 1; }
 .log-entry .value { color: var(--accent); }
+
+/* ---------- Loop monitor ---------- */
+
+.loop-monitor {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  max-height: 190px;
+  display: flex;
+  flex-direction: column;
+}
+
+.loop-list {
+  overflow-y: auto;
+  flex: 1;
+  padding: 0.25rem 0;
+}
+
+.loop-empty {
+  padding: 6px 1rem;
+  color: var(--dim);
+  font-size: 11px;
+  font-style: italic;
+}
+
+.loop-entry {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 3px 1rem;
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.loop-dot {
+  width:         7px;
+  height:        7px;
+  border-radius: 50%;
+  flex-shrink:   0;
+}
+
+.loop-dot.running { background: var(--accent); }
+.loop-dot.stopped { background: var(--dim); }
+
+.loop-name {
+  color: var(--text);
+  flex: 1;
+}
+
+.loop-ticks {
+  color:     var(--dim);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  min-width: 5ch;
+  text-align: right;
+}
 
 /* ---------- Scrollbar ---------- */
 
