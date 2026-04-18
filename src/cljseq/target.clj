@@ -29,8 +29,9 @@
 
   ## Concrete implementations
 
-    FnTarget         — wraps plain functions; used by SC, sample backends
-    OscParamTarget   — IParamTarget over OSC (FX processors, Pd params)
+    FnTarget      — wraps plain functions; used by SC, sample backends
+    ParamTarget   — ITarget + IParamTarget for param-only devices (FX units,
+                    OSC/MIDI-controlled hardware, Pd patches in param mode)
 
   ## Registration pattern for backend namespaces
 
@@ -165,10 +166,12 @@
   (->FnTarget id trigger-fn release-fn live?-fn (vec param-root)))
 
 ;; ---------------------------------------------------------------------------
-;; OscParamTarget — IParamTarget over OSC; for FX processors without triggers
+;; ParamTarget — ITarget + IParamTarget; for FX processors and devices without
+;; triggered note events (e.g. reverb units, OSC FX processors, Pd patches
+;; operating in continuous-param mode)
 ;; ---------------------------------------------------------------------------
 
-(defrecord OscParamTarget [id host port addr-prefix param-root-path live?-fn]
+(defrecord ParamTarget [id param-root-path live?-fn]
   ITarget
   (target-id    [_] id)
   (target-live? [_] (boolean (live?-fn)))
@@ -176,27 +179,26 @@
   IParamTarget
   (param-root  [_] param-root-path)
   (send-param! [_ path value]
-    ;; Mirror to ctrl tree so watchers / UI see the value
+    ;; Mirror to ctrl tree so watchers / UI see the value.
+    ;; Actual transport (OSC, MIDI CC, etc.) is handled by ctrl/bind! bindings
+    ;; on the param subtree — the ctrl tree delivers the bytes.
     (let [full-path (if (vector? path)
                       (into param-root-path path)
                       (conj param-root-path path))]
       (ctrl/set! full-path value))))
-;; Note: actual OSC transport is handled by the caller via ctrl/bind!
-;; binding the ctrl path to an OSC address. OscParamTarget provides
-;; the device identity and relative-path addressing; the ctrl tree
-;; delivers the bytes.
 
-(defn osc-param-target
-  "Build an OscParamTarget for a continuously-running FX processor.
+(defn param-target
+  "Build a ParamTarget for a continuously-running device with addressable
+  parameters (FX processors, OSC/MIDI-controlled hardware, Pd patches).
 
-  The OSC transport is handled by ctrl/bind! bindings on the param subtree
-  — this record provides the device identity and IParamTarget protocol face.
+  The device's param subtree is wired to its transport (OSC address, MIDI CC,
+  etc.) via ctrl/bind! — this record provides the device identity and the
+  IParamTarget protocol face.
 
   Options:
-    :id          — keyword name
     :param-root  — ctrl-tree path root (e.g. [:studio :nightsky])
     :live?-fn    — zero-arg fn returning boolean (default: always true)"
   [id & {:keys [param-root live?-fn]
           :or   {param-root []
                  live?-fn   (constantly true)}}]
-  (->OscParamTarget id nil nil nil (vec param-root) live?-fn))
+  (->ParamTarget id (vec param-root) live?-fn))

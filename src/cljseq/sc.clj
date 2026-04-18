@@ -836,32 +836,27 @@
   (* 440.0 (Math/pow 2.0 (/ (- (double midi) 69.0) 12.0))))
 
 (defn- sc-play-dispatch!
-  "Handle a :synth step map routed from core/play!.
-  Signature matches what core/play! passes: [note dur bpm]."
-  [note dur bpm]
+  "Translate a clean step map (with :dur/beats guaranteed) into an SC synth event.
+  `bpm` is provided by the caller so this fn remains pure and testable."
+  [note bpm]
   (when (sc-connected?)
-    (let [beats  (or (:dur/beats note) dur 1/4)
+    (let [beats  (double (:dur/beats note 1/4))
           midi   (:pitch/midi note)
           freq   (when midi (midi->freq midi))
-          dur-ms (long (clock/beats->ms (double beats) (double bpm)))
+          dur-ms (long (clock/beats->ms beats (double bpm)))
           event  (cond-> (dissoc note :dur/beats :pitch/midi)
                    freq (assoc :freq freq)
                    true (assoc :dur-ms dur-ms))]
       (ensure-synthdef! (:synth note))
       (sc-play! event))))
 
-;; Register with core — legacy atom dispatch (backward compat)
-(core/register-sc-dispatch! sc-play-dispatch!)
-
-;; Register as a named ITriggerTarget in the target registry.
-;; Allows (play! {:target :sc ...}) or (play! {:synth :sc ...}) to route
-;; through the ITriggerTarget protocol rather than the atom dispatch.
+;; Register :sc as a named ITriggerTarget.
+;; play! routes {:synth :any-synthdef-name ...} here via the :synth shorthand.
+;; The step map arriving at trigger-note! has :dur/beats guaranteed (normalised
+;; by play!) and carries no :bpm or :dur keys — bpm is obtained from core/get-bpm.
 (target/register! :sc
   (target/fn-target :sc
-    :trigger-fn  (fn [event]
-                   (let [bpm (or (:bpm event) (core/get-bpm))
-                         dur (or (:dur event) (:dur/beats event) 1/4)]
-                     (sc-play-dispatch! (dissoc event :bpm :dur) dur bpm)))
+    :trigger-fn  (fn [event] (sc-play-dispatch! event (core/get-bpm)))
     :live?-fn    sc-connected?
     :param-root  [:sc]))
 
