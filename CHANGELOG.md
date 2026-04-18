@@ -8,6 +8,10 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+---
+
+## [0.15.0] — 2026-04-17
+
 ### Added
 
 #### First-class arpeggiator (`cljseq.arp`)
@@ -54,6 +58,17 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `start-arp!` now uses `loop-ns/sleep!` instead of raw `Thread/sleep` — the
   arp cycle respects virtual time inside live-loops and falls back gracefully
   to wall-clock sleep at the REPL. Removes the manual BPM→ms conversion.
+
+### Changed
+
+- **`cljseq.dsl` → `cljseq.live`** — renamed to reflect its actual role as an
+  execution-context layer for live performance (dynamic vars, synth routing,
+  tuning, modulation) rather than a DSL sugar layer. All dependent namespaces
+  (`ensemble`, `m21`, `pattern`, `loop`, `rhythm`) and tests updated.
+  `user.clj` re-exports updated; `dsl/arp!` removed (superseded by `cljseq.arp`).
+- **`choose-from-scale`** moved from `cljseq.live` to `cljseq.scale` — no
+  live-context dependency; now lives alongside the Scale record and named-scale
+  registry it operates on.
 
 ---
 
