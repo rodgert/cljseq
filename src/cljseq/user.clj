@@ -564,7 +564,7 @@
 (def lookup-target      target/lookup)
 (def registered-targets target/registered-targets)
 (def fn-target          target/fn-target)
-(def osc-param-target   target/osc-param-target)
+(def param-target       target/param-target)
 
 ;; ---------------------------------------------------------------------------
 ;; MIDI input (cljseq.midi-in)

@@ -232,28 +232,10 @@
 ;; ---------------------------------------------------------------------------
 ;; Legacy dispatch atoms — kept for backward compatibility.
 ;; New code should use cljseq.target/register! and ITriggerTarget instead.
-;; When a target is registered via target/register!, it takes priority.
-;; The atom-based dispatch fires as a fallback for backends (cljseq.sc,
-;; cljseq.sample) that registered before the target protocol existed.
+;; All audio backends register their ITriggerTarget via target/register! at
+;; namespace load time. play! routes :target/:synth/:sample keys through the
+;; target registry exclusively — no legacy dispatch atoms.
 ;; ---------------------------------------------------------------------------
-
-(defonce ^:private sc-dispatch (atom nil))
-
-(defn ^:no-doc register-sc-dispatch!
-  "Register a function to handle :synth play! events.
-  Called automatically when cljseq.sc is loaded.
-  Prefer target/register! with an ITriggerTarget for new backends."
-  [f]
-  (reset! sc-dispatch f))
-
-(defonce ^:private sample-dispatch (atom nil))
-
-(defn ^:no-doc register-sample-dispatch!
-  "Register a function to handle :sample play! events.
-  Called automatically when cljseq.sample is loaded.
-  Prefer target/register! with an ITriggerTarget for new backends."
-  [f]
-  (reset! sample-dispatch f))
 
 ;; play! — Phase 0 stdout stub
 ;; ---------------------------------------------------------------------------
@@ -279,26 +261,37 @@
   ([note]
    (play! note nil))
   ([note dur]
-   ;; Target dispatch — routes :synth/:sample events to registered ITriggerTargets.
-   ;; Priority: target registry (ITriggerTarget protocol) → legacy dispatch atoms.
-   ;; MIDI falls through when neither is registered for the given target key.
+   ;; Target dispatch — routes :target/:synth/:sample step maps to registered
+   ;; ITriggerTargets via the target registry.
+   ;;
+   ;; Routing rules:
+   ;;   :target :foo          — explicit: look up :foo in registry
+   ;;   :synth  :my-synthdef  — SC shorthand: routes to :sc target
+   ;;                           (:synth names the SC SynthDef, not the target)
+   ;;   :sample :my-buf       — sample shorthand: routes to :sample target
+   ;;
+   ;; Event normalisation: play! ensures :dur/beats is present before handing
+   ;; the step map to trigger-note!. No :bpm or :dur keys are injected —
+   ;; backends retrieve BPM via core/get-bpm when they need it.
    (cond
-     ;; 1. Named target registered via cljseq.target/register! (ITriggerTarget)
-     (and (map? note)
-          (or (contains? note :synth) (contains? note :target))
-          (target/lookup (or (:target note) (:synth note))))
-     (let [tgt (target/lookup (or (:target note) (:synth note)))]
-       (target/trigger-note! tgt (assoc note
-                                        :dur   (or dur (:dur/beats note) 1/4)
-                                        :bpm   (get-bpm))))
+     ;; 1. Explicit :target key — look up named target directly
+     (and (map? note) (contains? note :target) (target/lookup (:target note)))
+     (let [tgt (target/lookup (:target note))
+           ev  (cond-> note (nil? (:dur/beats note)) (assoc :dur/beats (or dur 1/4)))]
+       (target/trigger-note! tgt ev))
 
-     ;; 2. Legacy SC dispatch atom (cljseq.sc registers this at load time)
-     (and (map? note) (contains? note :synth) @sc-dispatch)
-     (@sc-dispatch note dur (get-bpm))
+     ;; 2. :synth key — SC shorthand; routes to :sc target regardless of synth name
+     ;;    (:synth is the SynthDef name; :sc is the target)
+     (and (map? note) (contains? note :synth) (target/lookup :sc))
+     (let [tgt (target/lookup :sc)
+           ev  (cond-> note (nil? (:dur/beats note)) (assoc :dur/beats (or dur 1/4)))]
+       (target/trigger-note! tgt ev))
 
-     ;; 3. Legacy sample dispatch atom (cljseq.sample registers this at load time)
-     (and (map? note) (contains? note :sample) @sample-dispatch)
-     (@sample-dispatch note dur (get-bpm))
+     ;; 3. :sample key — sample shorthand; routes to :sample target
+     (and (map? note) (contains? note :sample) (target/lookup :sample))
+     (let [tgt (target/lookup :sample)
+           ev  (cond-> note (nil? (:dur/beats note)) (assoc :dur/beats (or dur 1/4)))]
+       (target/trigger-note! tgt ev))
 
      :else
      (let [midi     (cond

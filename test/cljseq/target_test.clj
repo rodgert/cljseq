@@ -1,7 +1,7 @@
 ; SPDX-License-Identifier: EPL-2.0
 (ns cljseq.target-test
   "Unit tests for cljseq.target — ITarget / ITriggerTarget / IParamTarget protocols,
-  FnTarget, OscParamTarget, and the target registry."
+  FnTarget, ParamTarget, and the target registry."
   (:require [clojure.test  :refer [deftest is testing]]
             [cljseq.target :as target]
             [cljseq.ctrl   :as ctrl]))
@@ -99,24 +99,24 @@
       (is (= [[:studio :test-dev :reverb :mix] 0.7] @written)))))
 
 ;; ---------------------------------------------------------------------------
-;; OscParamTarget — ITarget + IParamTarget
+;; ParamTarget — ITarget + IParamTarget
 ;; ---------------------------------------------------------------------------
 
-(deftest osc-param-target-test
-  (testing "osc-param-target satisfies ITarget and IParamTarget"
-    (let [tgt (target/osc-param-target :nightsky
+(deftest param-target-test
+  (testing "param-target satisfies ITarget and IParamTarget"
+    (let [tgt (target/param-target :nightsky
                 :param-root [:studio :nightsky])]
       (is (= :nightsky (target/target-id tgt)))
       (is (true?  (target/target-live? tgt))) ; defaults to always true
       (is (= [:studio :nightsky] (target/param-root tgt)))))
 
-  (testing "osc-param-target does NOT satisfy ITriggerTarget"
-    (let [tgt (target/osc-param-target :fx-only :param-root [:fx])]
+  (testing "param-target does NOT satisfy ITriggerTarget"
+    (let [tgt (target/param-target :fx-only :param-root [:fx])]
       (is (not (satisfies? target/ITriggerTarget tgt)))))
 
   (testing "send-param! mirrors value to ctrl tree"
     (let [written (atom nil)
-          tgt (target/osc-param-target :osc-write-test
+          tgt (target/param-target :param-write-test
                 :param-root [:studio :nightsky])]
       (with-redefs [ctrl/set! (fn [path val] (reset! written [path val]))]
         (target/send-param! tgt :mix 0.4))
@@ -133,8 +133,8 @@
       (is (satisfies? target/ITriggerTarget  tgt))
       (is (satisfies? target/IParamTarget    tgt))))
 
-  (testing "OscParamTarget satisfies ITarget and IParamTarget but not ITriggerTarget"
-    (let [tgt (target/osc-param-target :fx :param-root [])]
+  (testing "ParamTarget satisfies ITarget and IParamTarget but not ITriggerTarget"
+    (let [tgt (target/param-target :fx :param-root [])]
       (is (satisfies? target/ITarget         tgt))
       (is (satisfies? target/IParamTarget    tgt))
       (is (not (satisfies? target/ITriggerTarget tgt))))))
