@@ -174,7 +174,7 @@
                 base   (* 12 (quot target 12))
                 candidates (filterv #(<= 0 % 127)
                                     [(+ base pc -12) (+ base pc) (+ base pc 12)])
-                best (apply min-key #(Math/abs (- target %)) candidates)]
+                best (apply min-key #(Math/abs ^long (- target (long %))) candidates)]
             best))
         sorted))))
 

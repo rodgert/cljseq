@@ -312,7 +312,7 @@
                          (catch Throwable e
                            (log "watchdog tick error (" (.getSimpleName (class e))
                                 "): " (.getMessage e))))
-                       (try (Thread/sleep (watchdog-sleep-ms interval-ms bars beats-per-bar))
+                       (try (Thread/sleep (long (watchdog-sleep-ms interval-ms bars beats-per-bar)))
                             (catch InterruptedException _)))))]
     (.setDaemon t true)
     (.setName t "cljseq-supervisor-watchdog")
