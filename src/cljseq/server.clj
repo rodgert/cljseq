@@ -14,6 +14,7 @@
     GET  /ctrl                 — dump all ctrl-tree nodes as a JSON array
     GET  /ctrl/<p0>/<p1>/...   — read node at path [kw(p0) kw(p1) ...]
     PUT  /ctrl/<p0>/<p1>/...   — write node value; body {\"value\":...}
+    GET  /loops                — running deflive-loop status [{\"name\":\"bass\" \"running?\":true \"ticks\":42} ...]
     GET  /ws                   — WebSocket upgrade; receives ctrl-tree change
                                  broadcasts as JSON {\"path\":[...] \"value\":...}
     GET  /                     — control surface HTML (resources/public/index.html)
@@ -56,7 +57,8 @@
             [clojure.data.json :as json]
             [clojure.java.io   :as io]
             [cljseq.ctrl       :as ctrl]
-            [cljseq.core       :as core])
+            [cljseq.core       :as core]
+            [cljseq.loop       :as loop-ns])
   (:import  [java.net URLDecoder]))
 
 ;; ---------------------------------------------------------------------------
@@ -215,6 +217,15 @@
         ;; ---- GET /bpm ----
         (and (= :get method) (= "/bpm" path))
         (respond 200 {"bpm" (core/get-bpm)})
+
+        ;; ---- GET /loops ----
+        (and (= :get method) (= "/loops" path))
+        (respond 200
+          (mapv (fn [{:keys [name running? ticks]}]
+                  {"name"     (clojure.core/name name)
+                   "running?" running?
+                   "ticks"    ticks})
+                (loop-ns/loop-status)))
 
         ;; ---- PUT /bpm ----
         (and (= :put method) (= "/bpm" path))

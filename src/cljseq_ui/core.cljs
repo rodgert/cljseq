@@ -2,13 +2,14 @@
 (ns cljseq-ui.core
   "cljseq browser control surface.
 
-  Connects to the cljseq HTTP server via WebSocket (/ws) and presents a live,
-  interactive view of the ctrl tree. Float/int nodes render as sliders; bool
-  nodes as toggles; enum nodes as button groups; opaque :data nodes as
-  read-only text. All writes are sent back to the server via WebSocket.
+  Connects to the cljseq HTTP server via WebSocket (/ws) for live ctrl-tree
+  updates. The ctrl-tree panel groups nodes by their first path segment, with
+  each group collapsible. Interactive controls (sliders, toggles, enum buttons)
+  write back via WebSocket. BPM has +/− nudge and click-to-edit.
 
-  BPM is displayed prominently in the header with +/− nudge buttons and
-  click-to-edit support (Enter to commit, Escape or blur to cancel).
+  A live-loop monitor polls GET /loops every 2 s and shows running loops with
+  tick counts. The changes log (newest-first) occupies the rest of the right
+  panel.
 
   Entry point: init! — called by shadow-cljs on load and hot-reload."
   (:require [reagent.core :as r]
@@ -20,10 +21,12 @@
 ;; ---------------------------------------------------------------------------
 
 ;; {path-str {:value v :type t :meta m :path-arr [...]}}
-(defonce ctrl-state  (r/atom (sorted-map)))
-(defonce bpm-state   (r/atom nil))
-(defonce ws-status   (r/atom :connecting))   ; :connecting :open :closed
-(defonce log-entries (r/atom []))             ; newest-first
+(defonce ctrl-state       (r/atom (sorted-map)))
+(defonce bpm-state        (r/atom nil))
+(defonce ws-status        (r/atom :connecting))  ; :connecting :open :closed
+(defonce log-entries      (r/atom []))            ; newest-first
+(defonce loops-state      (r/atom []))            ; [{:name :running? :ticks}]
+(defonce collapsed-groups (r/atom #{}))           ; set of group-name strings
 
 (def ^:private max-log 60)
 
@@ -39,13 +42,12 @@
     (str proto "//" (.-host loc) "/ws")))
 
 (defn- send-ctrl!
-  "Send a ctrl-tree write to the server via the open WebSocket.
-  `path-str` must be a key in ctrl-state (so we can recover the original
-  path array without re-splitting on '/' which breaks namespaced keywords)."
+  "Write a ctrl value back to the server via WebSocket.
+  Uses the stored :path-arr to preserve namespaced-keyword paths."
   [path-str value]
   (when-let [node (get @ctrl-state path-str)]
     (when-let [ws @ws-ref]
-      (when (= 1 (.-readyState ws))   ; WebSocket.OPEN = 1
+      (when (= 1 (.-readyState ws))
         (.send ws (js/JSON.stringify
                     #js {"path"  (clj->js (:path-arr node))
                          "value" value}))))))
@@ -58,7 +60,6 @@
           path-str (str/join "/" path-arr)]
       (if (= path-str "bpm")
         (reset! bpm-state value)
-        ;; Keep existing type/meta if present; update value and path-arr.
         (swap! ctrl-state update path-str
                (fn [existing]
                  (assoc (or existing {:type "data" :meta {} :path-arr path-arr})
@@ -71,24 +72,20 @@
 (declare connect!)
 
 (defn connect! []
-  (when-let [old @ws-ref]
-    (.close old))
+  (when-let [old @ws-ref] (.close old))
   (reset! ws-status :connecting)
   (let [ws (js/WebSocket. (ws-url))]
-    (set! (.-onopen ws)
-          (fn [_] (reset! ws-status :open)))
-    (set! (.-onclose ws)
-          (fn [_]
-            (reset! ws-status :closed)
-            (reset! ws-ref nil)
-            (js/setTimeout connect! 3000)))
-    (set! (.-onerror ws)
-          (fn [_] (reset! ws-status :closed)))
+    (set! (.-onopen ws)    (fn [_] (reset! ws-status :open)))
+    (set! (.-onclose ws)   (fn [_]
+                              (reset! ws-status :closed)
+                              (reset! ws-ref nil)
+                              (js/setTimeout connect! 3000)))
+    (set! (.-onerror ws)   (fn [_] (reset! ws-status :closed)))
     (set! (.-onmessage ws) handle-message!)
     (reset! ws-ref ws)))
 
 ;; ---------------------------------------------------------------------------
-;; Initial ctrl-tree fetch (REST snapshot populates type + meta)
+;; REST fetches
 ;; ---------------------------------------------------------------------------
 
 (defn- fetch-ctrl! []
@@ -109,9 +106,11 @@
                              :meta     meta
                              :path-arr path-arr}))))))))
 
-;; ---------------------------------------------------------------------------
-;; BPM REST write (bypasses ctrl-tree; hits core/set-bpm! directly)
-;; ---------------------------------------------------------------------------
+(defn- fetch-loops! []
+  (-> (js/fetch "/loops")
+      (.then #(.json %))
+      (.then (fn [data]
+               (reset! loops-state (js->clj data))))))
 
 (defn- set-bpm! [bpm]
   (-> (js/fetch "/bpm"
@@ -122,20 +121,30 @@
       (.then (fn [_] (reset! bpm-state (double bpm))))))
 
 ;; ---------------------------------------------------------------------------
+;; Grouping helpers
+;; ---------------------------------------------------------------------------
+
+(defn- group-key [path-str]
+  (let [slash (.indexOf path-str "/")]
+    (if (neg? slash) "—" (.substring path-str 0 slash))))
+
+(defn- group-nodes
+  "Partition ctrl-state entries into a sorted map of group → [[path node] ...]."
+  [ctrl-map]
+  (let [grouped (group-by (fn [[ps _]] (group-key ps)) ctrl-map)]
+    (into (sorted-map) grouped)))
+
+;; ---------------------------------------------------------------------------
 ;; UI components
 ;; ---------------------------------------------------------------------------
 
 (defn- connection-badge []
   (let [s @ws-status]
     [:span.badge {:class (name s)}
-     (case s
-       :open       "LIVE"
-       :connecting "..."
-       :closed     "OFFLINE")]))
+     (case s :open "LIVE" :connecting "..." :closed "OFFLINE")]))
 
 (defn- bpm-display
-  "BPM header widget with +/− nudge and click-to-edit.
-  Form-2 component so editing state is local."
+  "BPM widget with +/− nudge and click-to-edit. Local state via form-2."
   []
   (let [editing? (r/atom false)
         draft    (r/atom nil)]
@@ -159,76 +168,95 @@
             :on-blur     #(reset! editing? false)}]
           [:span.bpm-label "BPM"]]
          [:<>
-          [:button.bpm-nudge
-           {:on-click #(set-bpm! (dec (or @bpm-state 120)))} "−"]
+          [:button.bpm-nudge {:on-click #(set-bpm! (dec (or @bpm-state 120)))} "−"]
           [:span.bpm-value
-           {:on-click #(do (reset! draft @bpm-state)
-                           (reset! editing? true))
+           {:on-click #(do (reset! draft @bpm-state) (reset! editing? true))
             :title    "Click to edit BPM"}
            (or @bpm-state "—")]
-          [:button.bpm-nudge
-           {:on-click #(set-bpm! (inc (or @bpm-state 120)))} "+"]
+          [:button.bpm-nudge {:on-click #(set-bpm! (inc (or @bpm-state 120)))} "+"]
           [:span.bpm-label "BPM"]])])))
 
-(defn- ctrl-row
-  "Render one ctrl-tree row as a typed interactive control."
-  [path-str {:keys [value type meta]}]
+(defn- ctrl-row [path-str {:keys [value type meta]}]
   (let [[lo hi] (get meta "range" (if (= type "float") [0.0 1.0] [0 127]))
         step     (if (= type "float") 0.001 1)
         vals     (get meta "values")]
     [:tr
-     [:td.path path-str]
+     [:td.path (let [slash (.indexOf path-str "/")]
+                 (if (neg? slash) path-str (.substring path-str (inc slash))))]
      [:td.ctrl
       (cond
-        ;; Float or int — range slider
         (or (= type "float") (= type "int"))
         [:div.slider-row
-         [:input
-          {:type     "range"
-           :min      lo
-           :max      hi
-           :step     step
-           :value    (or value lo)
-           :on-input (fn [e]
-                       (let [raw (js/parseFloat (.. e -target -value))
-                             v   (if (= type "int") (int raw) raw)]
-                         (send-ctrl! path-str v)))}]
+         [:input {:type     "range"
+                  :min      lo :max hi :step step
+                  :value    (or value lo)
+                  :on-input (fn [e]
+                               (let [raw (js/parseFloat (.. e -target -value))
+                                     v   (if (= type "int") (int raw) raw)]
+                                 (send-ctrl! path-str v)))}]
          [:span.slider-value
           (if (= type "float")
             (.toFixed (js/Number (or value 0)) 3)
             (str (or value 0)))]]
 
-        ;; Bool — toggle button
         (= type "bool")
-        [:button.toggle
-         {:class    (if value "on" "off")
-          :on-click #(send-ctrl! path-str (not value))}
+        [:button.toggle {:class    (if value "on" "off")
+                         :on-click #(send-ctrl! path-str (not value))}
          (if value "ON" "OFF")]
 
-        ;; Enum — button group
         (and (= type "enum") (seq vals))
         [:div.enum-group
          (for [v vals]
            ^{:key v}
-           [:button.enum-btn
-            {:class    (when (= v (str value)) "active")
-             :on-click #(send-ctrl! path-str v)}
+           [:button.enum-btn {:class    (when (= v (str value)) "active")
+                              :on-click #(send-ctrl! path-str v)}
             v])]
 
-        ;; Opaque :data or unknown — read-only
         :else
         [:span.value-readonly (pr-str value)])]]))
 
+(defn- ctrl-group [group-name entries]
+  (let [collapsed? (contains? @collapsed-groups group-name)]
+    [:div.group
+     [:div.group-header
+      {:on-click #(swap! collapsed-groups
+                         (if collapsed? disj conj)
+                         group-name)}
+      [:span.group-chevron (if collapsed? "▸" "▾")]
+      [:span.group-name group-name]
+      [:span.group-count (str "(" (count entries) ")")]]
+     (when-not collapsed?
+       [:table
+        [:tbody
+         (for [[path-str node] entries]
+           ^{:key path-str}
+           [ctrl-row path-str node])]])]))
+
 (defn- ctrl-panel []
-  (let [nodes @ctrl-state]
+  (let [groups (group-nodes @ctrl-state)]
     [:div.ctrl-tree
      [:h3 "ctrl tree"]
      [:div.scroll
-      [:table
-       [:tbody
-        (for [[path-str node] nodes]
-          ^{:key path-str}
-          [ctrl-row path-str node])]]]]))
+      (for [[group-name entries] groups]
+        ^{:key group-name}
+        [ctrl-group group-name entries])]]))
+
+(defn- loop-monitor []
+  (let [loops @loops-state]
+    [:div.loop-monitor
+     [:h3 (str "loops (" (count loops) ")")]
+     [:div.loop-list
+      (if (empty? loops)
+        [:div.loop-empty "no loops running"]
+        (for [lp loops]
+          (let [lname    (get lp "name")
+                running? (get lp "running?")
+                ticks    (get lp "ticks" 0)]
+            ^{:key lname}
+            [:div.loop-entry {:class (if running? "running" "stopped")}
+             [:span.loop-dot {:class (if running? "running" "stopped")}]
+             [:span.loop-name lname]
+             [:span.loop-ticks (str ticks)]])))]]))
 
 (defn- log-panel []
   (let [entries @log-entries]
@@ -249,13 +277,19 @@
     [bpm-display]]
    [:div.panels
     [ctrl-panel]
-    [log-panel]]])
+    [:div.right-panel
+     [loop-monitor]
+     [log-panel]]]])
 
 ;; ---------------------------------------------------------------------------
 ;; Entry point
 ;; ---------------------------------------------------------------------------
 
+(defonce ^:private loop-poll-handle (atom nil))
+
 (defn init! []
   (fetch-ctrl!)
   (connect!)
-  (rdom/render [app] (.getElementById js/document "app")))
+  (fetch-loops!)
+  (when-let [h @loop-poll-handle] (js/clearInterval h))
+  (reset! loop-poll-handle (js/setInterval fetch-loops! 2000)))

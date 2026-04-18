@@ -6,6 +6,7 @@
             [clojure.data.json :as json]
             [cljseq.core       :as core]
             [cljseq.ctrl       :as ctrl]
+            [cljseq.loop       :as loop]
             [cljseq.peer       :as peer]
             [cljseq.server     :as server])
   (:import  [java.net.http HttpClient HttpRequest
@@ -89,6 +90,32 @@
     (let [{:keys [status body]} (http-put "/bpm" {"tempo" 120})]
       (is (= 400 status))
       (is (string? (get body "error"))))))
+
+;; ---------------------------------------------------------------------------
+;; GET /loops
+;; ---------------------------------------------------------------------------
+
+(deftest loops-empty-test
+  (testing "GET /loops returns an empty array when no loops are running"
+    (let [{:keys [status body]} (http-get "/loops")]
+      (is (= 200 status))
+      (is (vector? body))
+      (is (empty? body)))))
+
+(deftest loops-running-test
+  (testing "GET /loops returns a running loop entry"
+    (loop/deflive-loop :server-test-loop {}
+      (loop/sleep! 10000))
+    (Thread/sleep 40)
+    (try
+      (let [{:keys [status body]} (http-get "/loops")
+            entry (first (filter #(= "server-test-loop" (get % "name")) body))]
+        (is (= 200 status))
+        (is (some? entry) "loop entry present")
+        (is (true? (get entry "running?")) "running? is true")
+        (is (number? (get entry "ticks")) "ticks is numeric"))
+      (finally
+        (loop/stop-loop! :server-test-loop)))))
 
 ;; ---------------------------------------------------------------------------
 ;; GET /ctrl/<path>
