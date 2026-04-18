@@ -221,7 +221,7 @@
   ITransformer
   (transform [_ event]
     (if-let [vel (:mod/velocity event)]
-      (let [mapped (-> (breakpoint-apply breakpoints (double vel))
+      (let [mapped (-> ^double (breakpoint-apply breakpoints (double vel))
                        (Math/round)
                        long
                        (max 1)
@@ -338,7 +338,7 @@
            midi         (int (:pitch/midi event 60))]
       (if (> n repeats)
         results
-        (let [new-vel  (-> (* vel (double decay)) (Math/round) long (max 1) (min 127))
+        (let [new-vel  (-> ^double (* vel (double decay)) (Math/round) long (max 1) (min 127))
               new-midi (when pitch-step
                          (-> (+ midi (int pitch-step)) (max 0) (min 127)))
               ev'      (cond-> (assoc event :mod/velocity new-vel)
@@ -346,7 +346,7 @@
           (recur (conj results {:event ev' :delay-beats (* n (double delay-beats))})
                  (inc n)
                  (double new-vel)
-                 (or new-midi midi)))))))
+                 (long (or new-midi midi))))))))
 
 (defn echo
   "Decay repeat chain — plays the original note plus N echoes.

@@ -48,8 +48,9 @@
     (smp/load-sample! ::kick-dry)
     (smp/load-sample! ::kick-copy)
     ;; Both share the same SC buffer ID"
-  (:require [cljseq.core :as core]
-            [cljseq.sc   :as sc]))
+  (:require [cljseq.core   :as core]
+            [cljseq.sc     :as sc]
+            [cljseq.target :as target]))
 
 ;; ---------------------------------------------------------------------------
 ;; Buffer registry
@@ -191,9 +192,8 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- sample-play-dispatch!
-  "Handle a :sample step map routed from core/play!.
-  Signature matches what core/play! passes: [note dur bpm]."
-  [note _dur _bpm]
+  "Translate a :sample step map into an SC buf-player event."
+  [note]
   (when (sc/sc-connected?)
     (let [buf-key (:sample note)
           buf-id  (buffer-id buf-key)]
@@ -201,12 +201,17 @@
         (sc/sc-play! {:synth  :buf-player
                       :buf    (double buf-id)
                       :rate   (double (or (:sample/rate note) 1.0))
-                      :amp    (double (or (:mod/velocity note)
-                                         (* (:mod/velocity note 64) (/ 1.0 127))))
+                      :amp    (double (* (double (:mod/velocity note 64)) (/ 1.0 127)))
                       :pan    (double (or (:pan note) 0.0))
                       :dur-ms 30000})))))
 
-(core/register-sample-dispatch! sample-play-dispatch!)
+;; Register :sample as a named ITriggerTarget.
+;; play! routes {:sample :my-buf ...} here via the :sample shorthand.
+;; The step map arriving at trigger-note! has :dur/beats guaranteed.
+(target/register! :sample
+  (target/fn-target :sample
+    :trigger-fn  sample-play-dispatch!
+    :live?-fn    sc/sc-connected?))
 
 ;; ---------------------------------------------------------------------------
 ;; :granular-cloud patch wiring (convenience)

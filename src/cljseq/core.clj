@@ -26,6 +26,7 @@
             [cljseq.mod             :as mod]
             [cljseq.mpe             :as mpe]
             [cljseq.sidecar         :as sidecar]
+            [cljseq.target          :as target]
             [cljseq.temporal-buffer :as tbuf])
   (:import  [java.util.concurrent.locks LockSupport])
   (:gen-class))
@@ -228,24 +229,13 @@
 ;; SC dispatch — optional backend, registered by cljseq.sc at load time
 ;; ---------------------------------------------------------------------------
 
-;; Backends register a (fn [note dur bpm]) handler here.
-;; Avoids a compile-time dependency on cljseq.sc (which would create a cycle
-;; through cljseq.osc → cljseq.core).
-(defonce ^:private sc-dispatch (atom nil))
-
-(defn ^:no-doc register-sc-dispatch!
-  "Register a function to handle :synth play! events.
-  Called automatically when cljseq.sc is loaded. Not part of the public API."
-  [f]
-  (reset! sc-dispatch f))
-
-(defonce ^:private sample-dispatch (atom nil))
-
-(defn ^:no-doc register-sample-dispatch!
-  "Register a function to handle :sample play! events.
-  Called automatically when cljseq.sample is loaded. Not part of the public API."
-  [f]
-  (reset! sample-dispatch f))
+;; ---------------------------------------------------------------------------
+;; Legacy dispatch atoms — kept for backward compatibility.
+;; New code should use cljseq.target/register! and ITriggerTarget instead.
+;; All audio backends register their ITriggerTarget via target/register! at
+;; namespace load time. play! routes :target/:synth/:sample keys through the
+;; target registry exclusively — no legacy dispatch atoms.
+;; ---------------------------------------------------------------------------
 
 ;; play! — Phase 0 stdout stub
 ;; ---------------------------------------------------------------------------
@@ -271,14 +261,37 @@
   ([note]
    (play! note nil))
   ([note dur]
-   ;; SC dispatch — routes :synth events to SuperCollider, bypassing MIDI
-   ;; Sample dispatch — routes :sample events to SC buffer playback
+   ;; Target dispatch — routes :target/:synth/:sample step maps to registered
+   ;; ITriggerTargets via the target registry.
+   ;;
+   ;; Routing rules:
+   ;;   :target :foo          — explicit: look up :foo in registry
+   ;;   :synth  :my-synthdef  — SC shorthand: routes to :sc target
+   ;;                           (:synth names the SC SynthDef, not the target)
+   ;;   :sample :my-buf       — sample shorthand: routes to :sample target
+   ;;
+   ;; Event normalisation: play! ensures :dur/beats is present before handing
+   ;; the step map to trigger-note!. No :bpm or :dur keys are injected —
+   ;; backends retrieve BPM via core/get-bpm when they need it.
    (cond
-     (and (map? note) (contains? note :synth) @sc-dispatch)
-     (@sc-dispatch note dur (get-bpm))
+     ;; 1. Explicit :target key — look up named target directly
+     (and (map? note) (contains? note :target) (target/lookup (:target note)))
+     (let [tgt (target/lookup (:target note))
+           ev  (cond-> note (nil? (:dur/beats note)) (assoc :dur/beats (or dur 1/4)))]
+       (target/trigger-note! tgt ev))
 
-     (and (map? note) (contains? note :sample) @sample-dispatch)
-     (@sample-dispatch note dur (get-bpm))
+     ;; 2. :synth key — SC shorthand; routes to :sc target regardless of synth name
+     ;;    (:synth is the SynthDef name; :sc is the target)
+     (and (map? note) (contains? note :synth) (target/lookup :sc))
+     (let [tgt (target/lookup :sc)
+           ev  (cond-> note (nil? (:dur/beats note)) (assoc :dur/beats (or dur 1/4)))]
+       (target/trigger-note! tgt ev))
+
+     ;; 3. :sample key — sample shorthand; routes to :sample target
+     (and (map? note) (contains? note :sample) (target/lookup :sample))
+     (let [tgt (target/lookup :sample)
+           ev  (cond-> note (nil? (:dur/beats note)) (assoc :dur/beats (or dur 1/4)))]
+       (target/trigger-note! tgt ev))
 
      :else
      (let [midi     (cond

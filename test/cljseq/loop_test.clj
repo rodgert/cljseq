@@ -452,3 +452,36 @@
       (let [result (deref started 50 :timeout)]
         (is (= :ok result) "loop started without parking"))
       (loop/stop-loop! :test-rob-none))))
+
+;; ---------------------------------------------------------------------------
+;; loop-status
+;; ---------------------------------------------------------------------------
+
+(deftest loop-status-empty-test
+  (testing "loop-status returns an empty vector when no loops are running"
+    (is (= [] (loop/loop-status)))))
+
+(deftest loop-status-running-test
+  (testing "loop-status returns an entry for a running loop"
+    (loop/deflive-loop :status-test {}
+      (loop/sleep! 10000))
+    (Thread/sleep 30)  ; allow loop thread to start
+    (let [status (loop/loop-status)
+          entry  (first (filter #(= :status-test (:name %)) status))]
+      (is (some? entry) "running loop appears in status")
+      (is (true? (:running? entry)) "running? is true")
+      (is (number? (:ticks entry)) "ticks is numeric"))
+    (loop/stop-loop! :status-test)))
+
+(deftest loop-status-stopped-loop-removed-test
+  (testing "stopped loop is removed from loop-status after thread exits"
+    ;; Use a very short sleep (1 beat = 1ms at 60000 BPM) so stop-loop!
+    ;; only has to wait for one iteration to finish, not a long sleep.
+    (loop/deflive-loop :status-stop {}
+      (loop/sleep! 1))
+    (Thread/sleep 30)
+    (loop/stop-loop! :status-stop)
+    (Thread/sleep 50)  ; allow thread to finish current 1ms sleep and deregister
+    (let [names (map :name (loop/loop-status))]
+      (is (not (some #(= :status-stop %) names))
+          "stopped loop not present in status"))))

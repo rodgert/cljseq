@@ -106,7 +106,7 @@
   (if-let [semitones (get scale-semitones scale-kw)]
     (let [octave (* 12 (quot (int midi-note) 12))
           pitch  (mod (int midi-note) 12)
-          nearest (apply min-key #(Math/abs (- pitch (int %))) semitones)]
+          nearest (apply min-key #(Math/abs ^long (- pitch (long %))) semitones)]
       (+ octave (int nearest)))
     (int midi-note)))
 

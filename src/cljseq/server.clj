@@ -14,6 +14,7 @@
     GET  /ctrl                 — dump all ctrl-tree nodes as a JSON array
     GET  /ctrl/<p0>/<p1>/...   — read node at path [kw(p0) kw(p1) ...]
     PUT  /ctrl/<p0>/<p1>/...   — write node value; body {\"value\":...}
+    GET  /loops                — running deflive-loop status [{\"name\":\"bass\" \"running?\":true \"ticks\":42} ...]
     GET  /ws                   — WebSocket upgrade; receives ctrl-tree change
                                  broadcasts as JSON {\"path\":[...] \"value\":...}
     GET  /                     — control surface HTML (resources/public/index.html)
@@ -56,7 +57,8 @@
             [clojure.data.json :as json]
             [clojure.java.io   :as io]
             [cljseq.ctrl       :as ctrl]
-            [cljseq.core       :as core])
+            [cljseq.core       :as core]
+            [cljseq.loop       :as loop-ns])
   (:import  [java.net URLDecoder]))
 
 ;; ---------------------------------------------------------------------------
@@ -216,6 +218,15 @@
         (and (= :get method) (= "/bpm" path))
         (respond 200 {"bpm" (core/get-bpm)})
 
+        ;; ---- GET /loops ----
+        (and (= :get method) (= "/loops" path))
+        (respond 200
+          (mapv (fn [{:keys [name running? ticks]}]
+                  {"name"     (clojure.core/name name)
+                   "running?" running?
+                   "ticks"    ticks})
+                (loop-ns/loop-status)))
+
         ;; ---- PUT /bpm ----
         (and (= :put method) (= "/bpm" path))
         (let [data (json/read-str (slurp (:body req)))]
@@ -227,10 +238,11 @@
         ;; ---- GET /ctrl (full dump) ----
         (and (= :get method) (or (= "/ctrl" path) (= "/ctrl/" path)))
         (respond 200
-          (mapv (fn [{:keys [path value type]}]
+          (mapv (fn [{:keys [path value type node-meta]}]
                   {"path"  (mapv kw->str path)
                    "value" (->json-safe value)
-                   "type"  (kw->str type)})
+                   "type"  (kw->str type)
+                   "meta"  (->json-safe node-meta)})
                 (ctrl/all-nodes)))
 
         ;; ---- GET /ctrl/<path> ----
@@ -244,7 +256,8 @@
                 (respond 200
                   {"path"  (mapv kw->str ctrl-path)
                    "value" (->json-safe (:value node))
-                   "type"  (kw->str (:type node))})))))
+                   "type"  (kw->str (:type node))
+                   "meta"  (->json-safe (or (:node-meta node) {}))})))))
 
         ;; ---- PUT /ctrl/<path> ----
         (and (= :put method) (str/starts-with? path "/ctrl/"))

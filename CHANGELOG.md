@@ -10,6 +10,119 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.16.0] — pending
+
+### Prerequisites before cutting this release
+
+- [ ] Run `npx shadow-cljs release app` to produce `resources/public/js/main.js`
+- [ ] Visual check of the control surface at `http://localhost:7177/`:
+  beat dot pulses, level-meter sliders fill, XY pad sends ctrl writes
+
+### Added
+
+#### `cljseq.seq` — unified IStepSequencer protocol
+
+- **`IStepSequencer` protocol** — single interface for all step-based note
+  generators in cljseq. Two operations:
+  - `(next-event sq)` → `{:event note-map-or-nil :beats duration}` — advance
+    one step; `:event nil` means rest.
+  - `(seq-cycle-length sq)` → long (steps per cycle) or nil (infinite/generative).
+- **`run-step! sq`** — play one step and sleep `:beats`; for infinite/generative
+  sources where the caller controls pacing.
+- **`run-cycle! sq`** — play one full cycle (`seq-cycle-length` steps); falls
+  through to `run-step!` for infinite sources.
+- **`seq-loop! sq`** — start a background indefinitely-looping future; returns
+  `{:running? atom :future f}`.
+- **`stop-seq! handle`** — signal stop and cancel the future.
+- Both `run-cycle!` and `run-step!` accept `{:xf transformer}` — applies an
+  `ITransformer` (from `cljseq.transform`) to each event before dispatch.
+
+#### `cljseq.arp` — ArpState rewrite + parameter locks
+
+- **`ArpState` defrecord** — replaces the plain atom returned by the old
+  `make-arp-state`. Implements `IStepSequencer` directly; use with any of the
+  `cljseq.seq` runners.
+- **`make-arp-state`** — updated factory; now returns an `ArpState` record.
+  Same arguments and options (`:vel`, `:oct`, `:rate`) as before.
+- **`reset-chord!`** — update the chord voicing of a running `ArpState` without
+  resetting the step position. Useful for changing harmony mid-loop.
+- **Per-step parameter locks** — both pattern formats now support arbitrary
+  key overrides per step:
+  - `:chord` patterns: add a `:params` vector parallel to `:order`/`:rhythm`.
+    `{}` or `nil` = no lock; any keys in the map are merged into that step's
+    note map before dispatch.
+    ```clojure
+    {:type   :chord
+     :order  [0 1 2 1 0]
+     :rhythm [1 1/2 1/2 1 1]
+     :params [{} {:mod/cutoff 127} {} {:mod/resonance 32} {}]}
+    ```
+  - `:phrase` patterns: extra keys in any step map are automatically parameter
+    locks — just add them alongside `:semi` and `:beats`:
+    ```clojure
+    {:semi 4 :beats 1 :mod/cutoff 127 :pitch/microtone 17}
+    ```
+- **`:mod/velocity` normalisation** — `next-event` now returns `:mod/velocity`
+  (standard note map key) instead of the non-standard `:vel` that `next-step!`
+  used to return.
+- **`play!`** — unchanged convenience one-shot; internally uses `run-cycle!`.
+
+#### `cljseq.pattern` — MotifState + Locks (IStepSequencer for Pattern×Rhythm motifs)
+
+- **`Locks` defrecord** — per-step parameter override data, cycling
+  independently of `Pattern` and `Rhythm`. A 4-step `Locks` against a 5-note
+  `Pattern` and a 3-step `Rhythm` repeats every `lcm(4,5,3) = 60` steps.
+- **`locks [v]`** — constructor. `v` is a vector of maps; `nil`/`{}` = no lock.
+- **`MotifState` defrecord** — `Pattern` × `Rhythm` × optional `Locks` as an
+  `IStepSequencer`. Implements `next-event` (samples `*harmony-ctx*` /
+  `*chord-ctx*` at step time) and `seq-cycle-length` (three-way lcm when
+  `Locks` are provided).
+- **`make-motif-state pat rhy & opts`** — factory. Options: `:locks`,
+  `:clock-div` (default `1/8`), `:gate` (default `0.9`), `:probability`
+  (default `1.0`), `:channel`.
+- **`motif!`** — refactored as a thin wrapper over `make-motif-state` +
+  `run-cycle!`. Accepts the same options as before, plus `:locks` and `:xf`.
+  Behaviour is identical to the previous implementation.
+
+#### `cljseq.fractal` — FractalSeq (IStepSequencer wrapper)
+
+- **`FractalSeq` defrecord** — wraps a fractal context atom as an
+  `IStepSequencer`. `seq-cycle-length` returns nil (infinite). Use with
+  `run-step!` inside `deflive-loop`.
+- **`make-fractal-seq ctx-atom & {:keys [vel]}`** — factory. `:vel` sets
+  the default velocity injected into each step event (default 100). Steps
+  with `:gate/on? false` are returned as rest events (`{:event nil}`).
+
+#### `cljseq.stochastic` — StochasticSeq (IStepSequencer wrapper)
+
+- **`StochasticSeq` defrecord** — wraps a stochastic context as an
+  `IStepSequencer`. `seq-cycle-length` returns nil (infinite). Use with
+  `run-step!` inside `deflive-loop`.
+- **`make-stochastic-seq gen & opts`** — factory. Options: `:ch` (channel
+  index 0-based, default 0), `:vel` (default 100), `:clock-div` (default
+  `1/8`), `:gate` (default `0.9`). Draws `next-t!` (gate) then `next-x!`
+  (pitch) per step.
+
+#### Web control surface Tier 3 (`cljseq-ui`)
+
+- **Beat pulse** — four-dot beat indicator; each dot lights on its quarter-note
+  subdivison, synced to the running BPM.
+- **Level-meter sliders** — ctrl-tree value sliders render as filled bars
+  (inline `linear-gradient` track fill) so the current value reads at a glance.
+- **XY pad** — dual-axis controller; drag sends two ctrl-tree paths
+  simultaneously. Configurable path pair via dropdowns.
+
+### Changed
+
+- **`cljseq.arp`** — `arp-loop!`, `stop-arp!`, and `next-step!` removed.
+  Replaced by `seq-loop!`, `stop-seq!`, and `next-event` from `cljseq.seq`.
+  `user.clj` exports updated accordingly; `reset-arp-chord!` added.
+- **`motif!`** — now delegates to `MotifState` + `run-cycle!` internally.
+  The external signature and behaviour are unchanged; `:xf` and `:locks`
+  options added.
+
+---
+
 ## [0.15.0] — 2026-04-17
 
 ### Added

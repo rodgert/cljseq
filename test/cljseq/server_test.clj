@@ -6,6 +6,7 @@
             [clojure.data.json :as json]
             [cljseq.core       :as core]
             [cljseq.ctrl       :as ctrl]
+            [cljseq.loop       :as loop]
             [cljseq.peer       :as peer]
             [cljseq.server     :as server])
   (:import  [java.net.http HttpClient HttpRequest
@@ -91,6 +92,32 @@
       (is (string? (get body "error"))))))
 
 ;; ---------------------------------------------------------------------------
+;; GET /loops
+;; ---------------------------------------------------------------------------
+
+(deftest loops-empty-test
+  (testing "GET /loops returns an empty array when no loops are running"
+    (let [{:keys [status body]} (http-get "/loops")]
+      (is (= 200 status))
+      (is (vector? body))
+      (is (empty? body)))))
+
+(deftest loops-running-test
+  (testing "GET /loops returns a running loop entry"
+    (loop/deflive-loop :server-test-loop {}
+      (loop/sleep! 10000))
+    (Thread/sleep 40)
+    (try
+      (let [{:keys [status body]} (http-get "/loops")
+            entry (first (filter #(= "server-test-loop" (get % "name")) body))]
+        (is (= 200 status))
+        (is (some? entry) "loop entry present")
+        (is (true? (get entry "running?")) "running? is true")
+        (is (number? (get entry "ticks")) "ticks is numeric"))
+      (finally
+        (loop/stop-loop! :server-test-loop)))))
+
+;; ---------------------------------------------------------------------------
 ;; GET /ctrl/<path>
 ;; ---------------------------------------------------------------------------
 
@@ -101,13 +128,28 @@
       (is (string? (get body "error"))))))
 
 (deftest ctrl-get-existing-test
-  (testing "GET /ctrl/<path> returns value and type for a known node"
+  (testing "GET /ctrl/<path> returns value, type, and meta for a known node"
     (ctrl/defnode! [:server-test/cutoff] :type :float :value 0.5)
     (let [{:keys [status body]} (http-get "/ctrl/server-test%2Fcutoff")]
       (is (= 200 status))
-      (is (= 0.5  (get body "value")))
+      (is (= 0.5    (get body "value")))
       (is (= "float" (get body "type")))
-      (is (= ["server-test/cutoff"] (get body "path"))))))
+      (is (= ["server-test/cutoff"] (get body "path")))
+      (is (map? (get body "meta")) "meta field is present"))))
+
+(deftest ctrl-get-meta-roundtrip-test
+  (testing "GET /ctrl/<path> includes :node-meta range as 'meta' JSON field"
+    (ctrl/defnode! [:server-test/metered] :type :float
+                   :node-meta {:range [0.0 1.0]} :value 0.5)
+    (let [{:keys [status body]} (http-get "/ctrl/server-test%2Fmetered")]
+      (is (= 200 status))
+      (is (= {"range" [0.0 1.0]} (get body "meta")))))
+
+  (testing "GET /ctrl/<path> returns empty meta map for nodes declared without meta"
+    (ctrl/defnode! [:server-test/no-meta] :type :int :value 3)
+    (let [{:keys [status body]} (http-get "/ctrl/server-test%2Fno-meta")]
+      (is (= 200 status))
+      (is (= {} (get body "meta"))))))
 
 (deftest ctrl-get-nested-path-test
   (testing "GET /ctrl/loops/bass/vel reads a nested ctrl path"
@@ -159,7 +201,17 @@
                                  body))]
         (is (some? entry) "dump contains the registered node")
         (is (= 7     (get entry "value")))
-        (is (= "int" (get entry "type")))))))
+        (is (= "int" (get entry "type")))
+        (is (map? (get entry "meta")) "meta field is present"))))
+
+  (testing "GET /ctrl includes node-meta range in 'meta' field"
+    (ctrl/defnode! [:server-test/ranged] :type :float
+                   :node-meta {:range [0.0 1.0]} :value 0.5)
+    (let [{:keys [status body]} (http-get "/ctrl")]
+      (is (= 200 status))
+      (let [entry (first (filter #(= ["server-test/ranged"] (get % "path")) body))]
+        (is (some? entry))
+        (is (= {"range" [0.0 1.0]} (get entry "meta")))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Unknown route

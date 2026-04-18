@@ -290,7 +290,7 @@
   (let [direction   (if prev-midi (if (> midi prev-midi) :up :down) :none)
         candidates  (->> (range (- midi 3) (+ midi 4))
                          (filter #(scale/in-scale? sc (pitch/midi->pitch %)))
-                         (sort-by #(Math/abs (- % midi))))]
+                         (sort-by #(Math/abs ^long (- (long %) midi))))]
     (case direction
       :up   (first (filter #(>= % midi) candidates))
       :down (first (filter #(<= % midi) candidates))
@@ -823,7 +823,7 @@
   (let [candidates (->> (range (max 0 (- midi 6)) (min 128 (+ midi 7)))
                         (keep (fn [m]
                                 (when-let [d (scale/degree-of sc (pitch/midi->pitch m))]
-                                  [(Math/abs (- m midi)) d])))
+                                  [(Math/abs ^long (- (long m) (long midi))) d])))
                         (sort-by first))]
     (second (first candidates))))
 

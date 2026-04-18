@@ -168,7 +168,7 @@
             octave    (* 12 (quot (int midi-note) 12))
             best      (apply min-key
                              (fn [iv]
-                               (let [d (Math/abs (- pc iv))]
+                               (let [d (Math/abs ^long (- (long pc) (long iv)))]
                                  (min d (- 12 d))))
                              eligible)]
         (+ octave (int best))))))
@@ -195,7 +195,7 @@
                       (get scale-intervals scale-kw [0 2 4 5 7 9 11]))
         snap      (fn [pc]
                     (apply min-key
-                           (fn [iv] (let [d (Math/abs (- pc iv))]
+                           (fn [iv] (let [d (Math/abs ^long (- (long pc) (long iv)))]
                                       (min d (- 12 d))))
                            intervals))
         snapped   (map #(snap (mod (int %) 12)) midi-notes)
