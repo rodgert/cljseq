@@ -34,7 +34,8 @@
   Key design decisions: Q34 (defonce ring buffer), Q37 (correlated channels,
   lerp perturbation), Q38 (auto-register stochastic context), §23."
   (:require [cljseq.ctrl   :as ctrl]
-            [cljseq.random :as random]))
+            [cljseq.random :as random]
+            [cljseq.seq    :as sq]))
 
 ;; ---------------------------------------------------------------------------
 ;; Registry (Q38: auto-registration)
@@ -297,6 +298,53 @@
   to ensure correct mutual-exclusion correlation."
   [gen ch]
   ((nth (:t-sources gen) ch)))
+
+;; ---------------------------------------------------------------------------
+;; StochasticSeq — IStepSequencer wrapper
+;; ---------------------------------------------------------------------------
+
+(defrecord StochasticSeq [gen ch vel clock-div gate])
+;; gen       — stochastic context (from make-stochastic-context / defstochastic)
+;; ch        — channel index 0-based (for correlated multi-channel use)
+;; vel       — default velocity 0–127
+;; clock-div — beats per step (double)
+;; gate      — gate fraction of clock-div (double)
+
+(defn make-stochastic-seq
+  "Wrap a stochastic context as an IStepSequencer.
+
+  `gen` — stochastic context map from make-stochastic-context or defstochastic.
+
+  Options:
+    :ch        — channel index to read from (default 0)
+    :vel       — default velocity 0–127 (default 100)
+    :clock-div — duration per step in beats (default 1/8)
+    :gate      — gate fraction of clock-div (default 0.9)
+
+  Returns a StochasticSeq. seq-cycle-length returns nil (infinite/generative).
+  Use with run-step! from cljseq.seq inside a deflive-loop.
+
+  Example:
+    (defstochastic marble {:channels 2 :x-spread 0.6})
+    (deflive-loop :gen {}
+      (run-step! (make-stochastic-seq marble :ch 0 :clock-div 1/8)))"
+  [gen & {:keys [ch vel clock-div gate]
+           :or   {ch 0 vel 100 clock-div 1/8 gate 0.9}}]
+  (->StochasticSeq gen (long ch) (long vel) (double clock-div) (double gate)))
+
+(extend-protocol sq/IStepSequencer
+  StochasticSeq
+  (next-event [ss]
+    (let [{:keys [gen ch vel clock-div gate]} ss
+          fires? (next-t! gen ch)
+          beats  clock-div]
+      (if fires?
+        {:event {:pitch/midi   (long (next-x! gen ch))
+                 :dur/beats    (* beats gate)
+                 :mod/velocity vel}
+         :beats beats}
+        {:event nil :beats beats})))
+  (seq-cycle-length [_] nil))
 
 ;; ---------------------------------------------------------------------------
 ;; Inspection

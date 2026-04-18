@@ -30,7 +30,8 @@
     Q43 — path supports integer, keyword, or explicit vector
     §24 — Fractal Sequence Architecture (Bloom-Inspired)"
   (:require [cljseq.ctrl   :as ctrl]
-            [cljseq.random :as random]))
+            [cljseq.random :as random]
+            [cljseq.seq    :as sq]))
 
 ;; ---------------------------------------------------------------------------
 ;; Registry
@@ -444,6 +445,42 @@
                    new-ctx   (make-fractal-context new-opts)]
                (merge state new-ctx {:opts new-opts})))))
   nil)
+
+;; ---------------------------------------------------------------------------
+;; FractalSeq — IStepSequencer wrapper
+;; ---------------------------------------------------------------------------
+
+(defrecord FractalSeq [ctx-atom vel])
+;; ctx-atom — fractal context atom (from make-fractal-context / deffractal)
+;; vel      — default velocity 0–127
+
+(defn make-fractal-seq
+  "Wrap a fractal context atom as an IStepSequencer.
+
+  `ctx-atom` — fractal context atom from make-fractal-context or deffractal.
+
+  Options:
+    :vel — default velocity 0–127 (default 100)
+
+  Returns a FractalSeq. Use with run-step! from cljseq.seq (infinite source —
+  seq-cycle-length returns nil; caller drives the loop via deflive-loop).
+
+  Example:
+    (deffractal melody {:trunk [...] :transforms [...]})
+    (deflive-loop :frac {}
+      (run-step! (make-fractal-seq melody)))"
+  [ctx-atom & {:keys [vel] :or {vel 100}}]
+  (->FractalSeq ctx-atom (long vel)))
+
+(extend-protocol sq/IStepSequencer
+  FractalSeq
+  (next-event [fs]
+    (let [step  (next-step! (:ctx-atom fs))
+          beats (double (:dur/beats step 1/4))]
+      (if (or (nil? step) (not (:gate/on? step true)))
+        {:event nil :beats beats}
+        {:event (assoc step :mod/velocity (:vel fs)) :beats beats})))
+  (seq-cycle-length [_] nil))
 
 ;; ---------------------------------------------------------------------------
 ;; Inspection
