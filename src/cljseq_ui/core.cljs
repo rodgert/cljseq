@@ -31,6 +31,8 @@
 ;; {path-str {:value v :type t :meta m :path-arr [...]}}
 (defonce ctrl-state       (r/atom (sorted-map)))
 (defonce bpm-state        (r/atom nil))
+;; Ephemeral runtime state — nested map mirroring cljseq.runtime on the server.
+(defonce runtime-state    (r/atom {}))
 (defonce ws-status        (r/atom :connecting))  ; :connecting :open :closed
 (defonce log-entries      (r/atom []))            ; newest-first
 (defonce loops-state      (r/atom []))            ; [{:name :running? :ticks}]
@@ -67,22 +69,34 @@
                     #js {"path"  (clj->js (:path-arr node))
                          "value" value}))))))
 
+(defn- handle-ctrl-message! [data]
+  (let [path-arr (get data "path")
+        value    (get data "value")
+        path-str (str/join "/" path-arr)]
+    (if (or (= path-str "bpm") (= path-str "config/bpm"))
+      (reset! bpm-state value)
+      (swap! ctrl-state update path-str
+             (fn [existing]
+               (assoc (or existing {:type "data" :meta {} :path-arr path-arr})
+                      :value    value
+                      :path-arr path-arr))))
+    (swap! log-entries
+           (fn [log]
+             (vec (take max-log (conj log {:path path-str :value value})))))))
+
+(defn- handle-runtime-message! [data]
+  (let [path-arr (get data "path")
+        value    (get data "value")
+        path-kws (mapv keyword path-arr)]
+    (swap! runtime-state assoc-in path-kws value)))
+
 (defn- handle-message! [evt]
   (when-let [data (try (js->clj (.parse js/JSON (.-data evt)))
                        (catch :default _ nil))]
-    (let [path-arr (get data "path")
-          value    (get data "value")
-          path-str (str/join "/" path-arr)]
-      (if (or (= path-str "bpm") (= path-str "config/bpm"))
-        (reset! bpm-state value)
-        (swap! ctrl-state update path-str
-               (fn [existing]
-                 (assoc (or existing {:type "data" :meta {} :path-arr path-arr})
-                        :value    value
-                        :path-arr path-arr))))
-      (swap! log-entries
-             (fn [log]
-               (vec (take max-log (conj log {:path path-str :value value}))))))))
+    (case (get data "type" "ctrl")
+      "ctrl"    (handle-ctrl-message! data)
+      "runtime" (handle-runtime-message! data)
+      nil)))
 
 (declare connect!)
 

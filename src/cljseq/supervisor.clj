@@ -46,6 +46,7 @@
       :restore-fn  #(thing/reload-state!))"
   (:require [cljseq.loop    :as loop-ns]
             [cljseq.core    :as core]
+            [cljseq.runtime :as runtime]
             [cljseq.sc      :as sc]
             [cljseq.sidecar :as sidecar]))
 
@@ -141,34 +142,6 @@
   (reduce-kv (fn [m k v] (assoc m k (:status v))) {} @service-state))
 
 ;; ---------------------------------------------------------------------------
-;; Convenience registrations for built-in services
-;; ---------------------------------------------------------------------------
-
-(defn register-sc!
-  "Register the SC server as a supervised service.
-  Health check: sc/sc-connected?
-  Restore: re-sends all synthdefs that were previously loaded.
-  Restart: if sc/start-sc! was used to launch sclang, the supervisor will call
-  sc/sc-restart! automatically when the health check fails — no terminal
-  intervention required for audio device reconnects or sclang crashes.
-  Pass :restart-fn to override (e.g. when SC is managed externally)."
-  [& {:keys [restart-fn]}]
-  (register! :sc
-             :check-fn    sc/sc-connected?
-             :restart-fn  (or restart-fn sc/sc-restart!)
-             :restore-fn  sc/resend-sent-synthdefs!))
-
-(defn register-sidecar!
-  "Register the sidecar process as a supervised service.
-  Health check: sidecar/connected?
-  Restart: calls sidecar/restart-sidecar! using the opts from the last start.
-  Restore: no-op — sidecar is stateless from the JVM's perspective."
-  []
-  (register! :sidecar
-             :check-fn    sidecar/connected?
-             :restart-fn  sidecar/restart-sidecar!))
-
-;; ---------------------------------------------------------------------------
 ;; Health-check and state-transition logic
 ;; ---------------------------------------------------------------------------
 
@@ -211,34 +184,82 @@
   (emit! service-name :down {:service service-name :at now-ms})
   (log (name service-name) " DOWN"))
 
+;; ---------------------------------------------------------------------------
+;; Convenience registrations for built-in services
+;; ---------------------------------------------------------------------------
+
+(defn register-sc!
+  "Register the SC server as a supervised service.
+
+  Reactive: watches [:sc :status] in the runtime tree — no poll thread.
+  sc.clj publishes :running / :stopped / :error / :starting to that path on
+  every connection state change.
+
+  On :running  — transitions :sc to :up, re-sends all loaded SynthDefs.
+  On :stopped/:error — transitions :sc to :down, calls sc-restart! (or
+                       :restart-fn if supplied).
+
+  Pass :restart-fn to override the restart behaviour (e.g. when SC is managed
+  externally and sc-restart! is not appropriate)."
+  [& {:keys [restart-fn]}]
+  (swap! service-state assoc :sc {:status :unknown :last-check-ms 0 :consecutive-failures 0})
+  ;; Idempotent — remove any prior registration before re-watching.
+  (runtime/unwatch! ::sc-status-watcher)
+  (runtime/watch! [:sc :status] ::sc-status-watcher
+    (fn [_path _old new-status]
+      (let [now-ms   (System/currentTimeMillis)
+            prev     (get-in @service-state [:sc :status])
+            rfn      (or restart-fn sc/sc-restart!)]
+        (case new-status
+          :running
+          (when (not= :up prev)
+            (transition-up! :sc sc/resend-sent-synthdefs! now-ms {}))
+          (:stopped :error)
+          (when (not= :down prev)
+            (transition-down! :sc now-ms)
+            (try-restart! :sc rfn))
+          nil)))))
+
+(defn register-sidecar!
+  "Register the sidecar process as a supervised service.
+  Health check: sidecar/connected?
+  Restart: calls sidecar/restart-sidecar! using the opts from the last start.
+  Restore: no-op — sidecar is stateless from the JVM's perspective."
+  []
+  (register! :sidecar
+             :check-fn    sidecar/connected?
+             :restart-fn  sidecar/restart-sidecar!))
+
 (defn- check-service! [service-name]
   (when-let [{:keys [check-fn restart-fn restore-fn]} (get @services service-name)]
-    (let [now-ms   (System/currentTimeMillis)
-          prev     (get @service-state service-name)
-          healthy? (try (boolean (check-fn)) (catch Throwable _ false))]
-      (swap! service-state update service-name assoc :last-check-ms now-ms)
-      (cond
-        ;; Healthy — was not :up
-        (and healthy? (not= :up (:status prev)))
-        (transition-up! service-name restore-fn now-ms {})
+    ;; Services without check-fn are reactive (e.g. :sc via runtime/watch!) — skip poll.
+    (when check-fn
+      (let [now-ms   (System/currentTimeMillis)
+            prev     (get @service-state service-name)
+            healthy? (try (boolean (check-fn)) (catch Throwable _ false))]
+        (swap! service-state update service-name assoc :last-check-ms now-ms)
+        (cond
+          ;; Healthy — was not :up
+          (and healthy? (not= :up (:status prev)))
+          (transition-up! service-name restore-fn now-ms {})
 
-        ;; Unhealthy — was not :down
-        (and (not healthy?) (not= :down (:status prev)))
-        (do (transition-down! service-name now-ms)
-            (when restart-fn
-              (when (try-restart! service-name restart-fn)
-                ;; Re-check immediately after restart attempt
-                (let [recovered? (try (boolean (check-fn)) (catch Throwable _ false))]
-                  (when recovered?
-                    (transition-up! service-name restore-fn
-                                    (System/currentTimeMillis) {:restarted true}))))))
+          ;; Unhealthy — was not :down
+          (and (not healthy?) (not= :down (:status prev)))
+          (do (transition-down! service-name now-ms)
+              (when restart-fn
+                (when (try-restart! service-name restart-fn)
+                  ;; Re-check immediately after restart attempt
+                  (let [recovered? (try (boolean (check-fn)) (catch Throwable _ false))]
+                    (when recovered?
+                      (transition-up! service-name restore-fn
+                                      (System/currentTimeMillis) {:restarted true}))))))
 
-        ;; Unhealthy — already :down
-        (and (not healthy?) (= :down (:status prev)))
-        (swap! service-state update service-name update :consecutive-failures inc)
+          ;; Unhealthy — already :down
+          (and (not healthy?) (= :down (:status prev)))
+          (swap! service-state update service-name update :consecutive-failures inc)
 
-        ;; Otherwise: status unchanged — no transition
-        :else nil))))
+          ;; Otherwise: status unchanged — no transition
+          :else nil)))))
 
 ;; ---------------------------------------------------------------------------
 ;; Loop thread monitoring

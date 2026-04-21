@@ -15,8 +15,9 @@
     GET  /ctrl/<p0>/<p1>/...   — read node at path [kw(p0) kw(p1) ...]
     PUT  /ctrl/<p0>/<p1>/...   — write node value; body {\"value\":...}
     GET  /loops                — running deflive-loop status [{\"name\":\"bass\" \"running?\":true \"ticks\":42} ...]
-    GET  /ws                   — WebSocket upgrade; receives ctrl-tree change
-                                 broadcasts as JSON {\"path\":[...] \"value\":...}
+    GET  /ws                   — WebSocket upgrade; receives change broadcasts:
+                                 ctrl:    {\"type\":\"ctrl\"    \"path\":[...] \"value\":...}
+                                 runtime: {\"type\":\"runtime\" \"path\":[...] \"value\":...}
     GET  /                     — control surface HTML (resources/public/index.html)
     GET  /css/*                — static stylesheets from resources/public/css/
     GET  /js/*                 — compiled ClojureScript from resources/public/js/
@@ -58,7 +59,8 @@
             [clojure.java.io   :as io]
             [cljseq.ctrl       :as ctrl]
             [cljseq.core       :as core]
-            [cljseq.loop       :as loop-ns])
+            [cljseq.loop       :as loop-ns]
+            [cljseq.runtime    :as runtime])
   (:import  [java.net URLDecoder]))
 
 ;; ---------------------------------------------------------------------------
@@ -163,14 +165,21 @@
 ;; ---------------------------------------------------------------------------
 
 (defn- broadcast-ctrl!
-  "Send a ctrl-tree change to all connected WebSocket clients.
-  Path segments are encoded via kw->str (consistent with the HTTP API):
-    [:loops :bass] → [\"loops\" \"bass\"]
-    [:filter/cutoff] → [\"filter/cutoff\"]"
+  "Send a ctrl-tree change to all connected WebSocket clients."
   [tx _state]
   (let [{:keys [path after]} (first (:tx/changes tx))
-        msg (json/write-str {"path"  (mapv kw->str path)
+        msg (json/write-str {"type"  "ctrl"
+                             "path"  (mapv kw->str path)
                              "value" (->json-safe after)})]
+    (doseq [ch @ws-channels]
+      (hk/send! ch msg))))
+
+(defn- broadcast-runtime!
+  "Send a runtime state change to all connected WebSocket clients."
+  [path value]
+  (let [msg (json/write-str {"type"  "runtime"
+                             "path"  (mapv kw->str path)
+                             "value" (->json-safe value)})]
     (doseq [ch @ws-channels]
       (hk/send! ch msg))))
 
@@ -297,6 +306,7 @@
     (stop-server!))
   (let [stop-fn (hk/run-server #'handler {:port port})]
     (ctrl/watch-global! ::ws-broadcast broadcast-ctrl!)
+    (runtime/watch-global! ::ws-broadcast broadcast-runtime!)
     (reset! server-atom {:server stop-fn :port port})
     (println (str "[server] started on port " port))
     nil))
@@ -306,6 +316,7 @@
   []
   (when-let [{:keys [server]} @server-atom]
     (ctrl/unwatch-global! ::ws-broadcast)
+    (runtime/unwatch-global! ::ws-broadcast)
     (server :timeout 100)
     (reset! server-atom nil)
     (println "[server] stopped"))

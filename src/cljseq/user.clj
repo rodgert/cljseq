@@ -77,7 +77,8 @@
             [cljseq.seq             :as sq]
             [cljseq.target          :as target]
             [cljseq.schema          :as schema]
-            [cljseq.journal         :as journal]))
+            [cljseq.journal         :as journal]
+            [cljseq.runtime         :as runtime]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session lifecycle
@@ -135,6 +136,14 @@
 (def diff-sessions     journal/diff-sessions)
 (def source-kind->int  journal/source-kind->int)
 (def int->source-kind  journal/int->source-kind)
+
+;; Runtime state — ephemeral process health, never persisted
+(def runtime-snapshot  runtime/snapshot)
+(def runtime-get       runtime/get)
+(def runtime-set!      runtime/set!)
+(def runtime-watch!    runtime/watch!)
+(def runtime-unwatch!  runtime/unwatch!)
+
 (def set-bpm!             core/set-bpm!)
 (def get-bpm              core/get-bpm)
 (def set-beats-per-bar!   core/set-beats-per-bar!)

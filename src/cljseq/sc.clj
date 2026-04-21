@@ -52,6 +52,7 @@
             [cljseq.osc      :as osc]
             [cljseq.patch    :as patch]
             [cljseq.peer     :as peer]
+            [cljseq.runtime  :as runtime]
             [cljseq.synth    :as synth]
             [cljseq.target   :as target]))
 
@@ -104,7 +105,7 @@
   (reset! sent-synthdefs #{})
   (reset! bus-alloc {:audio-next 8 :control-next 0 :named {}})
   (peer/register-backend! :sc {:host host :sc-port sc-port :lang-port lang-port})
-  (println (str "[sc] connected to " host " (scsynth:" sc-port " sclang:" lang-port ")"))
+  (runtime/set! [:sc :status] :running)
   nil)
 
 (defn disconnect-sc!
@@ -114,7 +115,7 @@
   (reset! sent-synthdefs #{})
   (reset! bus-alloc {:audio-next 8 :control-next 0 :named {}})
   (peer/deregister-backend! :sc)
-  (println "[sc] disconnected")
+  (runtime/set! [:sc :status] :stopped)
   nil)
 
 ;; ---------------------------------------------------------------------------
@@ -167,15 +168,23 @@
            :sc-process    proc
            :sclang-binary binary
            :sclang-script script)
+    (runtime/set! [:sc :status] :starting)
     (let [result (deref p timeout-ms :timeout)]
       (if (= result :timeout)
         (do (osc/register-handler! "/sc-lang-ready" (fn [_] nil)) ; clear stale handler
             (.destroyForcibly proc)
             (swap! sc-state assoc :sc-process nil)
+            (runtime/set! [:sc :status] :error)
+            (runtime/conj! [:sc :errors]
+              {:wall-ns (System/nanoTime)
+               :kind    :boot-timeout
+               :message (str "start-sc!: timed out after " timeout-ms "ms")
+               :cause   nil})
             (throw (ex-info "start-sc!: timed out waiting for sclang to boot"
                             {:timeout-ms timeout-ms :binary binary :script script})))
-        (do (connect-sc!)
-            (println (str "[sc] sclang process started (" binary ")"))
+        (do (try (runtime/set! [:sc :sclang-pid] (.pid ^java.lang.Process proc))
+                 (catch UnsupportedOperationException _ nil))
+            (connect-sc!)
             proc)))))
 
 (defn stop-sc!
@@ -188,11 +197,10 @@
     (if proc
       (do (.destroyForcibly ^java.lang.Process proc)
           (swap! sc-state assoc :sc-process nil)
+          (runtime/clear! [:sc :sclang-pid])
           (disconnect-sc!)
-          (println "[sc] sclang process stopped")
           nil)
-      (do (println "[sc] stop-sc!: no managed process running")
-          nil))))
+      nil)))
 
 (defn sc-restart!
   "Kill the managed sclang subprocess, relaunch it, and restore all SynthDefs.
@@ -711,10 +719,11 @@
                            (Thread/sleep sleep-ms)))
                        (free-synth! node-id)
                        (catch Exception e
-                         (binding [*out* *err*]
-                           (println (str "[sc] stuck note: free-synth! failed for node "
-                                         node-id " (" (.getSimpleName (class e)) "): "
-                                         (.getMessage e))))))))
+                         (runtime/conj! [:sc :errors]
+                           {:wall-ns (System/nanoTime)
+                            :kind    :stuck-note
+                            :message (str "free-synth! failed for node " node-id)
+                            :cause   (.getMessage e)})))))
       (.setDaemon true)
       (.start))
     node-id))
@@ -1009,11 +1018,14 @@
            :nodes      node-ids
            :params     (:params compiled)})
         (catch Exception e
-          ;; Free any nodes we managed to create before the failure
           (when (seq @allocated)
-            (println (str "[sc] instantiate-patch! failed — freeing " (count @allocated) " allocated nodes"))
             (doseq [nid @allocated]
               (try (kill-synth! nid) (catch Exception _ nil))))
+          (runtime/conj! [:sc :errors]
+            {:wall-ns (System/nanoTime)
+             :kind    :instantiate-failed
+             :message (str "instantiate-patch! failed — freed " (count @allocated) " nodes")
+             :cause   (.getMessage e)})
           (throw e))))))
 
 (defn set-patch-param!
