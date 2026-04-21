@@ -10,6 +10,68 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
+## [0.15.0] — 2026-04-17
+
+### Added
+
+#### First-class arpeggiator (`cljseq.arp`)
+
+- **`cljseq.arp` namespace** — first-class arpeggiator engine with a named
+  pattern library. Replaces the isolated arp engine in `cljseq.ivk` with a
+  shared, composable subsystem usable from live-loops, ostinati, and the REPL.
+- **Two pattern formats**:
+  - `:chord` patterns (R&R §22.5) — `:order` (chord-tone indices or
+    `:ascending`/`:descending`), `:rhythm` (step durations in beats),
+    `:dur` (gate fraction). Indices beyond chord length wrap upward by octave.
+  - `:phrase` patterns — `:steps` vector of `{:semi n :beats b}` or
+    `{:rest true :beats b}`. `:semi` is a semitone offset from the root of
+    the held chord or note, matching the Hydrasynth phrase convention.
+- **11 built-in chord patterns** loaded from
+  `resources/arpeggios/built-in.edn`:
+  `:up` `:down` `:bounce` `:alberti` `:waltz-bass` `:broken-triad`
+  `:guitar-pick` `:jazz-stride` `:montuno` `:raga-alap` `:euclid-5-8`
+- **64 Hydrasynth phrase patterns** transcribed from the ASM Hydrasynth
+  Deluxe Owner's Manual v2.2 (pp. 120–123), loaded from
+  `resources/arpeggios/hydrasynth-phrases.edn`. Registered as `:phrase-01`
+  through `:phrase-64`. All phrases are flagged `:verified? false` pending
+  hardware cross-check.
+- **`:dur` gate fraction on phrase patterns** — `:phrase` patterns now honour
+  a top-level `:dur` key (default `3/4`) for gate length, matching the
+  `:chord` pattern convention. Both `play!` and `next-step!` use it.
+- **`play!`** — play one complete iteration of a pattern, blocking for its
+  full duration. Works inside `live-loop`s (via `loop-ns/sleep!`) and at the
+  REPL (falls back to `Thread/sleep`).
+- **`arp-loop!` / `stop-arp!`** — start/stop a background looping arp.
+  Returns a self-contained handle map `{:running? atom :future f}` — no global
+  loop registry. Pass the handle directly to `stop-arp!`.
+- **`make-arp-state` / `next-step!`** — step-by-step stateful engine for
+  embedding an arp inside a `deflive-loop` or Berlin ostinato. `next-step!`
+  returns `{:pitch/midi N :dur/beats D :vel V :beats B}` (or `{:beats B :vel V}`
+  for rest steps) and advances the internal step index.
+- **`register!` / `get-pattern` / `ls`** — open registry: add custom patterns,
+  retrieve by keyword, list all registered patterns.
+- User-facing exports in `user.clj`: `arp-ls`, `arp-get`, `arp-register!`,
+  `arp-play!`, `arp-loop!`, `arp-stop!`, `make-arp-state`, `next-arp-step!`.
+
+#### `cljseq.ivk` arp timing fix
+
+- `start-arp!` now uses `loop-ns/sleep!` instead of raw `Thread/sleep` — the
+  arp cycle respects virtual time inside live-loops and falls back gracefully
+  to wall-clock sleep at the REPL. Removes the manual BPM→ms conversion.
+
+### Changed
+
+- **`cljseq.dsl` → `cljseq.live`** — renamed to reflect its actual role as an
+  execution-context layer for live performance (dynamic vars, synth routing,
+  tuning, modulation) rather than a DSL sugar layer. All dependent namespaces
+  (`ensemble`, `m21`, `pattern`, `loop`, `rhythm`) and tests updated.
+  `user.clj` re-exports updated; `dsl/arp!` removed (superseded by `cljseq.arp`).
+- **`choose-from-scale`** moved from `cljseq.live` to `cljseq.scale` — no
+  live-context dependency; now lives alongside the Scale record and named-scale
+  registry it operates on.
+
+---
+
 ## [0.14.0] — 2026-04-16
 
 ### Added

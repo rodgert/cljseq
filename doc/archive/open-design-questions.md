@@ -171,7 +171,7 @@ caller does not need to know which mode is active.
 
 ---
 
-## Q7 — Ableton Link: timing model integration
+## Q7 — Ableton Link: timing model integration — **RESOLVED**
 
 **R&R reference**: §13 (formerly open question #5) — **RESOLVED; see §15 of R&R doc**
 
@@ -1650,7 +1650,7 @@ pure-audio North American contexts.
 
 ---
 
-## Q59 — `sleep!` redesign for tempo correctness (Phase 1 blocker)
+## Q59 — `sleep!` redesign for tempo correctness (Phase 1 blocker) — **RESOLVED**
 
 **R&R reference**: §29.7, §29.10
 

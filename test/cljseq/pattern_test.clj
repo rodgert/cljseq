@@ -5,7 +5,7 @@
   (:require [clojure.test    :refer [deftest is testing]]
             [cljseq.chord    :as chord-ns]
             [cljseq.core     :as core]
-            [cljseq.dsl      :as dsl]
+            [cljseq.live  :as live]
             [cljseq.loop     :as loop-ns]
             [cljseq.pattern  :as pat]
             [cljseq.scale    :as scale-ns]))
@@ -271,7 +271,7 @@
 (deftest with-chord-test
   (testing "with-chord binds *chord-ctx* for the scope"
     (let [c (chord-ns/chord :G 3 :dom7)]
-      (dsl/with-chord c
+      (live/with-chord c
         (is (= c loop-ns/*chord-ctx*) "*chord-ctx* bound inside with-chord")))
     (is (nil? loop-ns/*chord-ctx*) "restored to nil after with-chord")))
 

@@ -1,9 +1,10 @@
 ; SPDX-License-Identifier: EPL-2.0
-(ns cljseq.dsl
-  "cljseq DSL sugar layer — concise interactive forms for live performance.
+(ns cljseq.live
+  "cljseq.live — execution context and live-coding sugar for live performance.
 
-  All forms expand to the core protocol-level API (cljseq.core).
-  Designed for live-coding ergonomics at the nREPL.
+  Manages the dynamic execution environment that governs how notes are routed,
+  tuned, and modulated. All playback forms merge the active context before
+  dispatching to cljseq.core.
 
   ## Synth context
     Synth context is a plain map describing the MIDI routing for a scope:
@@ -42,9 +43,7 @@
   ## Mod routing context
     (use-mod! {[:filter/cutoff] my-lfo}) ; REPL default
     (with-mod {[:filter/cutoff] my-lfo} …) ; scoped
-    (tick-mods!)                         ; sample all *mod-ctx* mods → ctrl/send!
-
-  Key design decisions: §27 (DSL Sugar Layer), R&R usability corpus."
+    (tick-mods!)                         ; sample all *mod-ctx* mods → ctrl/send!"
   (:require [cljseq.chord  :as chord-ns]
             [cljseq.clock  :as clock]
             [cljseq.core  :as core]
@@ -243,7 +242,7 @@
 
   Example:
     (let [step (fractal/next-step! melody)
-          step (dsl/apply-step-mods step)]
+          step (live/apply-step-mods step)]
       (play! step))"
   [step]
   (if-let [ctx loop-ns/*step-mod-ctx*]
@@ -659,83 +658,7 @@
        (play! m *default-dur*)))))
 
 ;; ---------------------------------------------------------------------------
-;; choose-from-scale — random scale degree
-;; ---------------------------------------------------------------------------
-
-(defn choose-from-scale
-  "Return a random MIDI note from the given key and scale.
-
-  Accepts:
-    (choose-from-scale :C :major)              ; keyword key + scale name
-    (choose-from-scale :C :major :octave 3)    ; specify octave
-    (choose-from-scale :D scale-record)        ; cljseq.scale/Scale record as scale
-
-  When a Scale record is passed, the root of the record is used directly
-  and the `key` argument determines the octave override only."
-  [key scale & {:keys [octave] :or {octave 4}}]
-  (cond
-    (instance? cljseq.scale.Scale scale)
-    (pitch/pitch->midi
-      (scale-ns/pitch-at scale (rand-int (count (:intervals scale)))))
-
-    (keyword? scale)
-    (let [root    (core/keyword->midi (keyword (str (name key) octave)))
-          s       (scale-ns/named-scale scale)
-          offsets (if s
-                    (vec (butlast (reductions + 0 (:intervals s))))
-                    [0 2 4 5 7 9 11])]
-      (+ root (rand-nth offsets)))
-
-    :else
-    (throw (ex-info "choose-from-scale: scale must be keyword or Scale record"
-                    {:scale scale}))))
-
-;; ---------------------------------------------------------------------------
-;; arp! — arpeggiate a chord
-;; ---------------------------------------------------------------------------
-
-(defn arp!
-  "Arpeggiate a chord.
-
-  Accepts:
-    (arp! :C4 :major :up 1/16)         ; keyword root + quality
-    (arp! chord-record :up 1/16)       ; cljseq.chord/Chord record
-    (arp! [60 64 67] :up 1/16)         ; raw MIDI vector
-
-  Plays all chord tones in sequence, each separated by `step-dur` beats.
-  Direction: :up (default), :down, :up-down.
-  Inherits the active synth context (*synth-ctx*)."
-  ([chord-or-root direction step-dur]
-   (let [notes (cond
-                 (instance? cljseq.chord.Chord chord-or-root)
-                 (chord-ns/chord->midis chord-or-root)
-                 (sequential? chord-or-root)
-                 (vec chord-or-root)
-                 :else (throw (ex-info "arp!: unrecognised chord form"
-                                       {:arg chord-or-root})))
-         ordered (case direction
-                   :down    (vec (reverse notes))
-                   :up-down (vec (concat notes (rest (reverse notes))))
-                   notes)]
-     (doseq [n ordered]
-       (play! n step-dur)
-       (core/sleep! step-dur))))
-  ([root quality direction step-dur]
-   (let [parsed (pitch/keyword->pitch root)
-         c      (if parsed
-                  (chord-ns/->Chord parsed quality 0)
-                  (throw (ex-info "arp!: unrecognised root keyword" {:root root})))
-         notes  (chord-ns/chord->midis c)
-         ordered (case direction
-                    :down    (reverse notes)
-                    :up-down (concat notes (rest (reverse notes)))
-                    notes)]
-    (doseq [n ordered]
-      (play! n step-dur)
-      (core/sleep! step-dur)))))
-
-;; ---------------------------------------------------------------------------
-;; Voice-leading DSL helpers
+;; Voice-leading live helpers
 ;; ---------------------------------------------------------------------------
 
 (defn play-voicing!

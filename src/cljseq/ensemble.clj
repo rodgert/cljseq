@@ -28,7 +28,7 @@
     (start-harmony-ear! :main)
 
     ;; In live loops, *harmony-ctx* is now an ImprovisationContext map.
-    ;; dsl/root, dsl/scale-degree etc. still work — they extract :harmony/key.
+    ;; live/root, live/scale-degree etc. still work — they extract :harmony/key.
     ;; Loops can also read :harmony/tension, :harmony/chord etc. directly.
 
     ;; With a key hint (skip auto-detection, derive chord/tension on top):
@@ -59,7 +59,7 @@
   context."
   (:require [cljseq.analyze         :as analyze]
             [cljseq.ctrl            :as ctrl]
-            [cljseq.dsl             :as dsl]
+            [cljseq.live  :as live]
             [cljseq.loop            :as loop-ns]
             [cljseq.scale           :as scale-ns]
             [cljseq.temporal-buffer :as tb]))
@@ -161,7 +161,7 @@
         pub  (or ctx prev)]       ; retain prior context on empty/nil
     (when pub
       (reset! last-ctx pub)
-      (dsl/use-harmony! pub)
+      (live/use-harmony! pub)
       ;; Publish serializable form for peer sharing via HTTP server.
       ;; Wrapped in try so ctrl not being started does not break the ear.
       (try (ctrl/set! [:ensemble :harmony-ctx] (ctx->serial pub))

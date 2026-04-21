@@ -75,7 +75,7 @@
   Key design decisions: R&R §5.1 (NDLR model), R&R §22.5.3 (named arpeggio library)."
   (:require [cljseq.chord  :as chord-ns]
             [cljseq.core   :as core]
-            [cljseq.dsl    :as dsl]
+            [cljseq.live  :as live]
             [cljseq.loop   :as loop-ns]
             [cljseq.pitch  :as pitch]
             [cljseq.rhythm :as rhythm-ns]
@@ -314,7 +314,7 @@
                        :dur/beats    note-dur
                        :mod/velocity (long vel)}
                  step (if channel (assoc step :midi/channel (long channel)) step)]
-             (dsl/play! step)))
+             (live/play! step)))
          (core/sleep! clock-div))))))
 
 ;; ---------------------------------------------------------------------------

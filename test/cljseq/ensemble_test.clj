@@ -4,7 +4,7 @@
   ImprovisationContext derivation."
   (:require [clojure.test             :refer [deftest is testing use-fixtures]]
             [cljseq.ensemble          :as ensemble]
-            [cljseq.dsl               :as dsl]
+            [cljseq.live  :as live]
             [cljseq.loop              :as loop-ns]
             [cljseq.pitch             :as pitch]
             [cljseq.scale             :as scale]
@@ -17,9 +17,9 @@
 (use-fixtures :each
   (fn [t]
     ;; Clear any root harmony binding left by prior tests
-    (dsl/use-harmony! nil)
+    (live/use-harmony! nil)
     (t)
-    (dsl/use-harmony! nil)))
+    (live/use-harmony! nil)))
 
 ;; ---------------------------------------------------------------------------
 ;; analyze-buffer — no live system needed; we mock the snapshot
@@ -132,42 +132,42 @@
 ;; ---------------------------------------------------------------------------
 
 (deftest harmony-ctx-as-improv-ctx-map
-  (testing "dsl/root works when *harmony-ctx* is an ImprovisationContext map"
+  (testing "live/root works when *harmony-ctx* is an ImprovisationContext map"
     (let [key-scale (scale/scale :G 4 :major)
           ctx-map   {:harmony/key    key-scale
                      :harmony/tension 0.3
                      :ensemble/density 0.5}]
-      (dsl/with-harmony ctx-map
-        (is (= 67 (pitch/pitch->midi (dsl/root))))))))
+      (live/with-harmony ctx-map
+        (is (= 67 (pitch/pitch->midi (live/root))))))))
 
 (deftest harmony-ctx-scale-degree-via-improv-ctx
-  (testing "dsl/scale-degree works with ImprovisationContext"
+  (testing "live/scale-degree works with ImprovisationContext"
     (let [key-scale (scale/scale :C 4 :major)
           ctx-map   {:harmony/key key-scale}]
-      (dsl/with-harmony ctx-map
-        (is (= 60 (pitch/pitch->midi (dsl/scale-degree 0))))  ; C4
-        (is (= 67 (pitch/pitch->midi (dsl/scale-degree 4)))))))) ; G4
+      (live/with-harmony ctx-map
+        (is (= 60 (pitch/pitch->midi (live/scale-degree 0))))  ; C4
+        (is (= 67 (pitch/pitch->midi (live/scale-degree 4)))))))) ; G4
 
 (deftest harmony-ctx-in-key-via-improv-ctx
-  (testing "dsl/in-key? works with ImprovisationContext"
+  (testing "live/in-key? works with ImprovisationContext"
     (let [key-scale (scale/scale :C 4 :major)
           ctx-map   {:harmony/key key-scale}]
-      (dsl/with-harmony ctx-map
-        (is (dsl/in-key? :C4))
-        (is (not (dsl/in-key? :C#4)))))))
+      (live/with-harmony ctx-map
+        (is (live/in-key? :C4))
+        (is (not (live/in-key? :C#4)))))))
 
 (deftest harmony-ctx-classic-scale-still-works
-  (testing "dsl/root works when *harmony-ctx* is a plain Scale (backward compat)"
-    (dsl/with-harmony (scale/scale :C 4 :major)
-      (is (= 60 (pitch/pitch->midi (dsl/root)))))))
+  (testing "live/root works when *harmony-ctx* is a plain Scale (backward compat)"
+    (live/with-harmony (scale/scale :C 4 :major)
+      (is (= 60 (pitch/pitch->midi (live/root)))))))
 
 (deftest use-harmony-accepts-improv-ctx
   (testing "use-harmony! accepts and stores an ImprovisationContext map"
     (let [key-scale (scale/scale :D 3 :dorian)
           ctx-map   {:harmony/key key-scale :harmony/tension 0.5}]
-      (dsl/use-harmony! ctx-map)
+      (live/use-harmony! ctx-map)
       (is (= ctx-map loop-ns/*harmony-ctx*))
-      (dsl/use-harmony! nil))))
+      (live/use-harmony! nil))))
 
 ;; ---------------------------------------------------------------------------
 ;; temporal-buffer-snapshot
