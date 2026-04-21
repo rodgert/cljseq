@@ -503,7 +503,10 @@
 (deftest watch-global-fires-on-set-test
   (testing "watch-global! fires on every set! regardless of path"
     (let [calls (atom [])]
-      (ctrl/watch-global! ::test-watcher (fn [path value] (swap! calls conj {:path path :value value})))
+      (ctrl/watch-global! ::test-watcher
+                          (fn [tx _]
+                            (swap! calls conj {:path (-> tx :tx/changes first :path)
+                                               :value (-> tx :tx/changes first :after)})))
       (ctrl/set! [:watch-global/a] 1)
       (ctrl/set! [:watch-global/b] 2)
       (ctrl/unwatch-global! ::test-watcher)
@@ -515,7 +518,10 @@
   (testing "watch-global! fires on send! as well"
     (let [calls (atom [])]
       (ctrl/defnode! [:watch-global/send] :type :float :node-meta {:range [0.0 1.0]})
-      (ctrl/watch-global! ::test-watcher-send (fn [path value] (swap! calls conj {:path path :value value})))
+      (ctrl/watch-global! ::test-watcher-send
+                          (fn [tx _]
+                            (swap! calls conj {:path (-> tx :tx/changes first :path)
+                                               :value (-> tx :tx/changes first :after)})))
       (binding [ctrl/*dispatch-warn-fn* (fn [& _])]
         (ctrl/send! [:watch-global/send] 0.5))
       (ctrl/unwatch-global! ::test-watcher-send)
@@ -525,7 +531,7 @@
 (deftest unwatch-global-removes-watcher-test
   (testing "unwatch-global! stops the watcher from firing"
     (let [calls (atom [])]
-      (ctrl/watch-global! ::test-removable (fn [path value] (swap! calls conj value)))
+      (ctrl/watch-global! ::test-removable (fn [tx _] (swap! calls conj (-> tx :tx/changes first :after))))
       (ctrl/set! [:ug/before] 1)
       (ctrl/unwatch-global! ::test-removable)
       (ctrl/set! [:ug/after] 2)
@@ -535,9 +541,9 @@
   (testing "re-registering the same key replaces the callback"
     (let [calls-a (atom [])
           calls-b (atom [])]
-      (ctrl/watch-global! ::test-replace (fn [_ v] (swap! calls-a conj v)))
+      (ctrl/watch-global! ::test-replace (fn [tx _] (swap! calls-a conj (-> tx :tx/changes first :after))))
       (ctrl/set! [:replace/x] :first)
-      (ctrl/watch-global! ::test-replace (fn [_ v] (swap! calls-b conj v)))
+      (ctrl/watch-global! ::test-replace (fn [tx _] (swap! calls-b conj (-> tx :tx/changes first :after))))
       (ctrl/set! [:replace/x] :second)
       (ctrl/unwatch-global! ::test-replace)
       (is (= [:first] @calls-a) "first callback fired before replacement")
@@ -545,6 +551,6 @@
 
 (deftest watch-global-exception-is-swallowed-test
   (testing "exceptions in watch-global! callbacks do not propagate to the writer"
-    (ctrl/watch-global! ::test-throwing (fn [_ _] (throw (ex-info "boom" {}))))
+    (ctrl/watch-global! ::test-throwing (fn [_ _s] (throw (ex-info "boom" {}))))
     (is (nil? (ctrl/set! [:throw/test] 42)) "set! completes despite watcher exception")
     (ctrl/unwatch-global! ::test-throwing)))

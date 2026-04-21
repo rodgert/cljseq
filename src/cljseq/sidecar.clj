@@ -24,6 +24,7 @@
   Q51 (native dependency policy), §3.5 (process topology), §29."
   (:require [clojure.java.io     :as io]
             [clojure.string      :as str]
+            [cljseq.journal      :as journal]
             [cljseq.scala        :as scala])
   (:import  [java.net        Socket ServerSocket]
             [java.io         InputStream OutputStream BufferedReader InputStreamReader]
@@ -125,6 +126,9 @@
 (def ^:private MSG-LINK-TRANSPORT-START  (unchecked-byte 0x13))
 (def ^:private MSG-LINK-TRANSPORT-STOP   (unchecked-byte 0x14))
 (def ^:private MSG-MIDI-IN               (unchecked-byte 0x20))  ; sidecar→JVM: MIDI input received
+(def ^:private MSG-TX-LOG                (unchecked-byte 0x30))  ; JVM→sidecar: durable tx append
+(def ^:private MSG-SESSION-OPEN          (unchecked-byte 0x31))  ; JVM→sidecar: open session SQLite file
+(def ^:private MSG-SESSION-CLOSE         (unchecked-byte 0x32))  ; JVM→sidecar: close session SQLite file
 (def ^:private MSG-LINK-STATE            (unchecked-byte 0x80))
 (def ^:private MSG-PING         (unchecked-byte 0xF0))
 (def ^:private MSG-SHUTDOWN     (unchecked-byte 0xFF))
@@ -675,3 +679,116 @@
     (Thread/sleep 500)
     (apply start-sidecar!
            (mapcat identity (filter (comp some? val) opts)))))
+
+;; ---------------------------------------------------------------------------
+;; Session durability — tx-log, session open/close (§tx-log-durability)
+;;
+;; Wire format: new message types 0x30 (TxLog), 0x31 (SessionOpen), 0x32 (SessionClose).
+;; The sidecar owns the SQLite write path; the JVM appends fire-and-forget.
+;; ---------------------------------------------------------------------------
+
+(defn- source-kind-byte [kind]
+  (byte (get journal/source-kind->int kind 0)))
+
+(defn- tx-payload
+  "Encode a transaction map to the TxLog binary payload (little-endian throughout).
+
+  Payload layout:
+    [uint8[16]  tx_id]         — UUID as two int64 (hi, lo)
+    [float64    beat]
+    [int64      wall_ns]
+    [uint8      source_kind]
+    [uint16     source_id_len]
+    [uint8[]    source_id]     — UTF-8 pr-str of :source/id
+    [uint8      has_parent]
+    [uint8[16]  parent_id]     — only present when has_parent == 1
+    [uint16     n_changes]
+    -- repeated n_changes times:
+    [uint16     path_len][uint8[] path]
+    [uint16     before_len][uint8[] before]   — before_len == 0 means nil/absent
+    [uint16     after_len][uint8[] after]"
+  ^bytes [tx]
+  (let [^java.util.UUID id  (:tx/id tx)
+        beat     (double (or (:tx/beat    tx) 0.0))
+        wall-ns  (long   (or (:tx/wall-ns tx) 0))
+        source   (or (:tx/source tx) {})
+        src-kind (source-kind-byte (get source :source/kind :user))
+        src-id-b ^bytes (.getBytes ^String (pr-str (get source :source/id :repl)) "UTF-8")
+        parent   (get source :source/parent)
+        changes  (or (:tx/changes tx) [])
+        enc      (mapv (fn [{:keys [path before after]}]
+                         {:path-b   ^bytes (.getBytes ^String (pr-str path)   "UTF-8")
+                          :before-b (when (some? before)
+                                      ^bytes (.getBytes ^String (pr-str before) "UTF-8"))
+                          :after-b  ^bytes (.getBytes ^String (pr-str after)  "UTF-8")})
+                       changes)
+        size     (+ 16 8 8              ; tx_id + beat + wall_ns
+                   1 2 (alength src-id-b)  ; source_kind + id_len + id
+                   1 (if parent 16 0)      ; has_parent + optional parent_id
+                   2                       ; n_changes
+                   (reduce (fn [s {:keys [^bytes path-b ^bytes before-b ^bytes after-b]}]
+                              (+ s 2 (alength path-b)
+                                   2 (if before-b (alength before-b) 0)
+                                   2 (alength after-b)))
+                            0 enc))
+        buf      (doto (ByteBuffer/allocate size)
+                   (.order ByteOrder/LITTLE_ENDIAN))]
+    (.putLong   buf (.getMostSignificantBits  id))
+    (.putLong   buf (.getLeastSignificantBits id))
+    (.putDouble buf beat)
+    (.putLong   buf wall-ns)
+    (.put       buf src-kind)
+    (.putShort  buf (unchecked-short (alength src-id-b)))
+    (.put       buf src-id-b)
+    (if parent
+      (let [^java.util.UUID p parent]
+        (.put     buf (byte 1))
+        (.putLong buf (.getMostSignificantBits  p))
+        (.putLong buf (.getLeastSignificantBits p)))
+      (.put buf (byte 0)))
+    (.putShort buf (unchecked-short (count enc)))
+    (doseq [{:keys [^bytes path-b ^bytes before-b ^bytes after-b]} enc]
+      (.putShort buf (unchecked-short (alength path-b)))
+      (.put      buf path-b)
+      (.putShort buf (unchecked-short (if before-b (alength before-b) 0)))
+      (when before-b (.put buf before-b))
+      (.putShort buf (unchecked-short (alength after-b)))
+      (.put      buf after-b))
+    (.array buf)))
+
+(defn send-tx!
+  "Send a transaction map to the sidecar for durable logging.
+
+  Fire-and-forget — returns immediately without waiting for confirmation.
+  The sidecar buffers the write into the open SQLite session file.
+  No-op if the sidecar is not connected or no session is open.
+
+  Called automatically by ctrl/set! and ctrl/send-at! when connected.
+
+  Example:
+    (sidecar/send-tx! tx)"
+  [tx]
+  (send-frame! (make-frame MSG-TX-LOG (tx-payload tx))))
+
+(defn open-session!
+  "Open a durable session log at `path` (absolute path to a .sqlite file).
+
+  The sidecar creates the file if it doesn't exist, applies the session schema,
+  and begins writing every subsequent `send-tx!` call into it.
+
+  Call this after `start-sidecar!`. The path is typically generated by
+  `cljseq.core/start!` under the sessions directory.
+
+  Example:
+    (sidecar/open-session! \"/Users/me/.cljseq/sessions/2026-04-20T21-34-00.sqlite\")"
+  [path]
+  (send-frame! (make-frame MSG-SESSION-OPEN
+                           (.getBytes ^String (str path) "UTF-8"))))
+
+(defn close-session!
+  "Flush any pending writes and close the durable session log.
+
+  Called automatically by `cljseq.core/stop!`. Safe to call when no session
+  is open (no-op on the sidecar side)."
+  []
+  (send-frame! (make-frame MSG-SESSION-CLOSE (byte-array 0))))

@@ -60,13 +60,60 @@
 
   Key design decisions: Q4, Q8, Q9, Q10, Q47, Q48."
   (:refer-clojure :exclude [get])
-  (:require [cljseq.sidecar :as sidecar]))
+  (:require [cljseq.sidecar   :as sidecar]
+            [cljseq.timeline  :as timeline]))
 
 ;; ---------------------------------------------------------------------------
 ;; System reference — registered by cljseq.core/start! (avoids circular dep)
 ;; ---------------------------------------------------------------------------
 
 (defonce ^:private system-ref (atom nil))
+
+;; ---------------------------------------------------------------------------
+;; Transaction log — source context and capacity
+;; ---------------------------------------------------------------------------
+
+(def ^:dynamic *current-tx-source*
+  "Source context for transactions committed on this thread.
+  Bind via `with-source` to attribute writes to a loop, device, or user action.
+  Default: REPL/user context."
+  {:source/kind :user :source/id :repl :source/parent nil})
+
+(def ^:dynamic *tx-log-max*
+  "Maximum number of transactions retained in the in-memory log.
+  Oldest entries are evicted when the bound is exceeded."
+  10000)
+
+(defmacro with-source
+  "Execute `body` with `*current-tx-source*` bound to `source`.
+  All ctrl/set! and ctrl/send! calls within body record `source` as their origin.
+
+  Example:
+    (ctrl/with-source {:source/kind :loop :source/id :bass}
+      (ctrl/set! [:filter/cutoff] 0.7))"
+  [source & body]
+  `(binding [*current-tx-source* ~source]
+     ~@body))
+
+(defn- build-tx
+  "Build a transaction map for a single path write."
+  [beat wall-ns source path before after]
+  {:tx/id      (timeline/squuid)
+   :tx/beat    beat
+   :tx/wall-ns wall-ns
+   :tx/source  source
+   :tx/changes [{:path path :before before :after after}]})
+
+(defn- append-tx
+  "Return state with `tx` appended to :tx-log, evicting the oldest entry
+  if the log exceeds *tx-log-max*."
+  [s tx]
+  (update s :tx-log
+          (fn [log]
+            (let [log' (conj log tx)]
+              (if (> (count log') *tx-log-max*)
+                (subvec log' 1)
+                log')))))
 
 ;; ---------------------------------------------------------------------------
 ;; Diagnostics
@@ -159,21 +206,23 @@
                   new-stack))))))
 
 (defn- fire-watchers!
-  "Fire all watchers registered on `path` with `value`, then all global watchers.
-  Called internally after every send-at! and set!."
-  [path value]
-  (doseq [[_ f] (clojure.core/get @watchers path)]
-    (try
-      (f path value)
-      (catch Exception e
-        (binding [*out* *err*]
-          (println (str "[ctrl] watcher error on " (pr-str path)
-                        ": " (.getMessage e)))))))
-  (doseq [[_ f] @global-watchers]
-    (try (f path value)
-         (catch Exception e
-           (binding [*out* *err*]
-             (println (str "[ctrl] global watcher error: " (.getMessage e))))))))
+  "Fire all watchers registered on the changed path, then all global watchers.
+  Watcher signature: (fn [tx new-state] ...) where tx is the full transaction
+  map and new-state is the materialized ctrl tree after the transaction."
+  [tx new-state]
+  (let [path (-> tx :tx/changes first :path)]
+    (doseq [[_ f] (clojure.core/get @watchers path)]
+      (try
+        (f tx new-state)
+        (catch Exception e
+          (binding [*out* *err*]
+            (println (str "[ctrl] watcher error on " (pr-str path)
+                          ": " (.getMessage e)))))))
+    (doseq [[_ f] @global-watchers]
+      (try (f tx new-state)
+           (catch Exception e
+             (binding [*out* *err*]
+               (println (str "[ctrl] global watcher error: " (.getMessage e)))))))))
 
 ;; ---------------------------------------------------------------------------
 ;; Core read/write API
@@ -216,12 +265,24 @@
     ;; In a MIDI input handler — safe: will not echo back to hardware:
     (ctrl/set! [:cc/74] incoming-value)"
   [path value & {:keys [undoable]}]
-  (swap! @system-ref
-         (fn [s]
-           (let [node (or (get-node s path) (make-node))
-                 s'   (if undoable (push-undo s) s)]
-             (put-node s' path (assoc node :value value)))))
-  (fire-watchers! path value)
+  (let [beat    (timeline/current-beat)
+        wall-ns (* (timeline/current-wall-ms) 1000000)
+        source  *current-tx-source*
+        result  (volatile! nil)]
+    (swap! @system-ref
+           (fn [s]
+             (let [before (some-> (get-node s path) :value)
+                   tx     (build-tx beat wall-ns source path before value)
+                   s'     (if undoable (push-undo s) s)
+                   s''    (-> s'
+                              (put-node path (assoc (or (get-node s path) (make-node)) :value value))
+                              (append-tx tx))]
+               (vreset! result [tx s''])
+               s'')))
+    (let [[tx new-state] @result]
+      (fire-watchers! tx new-state)
+      (when (sidecar/connected?)
+        (sidecar/send-tx! tx))))
   nil)
 
 (defn send-at!
@@ -243,11 +304,20 @@
     ;; Schedule a filter sweep to arrive at the same time as the note-on:
     (ctrl/send-at! on-ns [:filter/cutoff] 0.7)"
   [time-ns path value]
-  (swap! @system-ref
-         (fn [s]
-           (let [node (or (get-node s path) (make-node))]
-             (put-node s path (assoc node :value value)))))
-  (let [node (get-node @@system-ref path)]
+  (let [beat    (timeline/current-beat)
+        source  *current-tx-source*
+        result  (volatile! nil)]
+    (swap! @system-ref
+           (fn [s]
+             (let [before (some-> (get-node s path) :value)
+                   tx     (build-tx beat time-ns source path before value)
+                   s'     (-> s
+                              (put-node path (assoc (or (get-node s path) (make-node)) :value value))
+                              (append-tx tx))]
+               (vreset! result [tx s'])
+               s')))
+    (let [[tx new-state] @result
+          node           (get-node new-state path)]
     (doseq [binding (:bindings node)]
       (case (:type binding)
         :midi-cc
@@ -299,8 +369,10 @@
         ;; Other binding types: log and skip
         (binding [*out* *err*]
           (println (str "[ctrl] send! binding type " (:type binding)
-                        " at " (pr-str path) " not yet dispatched"))))))
-  (fire-watchers! path value)
+                        " at " (pr-str path) " not yet dispatched")))))
+      (fire-watchers! tx new-state)
+      (when (sidecar/connected?)
+        (sidecar/send-tx! tx))))
   nil)
 
 (defn send!
@@ -508,6 +580,24 @@
             :when       (= binding-type (:type binding))]
         [path binding]))))
 
+(defn child-keys
+  "Return the direct child keys at an intermediate tree node `path`.
+
+  Unlike `get`, which reads leaf CtrlNode values, this reads the keys of
+  an intermediate map in the tree — used by cljseq.schema to enumerate
+  registered models and realizations.
+
+  Returns nil if the path doesn't exist or is a CtrlNode leaf.
+
+  Example:
+    (ctrl/child-keys [:cljseq/schema :device-models])
+    ;; => (:arp2600 :korg/minilogue-xd)"
+  [path]
+  (when-let [s @system-ref]
+    (let [node (get-in (:tree @s) path)]
+      (when (and (map? node) (not (instance? CtrlNode node)))
+        (keys node)))))
+
 (defn all-nodes
   "Return a seq of {:path [...] :value v :type kw :node-meta m} maps for every ctrl node.
 
@@ -528,6 +618,27 @@
          (walk-nodes (:tree @s) []))
     []))
 
+(defn tx-log
+  "Return the current in-memory transaction log as a vector of transaction maps.
+
+  Each transaction has:
+    :tx/id      — squuid
+    :tx/beat    — beat position at write time
+    :tx/wall-ns — wall-clock nanoseconds at write time
+    :tx/source  — {:source/kind kw :source/id kw :source/parent nil-or-id}
+    :tx/changes — [{:path [...] :before v :after v}]
+
+  Returns an empty vector if the system is not started or no transactions have
+  been recorded yet.
+
+  Example:
+    (ctrl/tx-log)
+    ;; => [{:tx/id #uuid \"...\" :tx/beat 0.0 ...} ...]"
+  []
+  (if-let [s @system-ref]
+    (or (:tx-log @s) [])
+    []))
+
 ;; ---------------------------------------------------------------------------
 ;; Watcher API
 ;; ---------------------------------------------------------------------------
@@ -538,14 +649,18 @@
 
   `watch-key` — any value; identifies this watcher for later removal.
                 Use a namespaced keyword to avoid collisions, e.g. ::my-ns/key.
-  `f`         — (fn [path value]) called after MIDI dispatch completes.
+  `f`         — (fn [tx new-state]) called after MIDI dispatch completes.
+                `tx` is the full transaction map; `new-state` is the
+                materialized ctrl tree after the transaction.
 
   Re-registering the same path+watch-key replaces the previous callback.
   Exceptions thrown by `f` are printed to stderr and swallowed.
 
   Example:
     (ctrl/watch! [:arc/tension] ::my-listener
-                 (fn [path v] (println path \"changed to\" v)))"
+                 (fn [tx _state]
+                   (println [:arc/tension] \"changed to\"
+                            (:after (first (:tx/changes tx))))))"
   [path watch-key f]
   (swap! watchers assoc-in [path watch-key] f)
   nil)
@@ -573,7 +688,10 @@
   Exceptions thrown by `f` are printed to stderr and swallowed.
 
   Example:
-    (ctrl/watch-global! ::ws/broadcast (fn [path v] (broadcast! path v)))"
+    (ctrl/watch-global! ::ws/broadcast
+                        (fn [tx _state]
+                          (broadcast! (-> tx :tx/changes first :path)
+                                      (-> tx :tx/changes first :after))))"
   [watch-key f]
   (swap! global-watchers assoc watch-key f)
   nil)

@@ -48,6 +48,7 @@ Version 0.14.0 · April 2026
 40. [Browser Control Surface (`cljseq-ui`)](#40-browser-control-surface)
 41. [Step Sequencer Protocol (`cljseq.seq`)](#41-step-sequencer-protocol-cljseqseq)
 42. [Pattern × Rhythm Motifs (`cljseq.pattern`)](#42-pattern--rhythm-motifs-cljseqpattern)
+43. [Transaction Journal (`cljseq.journal`)](#43-transaction-journal-cljseqjournal)
 
 ---
 
@@ -4196,6 +4197,111 @@ Built-in rhythms: `:tresillo`, `:cinquillo`, `:son-clave`, `:rumba-clave`,
 | `:chromatic` | `*harmony-ctx*` root — integer semitone offset; 0=root, negative ok. |
 | `:pitch` | Keywords (`:C4`), `Pitch` records, or MIDI integers — resolved absolutely. |
 | `:midi` | Raw MIDI integers — no context needed. |
+
+---
+
+## 43. Transaction Journal (`cljseq.journal`)
+
+Every parameter write goes through the sidecar, which appends a row to a
+WAL-mode SQLite `changes` table. `cljseq.journal` reads and queries that log
+from Clojure, with no IPC round-trip — it opens the file directly via
+`sqlite-jdbc`.
+
+### Layer 1 — reading the raw log
+
+```clojure
+(def txs (read-journal "/path/to/session.sqlite"))
+;; => [{:tx/id #uuid "..." :tx/beat 0.0 :tx/wall-ns 1234 :tx/source :schema
+;;      :tx/path [:cljseq/schema :device-models :arp2600]
+;;      :tx/before nil :tx/after {...} :tx/parent nil} ...]
+```
+
+`read-journal` seals all persistence artifacts at the boundary: source
+integers → keywords (`:user`, `:loop`, `:trajectory`, etc.), EDN strings →
+Clojure data, `tx_id` bytes → `java.util.UUID`. Everything above this call
+sees only Clojure data.
+
+### Layer 2 — query functions
+
+All L2 functions take the vector from `read-journal` as their first argument.
+
+```clojure
+;; All writes to a path, chronological
+(tx-history txs [:arp2600 :filter :cutoff])
+;; => [{:tx/beat 1.0 :tx/after 0.5 ...} ...]
+
+;; Value at a given beat (last write ≤ beat)
+(tx-at txs [:arp2600 :filter :cutoff] 20.0)
+;; => 0.8
+
+;; Writes in a beat window; optional :source / :path filters
+(tx-range txs 64.0 128.0 :source :user)
+
+;; All writes attributed to one source
+(tx-by-source txs :loop)
+
+;; Set of paths written at least once
+(active-paths (tx-range txs 64.0 128.0))
+
+;; Final state fold
+(latest-values txs)
+;; => {[:arp2600 :filter :cutoff] 0.6 ...}
+```
+
+### Layer 3 — semantic transforms
+
+#### `crystallize` — performance window to timeline
+
+```clojure
+(crystallize txs 64.0 128.0 :source :loop)
+;; => {[:arp2600 :filter :cutoff] [{:beat 0.0 :value 0.5}
+;;                                  {:beat 16.0 :value 0.8}]}
+```
+
+Beats are normalized relative to `beat-from`, so beat 64 → 0.0. Use this
+to turn a live-performance window into trajectory or step-sequence material.
+
+Options:
+- `:source` — restrict to one source kind keyword
+- `:schema?` — include `[:cljseq/schema ...]` paths (default `false`)
+
+#### `diff-sessions` — compare two journal files
+
+```clojure
+(diff-sessions "tuesday.sqlite" "thursday.sqlite")
+;; => {:added     {[:synth :lfo :rate] 2.0}
+;;     :removed   {}
+;;     :changed   {[:arp2600 :filter :cutoff] {:before 0.5 :after 0.7}}
+;;     :unchanged #{[:arp2600 :filter :res]}}
+```
+
+### Session lifecycle
+
+Four functions in `cljseq.core` (re-exported via `cljseq.user`) wrap the
+journal for session save/restore:
+
+| Function | Description |
+|---|---|
+| `export-session!` | Write live ctrl/schema tree to a `.cljseq` EDN file |
+| `restore-session!` | Load a `.cljseq` file and re-apply BPM, devices, params |
+| `export-from-journal!` | Reconstruct final state from a SQLite file → `.cljseq` |
+| `load-session!` | Open a SQLite journal and restore final state in-process |
+
+```clojure
+;; Save the current session
+(export-session! "friday-ambient.cljseq")
+
+;; Restore it next session
+(restore-session! "friday-ambient.cljseq")
+
+;; Or rebuild from the raw journal if you forgot to export
+(export-from-journal! "/path/to/session.sqlite" "friday-ambient.cljseq")
+(load-session! "/path/to/session.sqlite")
+```
+
+The `.cljseq` export format is fully-qualified, human-readable Clojure forms
+(`cljseq.schema/defdevice-model`, `cljseq.ctrl/set!`, etc.) — diff-friendly
+and safe to commit to version control.
 
 ---
 

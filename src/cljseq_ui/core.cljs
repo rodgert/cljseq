@@ -73,7 +73,7 @@
     (let [path-arr (get data "path")
           value    (get data "value")
           path-str (str/join "/" path-arr)]
-      (if (= path-str "bpm")
+      (if (or (= path-str "bpm") (= path-str "config/bpm"))
         (reset! bpm-state value)
         (swap! ctrl-state update path-str
                (fn [existing]
@@ -131,7 +131,7 @@
                        value    (get node "value")
                        type-s   (get node "type" "data")
                        meta     (get node "meta" {})]
-                   (if (= path-str "bpm")
+                   (if (or (= path-str "bpm") (= path-str "config/bpm"))
                      (reset! bpm-state value)
                      (swap! ctrl-state assoc path-str
                             {:value    value
@@ -185,9 +185,9 @@
      (case s :open "LIVE" :connecting "..." :closed "OFFLINE")]))
 
 (defn- beat-dot
-  "Pulsing beat indicator. Reads beat-count to derive bar position (1-4)."
+  "Pulsing beat indicator. Alternates bright/dim on every beat."
   []
-  (let [step (mod @beat-count 4)]   ; 0 = downbeat, 1-3 = subdivisions
+  (let [step (mod @beat-count 2)]
     [:div.beat-dot {:class (str "step-" step)
                     :title "beat"}]))
 
@@ -432,6 +432,7 @@
 (defonce ^:private loop-poll-handle (atom nil))
 
 (defn init! []
+  (rdom/render [app] (.getElementById js/document "app"))
   (fetch-ctrl!)
   (connect!)
   (fetch-loops!)

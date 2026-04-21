@@ -139,9 +139,10 @@
   "Return a ctrl watcher fn that pushes the value to all registered subscribers
   for `path` using `*push-fn*` (or `osc-send!` when not rebound)."
   [path]
-  (fn [_ value]
+  (fn [tx _state]
     (when-let [subs (seq (get @subscriber-registry path))]
-      (let [address (ctrl-path->osc-address path)
+      (let [value   (:after (first (:tx/changes tx)))
+            address (ctrl-path->osc-address path)
             coerced (coerce-for-osc value)
             send-fn (or *push-fn* osc-send!)]
         (doseq [{:keys [host port]} subs]
