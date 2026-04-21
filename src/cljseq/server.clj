@@ -167,9 +167,10 @@
   Path segments are encoded via kw->str (consistent with the HTTP API):
     [:loops :bass] → [\"loops\" \"bass\"]
     [:filter/cutoff] → [\"filter/cutoff\"]"
-  [path value]
-  (let [msg (json/write-str {"path"  (mapv kw->str path)
-                             "value" (->json-safe value)})]
+  [tx _state]
+  (let [{:keys [path after]} (first (:tx/changes tx))
+        msg (json/write-str {"path"  (mapv kw->str path)
+                             "value" (->json-safe after)})]
     (doseq [ch @ws-channels]
       (hk/send! ch msg))))
 

@@ -88,7 +88,9 @@
     (swap! routes assoc source-path bindings)
     (when first-bind?
       (ctrl/watch! source-path ::arc-fan-out
-                   (fn [path value] (fan-out! path value)))))
+                   (fn [tx _state]
+                     (let [{:keys [path after]} (first (:tx/changes tx))]
+                       (fan-out! path after))))))
   nil)
 
 (defn arc-unbind!

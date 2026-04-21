@@ -19,37 +19,62 @@
             [cljseq.conductor       :as conductor]
             [cljseq.config          :as config]
             [cljseq.ctrl            :as ctrl]
+            [cljseq.dirs            :as dirs]
             [cljseq.flux            :as flux]
             [cljseq.link            :as link]
             [cljseq.loop            :as loop-ns]
             [cljseq.midi-in         :as midi-in]
             [cljseq.mod             :as mod]
             [cljseq.mpe             :as mpe]
+            [cljseq.schema          :as schema]
             [cljseq.sidecar         :as sidecar]
             [cljseq.target          :as target]
-            [cljseq.temporal-buffer :as tbuf])
-  (:import  [java.util.concurrent.locks LockSupport])
+            [cljseq.temporal-buffer :as tbuf]
+            [cljseq.timeline        :as timeline]
+            [clojure.edn            :as edn]
+            [clojure.pprint         :as pprint]
+            [clojure.string         :as str])
+  (:import  [java.sql DriverManager]
+            [java.util.concurrent.locks LockSupport]
+            [java.time LocalDateTime]
+            [java.time.format DateTimeFormatter])
   (:gen-class))
 
 ;; ---------------------------------------------------------------------------
 ;; System state (Q47)
 ;; ---------------------------------------------------------------------------
 
+;; ---------------------------------------------------------------------------
+;; Session file naming
+;; ---------------------------------------------------------------------------
+
+(defn- session-filename
+  "Generate <ISO-timestamp>[-<session-id>].sqlite"
+  ^String [session-id]
+  (let [ts (.format (LocalDateTime/now)
+                    (DateTimeFormatter/ofPattern "yyyy-MM-dd'T'HH-mm-ss"))]
+    (if session-id
+      (str ts "-" (name session-id) ".sqlite")
+      (str ts ".sqlite"))))
+
 ;;; Single system-state atom. Shape per Q47:
 ;;;   :tree        — control tree (persistent map)
 ;;;   :serial      — structural change counter
+;;;   :tx-log      — append-only transaction log (bounded vector)
 ;;;   :undo-stack  — bounded ring; default depth 50
 ;;;   :checkpoints — named snapshots for panic/revert
 ;;;   :loops       — live-loop registry
 ;;;   :config      — runtime configuration (BPM etc.)
 (defonce system-state
-  (atom {:tree        {}
-         :serial      0
-         :undo-stack  []
-         :checkpoints {}
-         :loops       {}
-         :config      {:bpm 120 :beats-per-bar 4}
-         :timeline    nil}))
+  (atom {:tree         {}
+         :serial       0
+         :tx-log       []
+         :undo-stack   []
+         :checkpoints  {}
+         :loops        {}
+         :config       {:bpm 120 :beats-per-bar 4}
+         :timeline     nil
+         :session-path nil}))
 
 ;; ---------------------------------------------------------------------------
 ;; Configuration
@@ -125,11 +150,20 @@
   Options:
     :bpm           — initial BPM (default 120)
     :beats-per-bar — beats per bar (default 4; use 3 for waltz, 6 for compound)
+    :session-id    — keyword or string appended to the session filename
+                     (e.g. :berlin-study → 2026-04-20T21-34-00-berlin-study.sqlite)
+    :no-log        — when true, suppress durable session logging (default false)
 
   Registers the system-state atom with cljseq.loop and initialises the
-  master timeline anchored at the current wall-clock instant / beat 0."
-  [& {:keys [bpm beats-per-bar] :or {bpm 120 beats-per-bar 4}}]
-  (let [now-ms (System/currentTimeMillis)]
+  master timeline anchored at the current wall-clock instant / beat 0.
+
+  A session file path is computed and stored under :session-path. Call
+  `(open-session!)` after `(start-sidecar!)` to activate durable logging."
+  [& {:keys [bpm beats-per-bar session-id no-log] :or {bpm 120 beats-per-bar 4}}]
+  (let [now-ms      (System/currentTimeMillis)
+        session-path (when-not no-log
+                       (str (dirs/sessions-dir) "/"
+                            (session-filename session-id)))]
     (swap! system-state
            (fn [s]
              (-> s
@@ -138,7 +172,9 @@
                  (assoc :timeline {:bpm            bpm
                                    :beat0-epoch-ms now-ms
                                    :beat0-beat     0.0})
-                 (assoc :undo-stack [])
+                 (assoc :tx-log       [])
+                 (assoc :undo-stack   [])
+                 (assoc :session-path session-path)
                  (dissoc :link-state :link-timeline))))
     (loop-ns/-register-system! system-state)
     (ctrl/-register-system! system-state)
@@ -147,6 +183,7 @@
     (link/-register-system! system-state)
     (mod/-register-system! system-state)
     (config/-register-system! system-state)
+    (timeline/-register-system! system-state)
     ;; Register side effects for params with runtime consequences.
     ;; :bpm — full timeline reanchor + thread unpark + Link propagation.
     (config/-register-effect! :bpm set-bpm!)
@@ -154,6 +191,219 @@
     (config/seed-ctrl-tree!)
     (println (str "cljseq started at " bpm " BPM"))
     nil))
+
+(defn open-session!
+  "Open a durable session log in the sidecar.
+
+  Sends a SessionOpen (0x31) IPC message to the sidecar, directing it to create
+  (or reuse) a SQLite file at the path computed by `start!`.
+
+  Call this after `start-sidecar!`. If no session path was set (e.g. `:no-log true`
+  was passed to `start!`), this is a no-op.
+
+  Example:
+    (start! :bpm 120 :session-id :berlin-study)
+    (start-sidecar! :midi-port 0)
+    (open-session!)   ; → writes to ~/.cljseq/sessions/2026-04-20T21-34-00-berlin-study.sqlite"
+  []
+  (when-let [path (:session-path @system-state)]
+    (when (sidecar/connected?)
+      (sidecar/open-session! path)
+      (println (str "[session] logging to " path))))
+  nil)
+
+(defn session-path
+  "Return the durable session file path for the current session, or nil if
+  logging is disabled."
+  []
+  (:session-path @system-state))
+
+;; ---------------------------------------------------------------------------
+;; Session export / load
+;; ---------------------------------------------------------------------------
+
+;; Session state map shape:
+;;   {:bpm N :beats-per-bar N
+;;    :models        {model-id model-map ...}
+;;    :realizations  {realization-id realization-map ...}
+;;    :active        {model-id realization-id ...}
+;;    :params        [[path value] ...]}
+
+(defn- live-session-state
+  "Read session state from the running ctrl tree."
+  []
+  (let [models  (or (schema/list-models) [])
+        realzns (or (schema/list-realizations) [])]
+    {:bpm           (get-bpm)
+     :beats-per-bar (get-beats-per-bar)
+     :models        (into {} (for [m models] [m (schema/get-model m)]))
+     :realizations  (into {} (for [r realzns] [r (schema/get-realization r)]))
+     :active        (into {} (for [m models
+                                   :let [r (schema/active-realization m)]
+                                   :when r]
+                               [m r]))
+     :params        (for [{:keys [path value]} (ctrl/all-nodes)
+                          :when (and (some? value)
+                                     (not= :cljseq/schema (first path))
+                                     (not= :config        (first path)))]
+                      [path value])}))
+
+(defn- fold-journal-row
+  "Merge one journal row (path vector + value) into the session state map."
+  [state path value]
+  (let [p0 (nth path 0 nil)
+        p1 (nth path 1 nil)
+        p2 (nth path 2 nil)]
+    (cond
+      (and (= p0 :config) (= p1 :bpm))           (assoc state :bpm value)
+      (and (= p0 :config) (= p1 :beats-per-bar)) (assoc state :beats-per-bar value)
+      (= p0 :config)                              state
+      (and (= p0 :cljseq/schema) (= p1 :device-models))
+      (assoc-in state [:models p2] value)
+      (and (= p0 :cljseq/schema) (= p1 :realizations))
+      (assoc-in state [:realizations p2] value)
+      (and (= p0 :cljseq/schema) (= p1 :active-realizations))
+      (assoc-in state [:active p2] value)
+      (= p0 :cljseq/schema)                       state
+      :else                                       (update state :params conj [path value]))))
+
+(defn- journal-session-state
+  "Fold a SQLite journal to last-value-per-path and return a session state map."
+  [^String db-path]
+  (with-open [conn (DriverManager/getConnection (str "jdbc:sqlite:" db-path))
+              stmt (.createStatement conn)
+              rs   (.executeQuery stmt
+                     "SELECT path, after FROM changes
+                      WHERE id IN (SELECT MAX(id) FROM changes GROUP BY path)
+                      AND after IS NOT NULL")]
+    (loop [state {:bpm 120 :beats-per-bar 4
+                  :models {} :realizations {} :active {} :params []}]
+      (if-not (.next rs)
+        state
+        (let [path  (edn/read-string (.getString rs "path"))
+              value (edn/read-string (.getString rs "after"))]
+          (recur (if (vector? path)
+                   (fold-journal-row state path value)
+                   state)))))))
+
+(defn- session-forms*
+  "Return a seq of Clojure forms that recreate the given session state map."
+  [{:keys [bpm beats-per-bar models realizations active params]}]
+  (concat
+    [`(cljseq.core/set-bpm! ~bpm)
+     `(cljseq.core/set-beats-per-bar! ~beats-per-bar)]
+    (for [[m model-map]       models]       `(cljseq.schema/defdevice-model ~m ~model-map))
+    (for [[r realization-map] realizations] `(cljseq.schema/defrealization  ~r ~realization-map))
+    (for [[m r]               active]       `(cljseq.schema/realize! ~m ~r))
+    (for [[p v]               params]       `(cljseq.ctrl/set! ~p ~v))))
+
+(defn- apply-session-state!
+  "Apply a session state map to the running system — direct function calls, no eval."
+  [{:keys [bpm beats-per-bar models realizations active params]}]
+  (set-bpm! bpm)
+  (set-beats-per-bar! beats-per-bar)
+  (doseq [[m model-map]       models]       (schema/defdevice-model m model-map))
+  (doseq [[r realization-map] realizations] (schema/defrealization r realization-map))
+  (doseq [[m r]               active]       (schema/realize! m r))
+  (doseq [[p v]               params]       (ctrl/set! p v)))
+
+(defn- emit-session-file
+  "Write a pprinted session definition file from forms. Returns out-path."
+  [out-path header forms]
+  (spit out-path
+        (str header "\n"
+             (str/join "\n" (map #(with-out-str (pprint/pprint %)) forms))))
+  out-path)
+
+(defn export-session!
+  "Snapshot the current session state to a loadable Clojure script.
+
+  Captures BPM, beats-per-bar, all device model and realization declarations,
+  active realization bindings, and non-nil ctrl parameter values.  The
+  resulting file can be loaded into a fresh session with `load-session!`.
+
+  Options:
+    :path — explicit output path (default: <sessions-dir>/<timestamp>-export.clj)
+
+  Returns the file path written.
+
+  Example:
+    (export-session!)
+    (export-session! :path \"/tmp/berlin-warmup.clj\")"
+  [& {:keys [path]}]
+  (let [out-path (or path
+                     (str (dirs/sessions-dir) "/"
+                          (.format (LocalDateTime/now)
+                                   (DateTimeFormatter/ofPattern "yyyy-MM-dd'T'HH-mm-ss"))
+                          "-export.clj"))
+        header   (str/join "\n"
+                           ["; cljseq session definition"
+                            (str "; exported " (LocalDateTime/now))
+                            (str "; (load-session! \"" out-path "\") to restore")
+                            ""])]
+    (emit-session-file out-path header (session-forms* (live-session-state)))
+    (println (str "[session] exported to " out-path))
+    out-path))
+
+(defn restore-session!
+  "Restore session state from a SQLite journal file written by the sidecar.
+
+  Reads the journal, folds each path to its last written value, and applies
+  the same semantic calls as export-session!: set-bpm!, defdevice-model,
+  defrealization, realize!, ctrl/set!.
+
+  Use this for crash recovery when no export file exists.  To inspect the
+  recovered state first, use `export-from-journal!` instead.
+
+  The system must already be started — restore-session! does not call start!.
+
+  Example:
+    (start!)
+    (restore-session! \"/path/to/session.sqlite\")"
+  [db-path]
+  (apply-session-state! (journal-session-state db-path))
+  nil)
+
+(defn export-from-journal!
+  "Export a SQLite journal as a loadable session definition script.
+
+  Reads the journal, folds to last-value-per-path, and writes a .clj file
+  with the same structure as export-session!.  Useful for inspecting or
+  editing a journal-recovered state before committing to it.
+
+  Options:
+    :path — output path (default: <db-path>-export.clj)
+
+  Returns the path written.
+
+  Example:
+    (export-from-journal! \"/path/to/session.sqlite\")
+    ;; edit the .clj, then:
+    (start!)
+    (load-session! \"/path/to/session.sqlite-export.clj\")"
+  [db-path & {:keys [path]}]
+  (let [out-path (or path (str db-path "-export.clj"))
+        header   (str/join "\n"
+                           ["; cljseq session definition"
+                            (str "; recovered from journal " db-path)
+                            (str "; (load-session! \"" out-path "\") to restore")
+                            ""])]
+    (emit-session-file out-path header (session-forms* (journal-session-state db-path)))
+    (println (str "[session] exported journal to " out-path))
+    out-path))
+
+(defn load-session!
+  "Load a session definition from a Clojure script exported by `export-session!`.
+
+  Evaluates the file in the current runtime.  The system must be started
+  first — `load-session!` does not call `start!`.
+
+  Example:
+    (start! :bpm 120)
+    (load-session! \"/path/to/my-jam.clj\")"
+  [path]
+  (load-file path)
+  nil)
 
 (defn stop!
   "Gracefully stop all live loops and shut down the system."
@@ -167,6 +417,9 @@
   ;; Stop the m21 server if it was ever loaded (dynamic to avoid circular dep)
   (when-let [stop-m21 (resolve 'cljseq.m21/stop-server!)]
     (stop-m21))
+  ;; Close the durable session log if the sidecar is connected
+  (when (sidecar/connected?)
+    (sidecar/close-session!))
   ;; Wait briefly for threads to notice the stop signal
   (Thread/sleep 50)
   (swap! system-state assoc :loops {})

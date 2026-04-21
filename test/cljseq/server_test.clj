@@ -392,9 +392,7 @@
       (is (= 200 status))
       (is (str/starts-with? (content-type headers) "text/css")))))
 
-(deftest control-surface-js-missing-test
-  (testing "GET /js/main.js returns 404 when the CLJS build has not run"
-    ;; resources/public/js/ is gitignored and not present in the test classpath
-    ;; until shadow-cljs compiles. A 404 here is the expected/correct response.
-    (let [{:keys [status]} (http-get-raw "/js/main.js")]
+(deftest control-surface-static-missing-test
+  (testing "GET for a non-existent static file returns 404"
+    (let [{:keys [status]} (http-get-raw "/js/no-such-file-xyz.js")]
       (is (= 404 status)))))

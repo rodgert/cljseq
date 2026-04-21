@@ -19,8 +19,9 @@
 
   Key design decisions: Q11 (live-loop alias), Q1 (virtual time), Q59
   (LockSupport/parkUntil for drift-free sleep), Q2–Q3 (sync! stub Phase 0)."
-  (:require [cljseq.clock :as clock]
-            [cljseq.link  :as link])
+  (:require [cljseq.clock    :as clock]
+            [cljseq.link     :as link]
+            [cljseq.timeline :as timeline])
   (:import  [java.util.concurrent.locks LockSupport]))
 
 ;; ---------------------------------------------------------------------------
@@ -46,22 +47,7 @@
 (defn- get-bpm
   "Return current BPM from system state, or 120 if system not started."
   []
-  (if-let [s @system-ref]
-    (get-in @s [:config :bpm])
-    120))
-
-(defn- get-timeline
-  "Return the current system timeline, or nil if not started."
-  []
-  (when-let [s @system-ref]
-    (:timeline @s)))
-
-(defn- effective-timeline
-  "Return the timeline to use for beat→epoch-ms conversion.
-  When Link is active, returns the Link-sourced anchor; otherwise
-  the local BPM timeline."
-  []
-  (or (link/link-timeline) (get-timeline)))
+  (timeline/current-bpm))
 
 ;; ---------------------------------------------------------------------------
 ;; Virtual time and synth context
@@ -228,9 +214,7 @@
   Used by deflive-loop to initialise *virtual-time* on thread start.
   Returns 0.0 if the system is not yet started."
   ^double []
-  (if-let [tl (effective-timeline)]
-    (clock/epoch-ms->beat (System/currentTimeMillis) tl)
-    0.0))
+  (timeline/current-beat))
 
 (defn- system-quantum
   "Return the configured Link quantum (default 4)."
@@ -286,13 +270,13 @@
   wake a sleeping thread so it picks up the new fn without waiting for the
   current sleep! deadline to expire.
 
-  When Link is active, `effective-timeline` returns the Link-sourced anchor, so
+  When Link is active, `timeline/effective-timeline` returns the Link-sourced anchor, so
   `sleep!` is automatically phase-locked to the Link session."
   [^double target-beat]
   (loop []
     (if (some-> *sleep-interrupted?* deref)
       (reset! *sleep-interrupted?* false)
-      (when-let [tl (effective-timeline)]
+      (when-let [tl (timeline/effective-timeline)]
         (let [epoch-ms (clock/beat->epoch-ms target-beat tl)]
           (when (< (System/currentTimeMillis) epoch-ms)
             (LockSupport/parkUntil epoch-ms)
@@ -318,7 +302,7 @@
   [beats]
   (let [target-beat (+ (double *virtual-time*) (double beats))]
     (set! *virtual-time* target-beat)
-    (if (effective-timeline)
+    (if (timeline/effective-timeline)
       (park-until-beat! target-beat)
       (Thread/sleep (long (clock/beats->ms beats (get-bpm)))))))
 
@@ -338,7 +322,7 @@
          vt   (double *virtual-time*)
          next (+ (* (Math/floor (/ vt d)) d) d)]
      (set! *virtual-time* next)
-     (if (effective-timeline)
+     (if (timeline/effective-timeline)
        (park-until-beat! next)
        (Thread/sleep (long (clock/beats->ms (- next vt) (get-bpm)))))
      *virtual-time*)))

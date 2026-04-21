@@ -814,10 +814,11 @@
   [node-id param spectral-key transform-fn]
   (let [watch-key [::spectral-bind node-id param]]
     (ctrl/watch! [:spectral :state] watch-key
-                 (fn [_path state]
+                 (fn [tx _state]
                    (when (sc-connected?)
-                     (when-let [v (get state spectral-key)]
-                       (set-param! node-id param (transform-fn v))))))
+                     (let [spectral-state (:after (first (:tx/changes tx)))]
+                       (when-let [v (get spectral-state spectral-key)]
+                         (set-param! node-id param (transform-fn v)))))))
     (fn [] (ctrl/unwatch! [:spectral :state] watch-key))))
 
 (defn unbind-spectral!

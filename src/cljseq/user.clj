@@ -75,7 +75,9 @@
             [cljseq.supervisor      :as supervisor]
             [cljseq.arp             :as arp-ns]
             [cljseq.seq             :as sq]
-            [cljseq.target          :as target]))
+            [cljseq.target          :as target]
+            [cljseq.schema          :as schema]
+            [cljseq.journal         :as journal]))
 
 ;; ---------------------------------------------------------------------------
 ;; Session lifecycle
@@ -111,6 +113,28 @@
 
 (def start!               core/start!)
 (def stop!                core/stop!)
+(def open-session!        core/open-session!)
+(def session-path         core/session-path)
+(def export-session!      core/export-session!)
+(def restore-session!     core/restore-session!)
+(def export-from-journal! core/export-from-journal!)
+(def load-session!        core/load-session!)
+
+;; ---------------------------------------------------------------------------
+;; Transaction journal — read and query
+;; ---------------------------------------------------------------------------
+
+(def read-journal      journal/read-journal)
+(def tx-history        journal/tx-history)
+(def tx-at             journal/tx-at)
+(def tx-range          journal/tx-range)
+(def tx-by-source      journal/tx-by-source)
+(def active-paths      journal/active-paths)
+(def latest-values     journal/latest-values)
+(def crystallize       journal/crystallize)
+(def diff-sessions     journal/diff-sessions)
+(def source-kind->int  journal/source-kind->int)
+(def int->source-kind  journal/int->source-kind)
 (def set-bpm!             core/set-bpm!)
 (def get-bpm              core/get-bpm)
 (def set-beats-per-bar!   core/set-beats-per-bar!)
@@ -453,6 +477,10 @@
 (def watch-global!    ctrl-ns/watch-global!)
 (def unwatch-global!  ctrl-ns/unwatch-global!)
 
+;; Transaction log and tree introspection
+(def tx-log           ctrl-ns/tx-log)
+(def child-keys       ctrl-ns/child-keys)
+
 ;; ---------------------------------------------------------------------------
 ;; OSC receive + push-subscribe (§17 Phase 2/3)
 ;; ---------------------------------------------------------------------------
@@ -565,6 +593,20 @@
 (def registered-targets target/registered-targets)
 (def fn-target          target/fn-target)
 (def param-target       target/param-target)
+
+;; ---------------------------------------------------------------------------
+;; Device model schema (cljseq.schema)
+;; ---------------------------------------------------------------------------
+
+(def defdevice-model      schema/defdevice-model)
+(def defrealization       schema/defrealization)
+(def realize!             schema/realize!)
+(def get-model            schema/get-model)
+(def get-realization      schema/get-realization)
+(def active-realization   schema/active-realization)
+(def list-models          schema/list-models)
+(def list-realizations    schema/list-realizations)
+(def satisfies-profile?   schema/satisfies-profile?)
 
 ;; ---------------------------------------------------------------------------
 ;; MIDI input (cljseq.midi-in)

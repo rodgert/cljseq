@@ -10,15 +10,55 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [0.16.0] — pending
-
-### Prerequisites before cutting this release
-
-- [ ] Run `npx shadow-cljs release app` to produce `resources/public/js/main.js`
-- [ ] Visual check of the control surface at `http://localhost:7177/`:
-  beat dot pulses, level-meter sliders fill, XY pad sends ctrl writes
+## [0.16.0] — 2026-04-21
 
 ### Added
+
+#### SQLite transaction log (durability layer)
+
+- **WAL-mode SQLite journal** — the sidecar now writes every `ctrl/set!` and
+  `ctrl/send!` as a row in a `changes` table (beat, wall-ns, source kind,
+  path, before, after). Survives process restarts; zero write-amplification on
+  the hot path.
+- **`source-kind` vocabulary** — canonical `source-kind->int` / `int->source-kind`
+  maps in `cljseq.journal`; shared by sidecar write path and journal read path.
+  Source kinds: `:user`, `:loop`, `:input`, `:trajectory`, `:watcher`,
+  `:supervisor`, `:schema`, `:undo`, `:error`.
+
+#### Session lifecycle
+
+- **`export-session!`** — write the live ctrl/schema tree to a `.cljseq` EDN
+  file as fully-qualified, human-readable Clojure forms. VCS-friendly; can be
+  opened in any editor and edited before replay.
+- **`restore-session!`** — load a `.cljseq` file and re-apply it: BPM,
+  beats-per-bar, device models, realizations, active realizations, and all
+  parameter writes via direct function calls (no eval).
+- **`export-from-journal!`** — reconstruct the final parameter state from a
+  SQLite journal file and write it as a `.cljseq` export. Useful when the
+  live session was never explicitly exported.
+- **`load-session!`** — open a SQLite journal and restore the final state into
+  the running JVM without writing an intermediate file.
+
+#### `cljseq.journal` — transaction journal query API
+
+- **Layer 1 — `read-journal`** — decode a SQLite journal file to a vector of
+  `:tx/`-namespaced maps. All persistence artifacts are sealed at this
+  boundary: source integers → keywords, EDN strings → Clojure data,
+  tx_id bytes → `java.util.UUID`.
+  Shape: `{:tx/id :tx/beat :tx/wall-ns :tx/source :tx/path :tx/before :tx/after :tx/parent}`
+- **Layer 2 — query functions** (operate on the vector from `read-journal`):
+  - `tx-history` — all writes to a path in chronological order
+  - `tx-at` — value of a path at a given beat (last write ≤ beat)
+  - `tx-range` — writes in a beat window; optional `:source` / `:path` filters
+  - `tx-by-source` — writes attributed to one source kind keyword
+  - `active-paths` — set of paths written at least once
+  - `latest-values` — `{path → last-written-value}` fold
+- **Layer 3 — semantic transforms**:
+  - `crystallize` — extract a beat window as `{path [{:beat N :value v} ...]}`,
+    beats normalized relative to `beat-from`. Options: `:source`, `:schema?`.
+    Turns a live performance window into trajectory or step-sequence material.
+  - `diff-sessions` — compare final parameter state of two SQLite files;
+    returns `{:added :removed :changed :unchanged}`.
 
 #### `cljseq.seq` — unified IStepSequencer protocol
 
@@ -105,8 +145,8 @@ Versioning follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 #### Web control surface Tier 3 (`cljseq-ui`)
 
-- **Beat pulse** — four-dot beat indicator; each dot lights on its quarter-note
-  subdivison, synced to the running BPM.
+- **Beat pulse** — single dot in the header alternates bright/dim on every beat,
+  synced to the running BPM via client-side `setInterval`.
 - **Level-meter sliders** — ctrl-tree value sliders render as filled bars
   (inline `linear-gradient` track fill) so the current value reads at a glance.
 - **XY pad** — dual-axis controller; drag sends two ctrl-tree paths
@@ -1194,7 +1234,19 @@ Linux (Ubuntu Studio, Fedora) and device CC map verification are targeted for 0.
 
 ---
 
-[Unreleased]: https://github.com/rodgert/cljseq/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/rodgert/cljseq/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/rodgert/cljseq/compare/v0.15.0...v0.16.0
+[0.15.0]: https://github.com/rodgert/cljseq/compare/v0.14.0...v0.15.0
+[0.14.0]: https://github.com/rodgert/cljseq/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/rodgert/cljseq/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/rodgert/cljseq/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/rodgert/cljseq/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/rodgert/cljseq/compare/v0.9.1...v0.10.0
+[0.9.1]: https://github.com/rodgert/cljseq/compare/v0.9.0...v0.9.1
+[0.9.0]: https://github.com/rodgert/cljseq/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/rodgert/cljseq/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/rodgert/cljseq/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/rodgert/cljseq/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/rodgert/cljseq/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rodgert/cljseq/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/rodgert/cljseq/compare/v0.2.0...v0.3.0

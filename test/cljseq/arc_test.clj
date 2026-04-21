@@ -16,6 +16,16 @@
 
 (use-fixtures :each with-system)
 
+(defn- tx-val
+  "Extract the :after value from the first change in a transaction."
+  [tx]
+  (-> tx :tx/changes first :after))
+
+(defn- tx-path
+  "Extract the :path from the first change in a transaction."
+  [tx]
+  (-> tx :tx/changes first :path))
+
 ;; ---------------------------------------------------------------------------
 ;; ctrl/watch! — basic registration and firing
 ;; ---------------------------------------------------------------------------
@@ -26,7 +36,7 @@
     (ctrl/bind! [:watch/test-send] {:type :midi-cc :channel 1 :cc-num 1})
     (let [seen (atom nil)]
       (ctrl/watch! [:watch/test-send] ::test-watcher
-                   (fn [path v] (reset! seen {:path path :value v})))
+                   (fn [tx _] (reset! seen {:path (tx-path tx) :value (tx-val tx)})))
       (with-redefs [cljseq.sidecar/connected? (constantly false)]
         (ctrl/send! [:watch/test-send] 0.5))
       (is (= {:path [:watch/test-send] :value 0.5} @seen))
@@ -37,7 +47,7 @@
     (ctrl/defnode! [:watch/test-set] :type :float)
     (let [seen (atom nil)]
       (ctrl/watch! [:watch/test-set] ::test-watcher
-                   (fn [_ v] (reset! seen v)))
+                   (fn [tx _] (reset! seen (tx-val tx))))
       (ctrl/set! [:watch/test-set] 0.9)
       (is (= 0.9 @seen))
       (ctrl/unwatch-all! [:watch/test-set]))))
@@ -46,8 +56,8 @@
   (testing "multiple watch keys on same path each fire independently"
     (ctrl/defnode! [:watch/multi] :type :float)
     (let [a (atom nil) b (atom nil)]
-      (ctrl/watch! [:watch/multi] ::key-a (fn [_ v] (reset! a v)))
-      (ctrl/watch! [:watch/multi] ::key-b (fn [_ v] (reset! b v)))
+      (ctrl/watch! [:watch/multi] ::key-a (fn [tx _] (reset! a (tx-val tx))))
+      (ctrl/watch! [:watch/multi] ::key-b (fn [tx _] (reset! b (tx-val tx))))
       (ctrl/set! [:watch/multi] 0.3)
       (is (= 0.3 @a))
       (is (= 0.3 @b))
@@ -57,8 +67,8 @@
   (testing "unwatch! removes only the specified key, others still fire"
     (ctrl/defnode! [:watch/unwatch-one] :type :float)
     (let [a (atom 0) b (atom 0)]
-      (ctrl/watch! [:watch/unwatch-one] ::key-a (fn [_ v] (reset! a v)))
-      (ctrl/watch! [:watch/unwatch-one] ::key-b (fn [_ v] (reset! b v)))
+      (ctrl/watch! [:watch/unwatch-one] ::key-a (fn [tx _] (reset! a (tx-val tx))))
+      (ctrl/watch! [:watch/unwatch-one] ::key-b (fn [tx _] (reset! b (tx-val tx))))
       (ctrl/unwatch! [:watch/unwatch-one] ::key-a)
       (ctrl/set! [:watch/unwatch-one] 0.7)
       (is (= 0 @a) "key-a was removed — should not fire")
@@ -69,8 +79,8 @@
   (testing "unwatch-all! prevents any further callbacks"
     (ctrl/defnode! [:watch/unwatch-all] :type :float)
     (let [seen (atom 0)]
-      (ctrl/watch! [:watch/unwatch-all] ::k1 (fn [_ _] (swap! seen inc)))
-      (ctrl/watch! [:watch/unwatch-all] ::k2 (fn [_ _] (swap! seen inc)))
+      (ctrl/watch! [:watch/unwatch-all] ::k1 (fn [_ _s] (swap! seen inc)))
+      (ctrl/watch! [:watch/unwatch-all] ::k2 (fn [_ _s] (swap! seen inc)))
       (ctrl/unwatch-all! [:watch/unwatch-all])
       (ctrl/set! [:watch/unwatch-all] 0.5)
       (is (= 0 @seen) "no callbacks after unwatch-all!"))))
@@ -79,7 +89,7 @@
   (testing "exception in watcher is swallowed; caller is not affected"
     (ctrl/defnode! [:watch/throws] :type :float)
     (ctrl/watch! [:watch/throws] ::thrower
-                 (fn [_ _] (throw (ex-info "deliberate" {}))))
+                 (fn [_ _s] (throw (ex-info "deliberate" {}))))
     (is (nil? (ctrl/set! [:watch/throws] 0.5))
         "set! returns nil even when watcher throws")
     (ctrl/unwatch-all! [:watch/throws])))
@@ -89,7 +99,7 @@
     (ctrl/defnode! [:watch/value-check] :type :float)
     (let [received (atom [])]
       (ctrl/watch! [:watch/value-check] ::collector
-                   (fn [_ v] (swap! received conj v)))
+                   (fn [tx _] (swap! received conj (tx-val tx))))
       (ctrl/set! [:watch/value-check] 0.1)
       (ctrl/set! [:watch/value-check] 0.5)
       (ctrl/set! [:watch/value-check] 0.9)
@@ -107,8 +117,8 @@
     (ctrl/defnode! [:arc/out-res]      :type :float)
     (let [cutoff-vals (atom [])
           res-vals    (atom [])]
-      (ctrl/watch! [:arc/out-cutoff] ::capture (fn [_ v] (swap! cutoff-vals conj v)))
-      (ctrl/watch! [:arc/out-res]    ::capture (fn [_ v] (swap! res-vals conj v)))
+      (ctrl/watch! [:arc/out-cutoff] ::capture (fn [tx _] (swap! cutoff-vals conj (tx-val tx))))
+      (ctrl/watch! [:arc/out-res]    ::capture (fn [tx _] (swap! res-vals conj (tx-val tx))))
       (arc/arc-bind! [:arc/test-tension]
                      {[:arc/out-cutoff] {:range [0.3 1.0]}
                       [:arc/out-res]    {:range [0.0 0.6]}})
@@ -126,7 +136,7 @@
     (ctrl/defnode! [:arc/mid-src] :type :float)
     (ctrl/defnode! [:arc/mid-dst] :type :float)
     (let [seen (atom nil)]
-      (ctrl/watch! [:arc/mid-dst] ::cap (fn [_ v] (reset! seen v)))
+      (ctrl/watch! [:arc/mid-dst] ::cap (fn [tx _] (reset! seen (tx-val tx))))
       (arc/arc-bind! [:arc/mid-src]
                      {[:arc/mid-dst] {:range [0.0 100.0]}})
       (with-redefs [cljseq.sidecar/connected? (constantly false)]
@@ -140,7 +150,7 @@
     (ctrl/defnode! [:arc/passthru-src] :type :float)
     (ctrl/defnode! [:arc/passthru-dst] :type :float)
     (let [seen (atom nil)]
-      (ctrl/watch! [:arc/passthru-dst] ::cap (fn [_ v] (reset! seen v)))
+      (ctrl/watch! [:arc/passthru-dst] ::cap (fn [tx _] (reset! seen (tx-val tx))))
       (arc/arc-bind! [:arc/passthru-src] {[:arc/passthru-dst] {}})
       (with-redefs [cljseq.sidecar/connected? (constantly false)]
         (arc/arc-send! [:arc/passthru-src] 0.73))
@@ -154,8 +164,8 @@
     (ctrl/defnode! [:arc/rebind-dst-a] :type :float)
     (ctrl/defnode! [:arc/rebind-dst-b] :type :float)
     (let [calls-a (atom 0) calls-b (atom 0)]
-      (ctrl/watch! [:arc/rebind-dst-a] ::cap (fn [_ _] (swap! calls-a inc)))
-      (ctrl/watch! [:arc/rebind-dst-b] ::cap (fn [_ _] (swap! calls-b inc)))
+      (ctrl/watch! [:arc/rebind-dst-a] ::cap (fn [_ _s] (swap! calls-a inc)))
+      (ctrl/watch! [:arc/rebind-dst-b] ::cap (fn [_ _s] (swap! calls-b inc)))
       ;; First bind: only dst-a
       (arc/arc-bind! [:arc/rebind-src] {[:arc/rebind-dst-a] {}})
       (with-redefs [cljseq.sidecar/connected? (constantly false)]
@@ -177,7 +187,7 @@
     (ctrl/defnode! [:arc/stop-src] :type :float)
     (ctrl/defnode! [:arc/stop-dst] :type :float)
     (let [count (atom 0)]
-      (ctrl/watch! [:arc/stop-dst] ::cap (fn [_ _] (swap! count inc)))
+      (ctrl/watch! [:arc/stop-dst] ::cap (fn [_ _s] (swap! count inc)))
       (arc/arc-bind! [:arc/stop-src] {[:arc/stop-dst] {}})
       (with-redefs [cljseq.sidecar/connected? (constantly false)]
         (arc/arc-send! [:arc/stop-src] 0.5))

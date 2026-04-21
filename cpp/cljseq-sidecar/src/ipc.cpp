@@ -20,6 +20,7 @@
 //
 // One connection is accepted; reconnection is not supported in Phase 1.
 
+// SPDX-License-Identifier: LGPL-2.1-or-later
 #include "ipc.h"
 #include "keyboard_capture.h"
 #include "midi_clock.h"
@@ -37,6 +38,11 @@
 #include <mutex>
 #include <cstdio>
 #include <cstring>
+#include <string>
+
+#ifdef CLJSEQ_WITH_SQLITE
+#  include <sqlite3.h>
+#endif
 
 using asio::ip::tcp;
 
@@ -109,10 +115,211 @@ enum class MsgType : uint8_t {
     LinkTransportStop   = 0x14,  // JVM→sidecar: request transport stop
     MidiIn              = 0x20,  // sidecar→JVM: MIDI message received on input port
     KbdEvent            = 0x21,  // sidecar→JVM: keyboard event (CGEventTap)
+    TxLog               = 0x30,  // JVM→sidecar: append transaction to session SQLite
+    SessionOpen         = 0x31,  // JVM→sidecar: open session SQLite file (path payload)
+    SessionClose        = 0x32,  // JVM→sidecar: flush and close session SQLite
     LinkState           = 0x80,
     Ping                = 0xF0,
     Shutdown            = 0xFF,
 };
+
+// ---------------------------------------------------------------------------
+// Read helpers for the TxLog payload
+// ---------------------------------------------------------------------------
+
+static uint16_t read_le16(const uint8_t* p) noexcept {
+    return static_cast<uint16_t>(p[0]) | (static_cast<uint16_t>(p[1]) << 8);
+}
+
+// ---------------------------------------------------------------------------
+// TxDb — session SQLite writer
+//
+// One session = one .sqlite file.  Opened on SessionOpen (0x31), closed on
+// SessionClose (0x32) or process exit.  All inserts are wrapped in a single
+// BEGIN/COMMIT per transaction for atomicity and performance.
+//
+// Compiled out when CLJSEQ_WITH_SQLITE is not defined.
+// ---------------------------------------------------------------------------
+
+#ifdef CLJSEQ_WITH_SQLITE
+
+class TxDb {
+public:
+    TxDb() = default;
+    ~TxDb() { close(); }
+
+    bool open(const std::string& path) {
+        close();
+        if (sqlite3_open(path.c_str(), &db_) != SQLITE_OK) {
+            std::fprintf(stderr, "[txdb] sqlite3_open(%s) failed: %s\n",
+                         path.c_str(), sqlite3_errmsg(db_));
+            sqlite3_close(db_);
+            db_ = nullptr;
+            return false;
+        }
+
+        // WAL mode: writer does not block readers during long sessions.
+        sqlite3_exec(db_, "PRAGMA journal_mode=WAL;", nullptr, nullptr, nullptr);
+        sqlite3_exec(db_, "PRAGMA synchronous=NORMAL;", nullptr, nullptr, nullptr);
+
+        const char* schema = R"(
+CREATE TABLE IF NOT EXISTS transactions (
+  id          BLOB PRIMARY KEY,
+  beat        REAL  NOT NULL,
+  wall_ns     INTEGER NOT NULL,
+  source_kind INTEGER NOT NULL,
+  source_id   TEXT,
+  parent_id   BLOB
+);
+CREATE TABLE IF NOT EXISTS changes (
+  tx_id       BLOB    NOT NULL REFERENCES transactions(id),
+  seq         INTEGER NOT NULL,
+  path        TEXT    NOT NULL,
+  before      TEXT,
+  after       TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tx_beat     ON transactions(beat);
+CREATE INDEX IF NOT EXISTS idx_change_path ON changes(path);
+CREATE INDEX IF NOT EXISTS idx_change_tx   ON changes(tx_id);
+)";
+        char* errmsg = nullptr;
+        if (sqlite3_exec(db_, schema, nullptr, nullptr, &errmsg) != SQLITE_OK) {
+            std::fprintf(stderr, "[txdb] schema error: %s\n", errmsg);
+            sqlite3_free(errmsg);
+            close();
+            return false;
+        }
+
+        sqlite3_prepare_v2(db_,
+            "INSERT OR IGNORE INTO transactions(id,beat,wall_ns,source_kind,source_id,parent_id)"
+            " VALUES (?,?,?,?,?,?)",
+            -1, &stmt_tx_, nullptr);
+        sqlite3_prepare_v2(db_,
+            "INSERT INTO changes(tx_id,seq,path,before,after) VALUES (?,?,?,?,?)",
+            -1, &stmt_chg_, nullptr);
+
+        std::fprintf(stderr, "[txdb] opened %s\n", path.c_str());
+        return true;
+    }
+
+    void close() {
+        if (db_) {
+            if (stmt_tx_)  { sqlite3_finalize(stmt_tx_);  stmt_tx_  = nullptr; }
+            if (stmt_chg_) { sqlite3_finalize(stmt_chg_); stmt_chg_ = nullptr; }
+            sqlite3_close(db_);
+            db_ = nullptr;
+        }
+    }
+
+    bool is_open() const { return db_ != nullptr; }
+
+    // Insert one transaction + its changes atomically.
+    // payload must be a valid TxLog binary payload.
+    void insert_tx(const uint8_t* p, std::size_t len) {
+        if (!db_ || len < 35) return;  // minimum viable payload: 16+8+8+1+2+0+1+0+2
+
+        // Decode fixed fields
+        // tx_id: [int64 hi][int64 lo] — stored as 16-byte BLOB
+        const uint8_t* tx_id_hi_p = p;                      // 8 bytes
+        const uint8_t* tx_id_lo_p = p + 8;                  // 8 bytes
+        uint8_t tx_id_blob[16];
+        std::memcpy(tx_id_blob,     tx_id_hi_p, 8);
+        std::memcpy(tx_id_blob + 8, tx_id_lo_p, 8);
+
+        double  beat     = read_le_double(p + 16);
+        int64_t wall_ns  = read_le64(p + 24);
+        uint8_t src_kind = p[32];
+
+        std::size_t off = 33;
+        if (off + 2 > len) return;
+        uint16_t src_id_len = read_le16(p + off); off += 2;
+        if (off + src_id_len > len) return;
+        std::string src_id(reinterpret_cast<const char*>(p + off), src_id_len); off += src_id_len;
+
+        if (off + 1 > len) return;
+        uint8_t has_parent = p[off++];
+        uint8_t parent_id_blob[16] = {};
+        bool    has_par = has_parent == 1;
+        if (has_par) {
+            if (off + 16 > len) return;
+            std::memcpy(parent_id_blob, p + off, 16); off += 16;
+        }
+
+        if (off + 2 > len) return;
+        uint16_t n_changes = read_le16(p + off); off += 2;
+
+        // Insert transaction
+        sqlite3_exec(db_, "BEGIN", nullptr, nullptr, nullptr);
+
+        sqlite3_reset(stmt_tx_);
+        sqlite3_bind_blob(stmt_tx_, 1, tx_id_blob, 16, SQLITE_STATIC);
+        sqlite3_bind_double(stmt_tx_, 2, beat);
+        sqlite3_bind_int64(stmt_tx_, 3, wall_ns);
+        sqlite3_bind_int(stmt_tx_, 4, static_cast<int>(src_kind));
+        sqlite3_bind_text(stmt_tx_, 5, src_id.c_str(), -1, SQLITE_STATIC);
+        if (has_par)
+            sqlite3_bind_blob(stmt_tx_, 6, parent_id_blob, 16, SQLITE_STATIC);
+        else
+            sqlite3_bind_null(stmt_tx_, 6);
+        sqlite3_step(stmt_tx_);
+
+        // Insert changes
+        for (uint16_t i = 0; i < n_changes && off < len; ++i) {
+            if (off + 2 > len) break;
+            uint16_t path_len = read_le16(p + off); off += 2;
+            if (off + path_len > len) break;
+            std::string path_str(reinterpret_cast<const char*>(p + off), path_len); off += path_len;
+
+            if (off + 2 > len) break;
+            uint16_t before_len = read_le16(p + off); off += 2;
+            std::string before_str;
+            if (before_len > 0) {
+                if (off + before_len > len) break;
+                before_str.assign(reinterpret_cast<const char*>(p + off), before_len);
+                off += before_len;
+            }
+
+            if (off + 2 > len) break;
+            uint16_t after_len = read_le16(p + off); off += 2;
+            if (off + after_len > len) break;
+            std::string after_str(reinterpret_cast<const char*>(p + off), after_len); off += after_len;
+
+            sqlite3_reset(stmt_chg_);
+            sqlite3_bind_blob(stmt_chg_, 1, tx_id_blob, 16, SQLITE_STATIC);
+            sqlite3_bind_int(stmt_chg_, 2, static_cast<int>(i));
+            sqlite3_bind_text(stmt_chg_, 3, path_str.c_str(), -1, SQLITE_STATIC);
+            if (before_len > 0)
+                sqlite3_bind_text(stmt_chg_, 4, before_str.c_str(), -1, SQLITE_STATIC);
+            else
+                sqlite3_bind_null(stmt_chg_, 4);
+            sqlite3_bind_text(stmt_chg_, 5, after_str.c_str(), -1, SQLITE_STATIC);
+            sqlite3_step(stmt_chg_);
+        }
+
+        sqlite3_exec(db_, "COMMIT", nullptr, nullptr, nullptr);
+    }
+
+private:
+    sqlite3*      db_       = nullptr;
+    sqlite3_stmt* stmt_tx_  = nullptr;
+    sqlite3_stmt* stmt_chg_ = nullptr;
+};
+
+#else  // CLJSEQ_WITH_SQLITE not defined
+
+class TxDb {
+public:
+    bool open(const std::string& path) {
+        std::fprintf(stderr, "[txdb] SQLite3 not compiled in — ignoring session open (%s)\n",
+                     path.c_str());
+        return false;
+    }
+    void close() {}
+    bool is_open() const { return false; }
+    void insert_tx(const uint8_t*, std::size_t) {}
+};
+
+#endif  // CLJSEQ_WITH_SQLITE
 
 // ---------------------------------------------------------------------------
 // IpcSession — owns one socket, drives bidirectional async I/O
@@ -182,6 +389,9 @@ private:
 
     // Serialise concurrent writes (Link callback, MIDI-in callback, kbd callback vs. read loop).
     std::mutex               write_mutex_;
+
+    // Session SQLite writer — opened on SessionOpen (0x31), closed on SessionClose (0x32).
+    TxDb                     tx_db_;
 
     // ---------------------------------------------------------------------------
     // Inbound: read → dispatch
@@ -296,6 +506,23 @@ private:
 
         case MsgType::LinkTransportStop:
             link_.stop_playing();
+            break;
+
+        case MsgType::SessionOpen:
+            // Payload: UTF-8 file path.
+            if (len > 0) {
+                std::string path(reinterpret_cast<const char*>(payload), len);
+                tx_db_.open(path);
+            }
+            break;
+
+        case MsgType::SessionClose:
+            tx_db_.close();
+            std::fprintf(stderr, "[txdb] session closed\n");
+            break;
+
+        case MsgType::TxLog:
+            tx_db_.insert_tx(payload, len);
             break;
 
         case MsgType::Ping:

@@ -433,16 +433,14 @@ button.enum-btn.active {
   transition:    background 0.06s ease-out, box-shadow 0.06s ease-out;
 }
 
-/* Downbeat — bright accent with glow */
+/* On-beat — bright accent with glow */
 .beat-dot.step-0 {
   background:  var(--accent);
   box-shadow:  0 0 6px var(--accent);
 }
 
-/* Beats 2-4 — dimmer pulse */
-.beat-dot.step-1,
-.beat-dot.step-2,
-.beat-dot.step-3 {
+/* Off-beat — dim */
+.beat-dot.step-1 {
   background: #4a8c6a;
   box-shadow: none;
 }
